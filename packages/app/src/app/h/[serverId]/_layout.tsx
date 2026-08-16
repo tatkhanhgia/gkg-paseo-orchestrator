@@ -40,6 +40,8 @@ function KnownHostRoute() {
       <Stack.Screen name="agent/[agentId]" options={AGENT_SCREEN_OPTIONS} />
       <Stack.Screen name="sessions" />
       <Stack.Screen name="topology" />
+      <Stack.Screen name="portfolios/index" />
+      <Stack.Screen name="portfolios/[portfolioId]" />
       <Stack.Screen name="rooms/index" />
       <Stack.Screen name="rooms/[roomId]" />
       <Stack.Screen name="councils/index" />

@@ -84,6 +84,7 @@ not retain non-Git directories.
 | `server/relay-transport.ts`     | Outbound relay connection with E2E encryption                                                       |
 | `server/schedule/`              | Cron-based scheduled agents                                                                         |
 | `server/chat/`                  | Chat rooms for agent-to-agent and human-to-agent messaging                                          |
+| `server/portfolio/`             | Host-local Portfolio registry and Project membership rules                                          |
 | `server/council/`               | Canonical file-backed Council cases với RPC + own update event; labels chỉ là compatibility receipt |
 | `server/beads/`                 | Beads adapter đã pin, project isolation, idempotency và tools theo role                             |
 
@@ -424,6 +425,7 @@ $PASEO_HOME/
 ├── projects/projects.json                      # Project registry
 ├── projects/workspaces.json                    # Workspace registry
 ├── projects/icons/                             # Custom project icon images
+├── portfolios/portfolios.json                  # Portfolio registry
 ├── schedules/                                  # Scheduled-agent definitions and runs
 ├── config.json                                 # Daemon config (mutable)
 ├── daemon-keypair.json                         # Daemon identity for relay/E2EE

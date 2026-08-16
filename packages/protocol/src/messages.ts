@@ -90,6 +90,20 @@ import {
   BeadsIssueCreateResponseSchema,
   BeadsIssueCloseResponseSchema,
 } from "./beads/rpc-schemas.js";
+import {
+  PortfolioListRequestSchema,
+  PortfolioGetRequestSchema,
+  PortfolioCreateRequestSchema,
+  PortfolioProjectAddRequestSchema,
+  PortfolioProjectRemoveRequestSchema,
+  PortfolioArchiveRequestSchema,
+  PortfolioListResponseSchema,
+  PortfolioGetResponseSchema,
+  PortfolioCreateResponseSchema,
+  PortfolioProjectAddResponseSchema,
+  PortfolioProjectRemoveResponseSchema,
+  PortfolioArchiveResponseSchema,
+} from "./portfolio/rpc-schemas.js";
 import { BrowserAutomationHostCapabilitySchema } from "./browser-automation/capabilities.js";
 import {
   PaseoConfigRawSchema,
@@ -3570,6 +3584,12 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   BeadsIssueGetRequestSchema,
   BeadsIssueCreateRequestSchema,
   BeadsIssueCloseRequestSchema,
+  PortfolioListRequestSchema,
+  PortfolioGetRequestSchema,
+  PortfolioCreateRequestSchema,
+  PortfolioProjectAddRequestSchema,
+  PortfolioProjectRemoveRequestSchema,
+  PortfolioArchiveRequestSchema,
 ]);
 
 export type SessionInboundMessage = z.infer<typeof SessionInboundMessageSchema>;
@@ -3923,6 +3943,8 @@ export const ServerInfoStatusPayloadSchema = z
         peerDelegationDefaultSubrole: z.boolean().optional(),
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: z.boolean().optional(),
+        // COMPAT(portfolios): added after v0.3.1-paseo.9, remove gate after 2027-02-15.
+        portfolios: z.boolean().optional(),
       })
       .optional(),
   })
@@ -7125,6 +7147,12 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   BeadsIssueGetResponseSchema,
   BeadsIssueCreateResponseSchema,
   BeadsIssueCloseResponseSchema,
+  PortfolioListResponseSchema,
+  PortfolioGetResponseSchema,
+  PortfolioCreateResponseSchema,
+  PortfolioProjectAddResponseSchema,
+  PortfolioProjectRemoveResponseSchema,
+  PortfolioArchiveResponseSchema,
   DaemonUpdateProgressMessageSchema,
   DaemonUpdateResponseSchema,
   DistributionUpdateCheckResponseSchema,
@@ -7382,6 +7410,12 @@ export type BeadsIssuesListRequest = z.infer<typeof BeadsIssuesListRequestSchema
 export type BeadsIssueGetRequest = z.infer<typeof BeadsIssueGetRequestSchema>;
 export type BeadsIssueCreateRequest = z.infer<typeof BeadsIssueCreateRequestSchema>;
 export type BeadsIssueCloseRequest = z.infer<typeof BeadsIssueCloseRequestSchema>;
+export type PortfolioListRequest = z.infer<typeof PortfolioListRequestSchema>;
+export type PortfolioGetRequest = z.infer<typeof PortfolioGetRequestSchema>;
+export type PortfolioCreateRequest = z.infer<typeof PortfolioCreateRequestSchema>;
+export type PortfolioProjectAddRequest = z.infer<typeof PortfolioProjectAddRequestSchema>;
+export type PortfolioProjectRemoveRequest = z.infer<typeof PortfolioProjectRemoveRequestSchema>;
+export type PortfolioArchiveRequest = z.infer<typeof PortfolioArchiveRequestSchema>;
 export type ResumeAgentRequestMessage = z.infer<typeof ResumeAgentRequestMessageSchema>;
 export type DeleteAgentRequestMessage = z.infer<typeof DeleteAgentRequestMessageSchema>;
 export type UpdateAgentRequestMessage = z.infer<typeof UpdateAgentRequestMessageSchema>;

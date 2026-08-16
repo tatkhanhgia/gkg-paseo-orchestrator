@@ -61,6 +61,10 @@ export function asPushNotifications(
   return createStub<SessionOptions["pushNotifications"]>(stub);
 }
 
+export function asPortfolioService(): SessionOptions["portfolioService"] {
+  return createStub<SessionOptions["portfolioService"]>({});
+}
+
 export function asScheduleService(): SessionOptions["scheduleService"] {
   return createStub<SessionOptions["scheduleService"]>({});
 }

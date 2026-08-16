@@ -54,6 +54,8 @@ $PASEO_HOME/
 │       └── {agentId}.json               # One file per agent
 ├── schedules/
 │   └── {scheduleId}.json                # One file per schedule
+├── portfolios/
+│   └── portfolios.json                  # Portfolio registry
 ├── projects/
 │   ├── projects.json                    # Project registry
 │   ├── workspaces.json                  # Workspace registry
@@ -543,7 +545,26 @@ than treating it as valid.
 
 ---
 
-## 6. Push Token Store
+## 6. Portfolio Registry
+
+**Path:** `$PASEO_HOME/portfolios/portfolios.json`
+
+Array of host-local Portfolio records. `projectIds` is an ordered list of foreign keys into the Project registry.
+
+| Field        | Type                        | Description                                                                    |
+| ------------ | --------------------------- | ------------------------------------------------------------------------------ |
+| `id`         | `string`                    | Opaque host-local primary key; new records use `pf_<16 hex>` IDs               |
+| `name`       | `string`                    | Trimmed display name; unique case-insensitively among active Portfolios        |
+| `projectIds` | `string[]`                  | Ordered active Project IDs                                                     |
+| `createdAt`  | `string` (ISO 8601)         |                                                                                |
+| `updatedAt`  | `string` (ISO 8601)         |                                                                                |
+| `archivedAt` | `string \| null` (ISO 8601) | Soft-delete timestamp; archive leaves member Projects and Workspaces unchanged |
+
+An active Project belongs to at most one active Portfolio. Membership writes validate that the Project exists and is active. Removing a Project scrubs its ID from every Portfolio, including archived records, so the registry keeps no stale foreign keys. Store mutations serialize validation and persistence, which keeps name and membership uniqueness valid under concurrent requests.
+
+---
+
+## 7. Push Token Store
 
 **Path:** `$PASEO_HOME/push-tokens.json`
 
@@ -557,7 +578,7 @@ Simple set of Expo push notification tokens. Loaded with permissive parsing (fil
 
 ---
 
-## 7. Daemon meta files
+## 8. Daemon meta files
 
 These small files are not validated as full Zod schemas but are persisted under `$PASEO_HOME` for daemon identity and runtime coordination.
 

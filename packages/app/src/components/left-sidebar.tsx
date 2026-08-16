@@ -1,5 +1,6 @@
 import { router, usePathname } from "expo-router";
 import {
+  BriefcaseBusiness,
   CalendarClock,
   FolderPlus,
   GitBranch,
@@ -71,6 +72,7 @@ import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import {
   buildOpenProjectRoute,
   buildHostCouncilsRoute,
+  buildHostPortfoliosRoute,
   buildHostRoomsRoute,
   buildHostTopologyRoute,
   buildNewWorkspaceRoute,
@@ -128,6 +130,7 @@ interface SidebarLabels {
   rooms: string;
   councils: string;
   topology: string;
+  portfolios: string;
   closeSidebar: string;
 }
 
@@ -141,6 +144,7 @@ interface MobileSidebarProps extends SidebarSharedProps {
   handleViewRoomsNavigate: () => void;
   handleViewCouncilsNavigate: () => void;
   handleViewTopologyNavigate: () => void;
+  handleViewPortfoliosNavigate: () => void;
 }
 
 interface DesktopSidebarProps extends SidebarSharedProps {
@@ -151,6 +155,7 @@ interface DesktopSidebarProps extends SidebarSharedProps {
   handleViewRooms: () => void;
   handleViewCouncils: () => void;
   handleViewTopology: () => void;
+  handleViewPortfolios: () => void;
 }
 
 export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boolean }) {
@@ -270,6 +275,12 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     }
   }, [coordinationServerId]);
 
+  const handleViewPortfoliosNavigate = useCallback(() => {
+    if (coordinationServerId) {
+      router.push(buildHostPortfoliosRoute(coordinationServerId));
+    }
+  }, [coordinationServerId]);
+
   const newWorkspaceKeys = useShortcutKeys("new-workspace");
   const labels = useMemo(
     (): SidebarLabels => ({
@@ -284,6 +295,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
       rooms: "Rooms",
       councils: "Councils",
       topology: "Project topology",
+      portfolios: "Portfolios",
       closeSidebar: t("sidebar.actions.closeSidebar"),
     }),
     [t],
@@ -329,6 +341,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
           handleViewRoomsNavigate={handleViewRoomsNavigate}
           handleViewCouncilsNavigate={handleViewCouncilsNavigate}
           handleViewTopologyNavigate={handleViewTopologyNavigate}
+          handleViewPortfoliosNavigate={handleViewPortfoliosNavigate}
         />
       </RetainedPanelActivity>
     );
@@ -350,6 +363,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
         handleViewRooms={handleViewRoomsNavigate}
         handleViewCouncils={handleViewCouncilsNavigate}
         handleViewTopology={handleViewTopologyNavigate}
+        handleViewPortfolios={handleViewPortfoliosNavigate}
       />
     </RetainedPanelActivity>
   );
@@ -685,6 +699,7 @@ function MobileSidebar({
   handleViewRoomsNavigate,
   handleViewCouncilsNavigate,
   handleViewTopologyNavigate,
+  handleViewPortfoliosNavigate,
 }: MobileSidebarProps) {
   const pathname = usePathname();
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
@@ -693,6 +708,7 @@ function MobileSidebar({
   const isRoomsActive = pathname.includes("/rooms");
   const isCouncilsActive = pathname.includes("/councils");
   const isTopologyActive = pathname.includes("/topology");
+  const isPortfoliosActive = pathname.includes("/portfolios");
   const { gesture: closeGesture, gestureRef: closeGestureRef } = useCloseAgentListGesture();
 
   const handleViewMore = useCallback(() => {
@@ -719,6 +735,10 @@ function MobileSidebar({
     closeSidebar();
     handleViewTopologyNavigate();
   }, [closeSidebar, handleViewTopologyNavigate]);
+  const handleViewPortfolios = useCallback(() => {
+    closeSidebar();
+    handleViewPortfoliosNavigate();
+  }, [closeSidebar, handleViewPortfoliosNavigate]);
 
   const handleWorkspacePress = useCallback(() => {
     closeSidebar();
@@ -763,6 +783,14 @@ function MobileSidebar({
             onPress={handleViewTopology}
             isActive={isTopologyActive}
             testID="sidebar-topology"
+            variant="compact"
+          />
+          <SidebarHeaderRow
+            icon={BriefcaseBusiness}
+            label={labels.portfolios}
+            onPress={handleViewPortfolios}
+            isActive={isPortfoliosActive}
+            testID="sidebar-portfolios"
             variant="compact"
           />
           <SidebarHeaderRow
@@ -881,6 +909,7 @@ function DesktopSidebar({
   handleViewRooms,
   handleViewCouncils,
   handleViewTopology,
+  handleViewPortfolios,
 }: DesktopSidebarProps) {
   const ownsTopLeft = useOwnsWindowChromeCorner("top-left");
   const pathname = usePathname();
@@ -890,6 +919,7 @@ function DesktopSidebar({
   const isRoomsActive = pathname.includes("/rooms");
   const isCouncilsActive = pathname.includes("/councils");
   const isTopologyActive = pathname.includes("/topology");
+  const isPortfoliosActive = pathname.includes("/portfolios");
   const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
   const setSidebarWidth = usePanelStore((state) => state.setSidebarWidth);
   const { width: viewportWidth } = useWindowDimensions();
@@ -1018,6 +1048,14 @@ function DesktopSidebar({
               onPress={handleViewTopology}
               isActive={isTopologyActive}
               testID="sidebar-topology"
+              variant="compact"
+            />
+            <SidebarHeaderRow
+              icon={BriefcaseBusiness}
+              label={labels.portfolios}
+              onPress={handleViewPortfolios}
+              isActive={isPortfoliosActive}
+              testID="sidebar-portfolios"
               variant="compact"
             />
             <SidebarHeaderRow

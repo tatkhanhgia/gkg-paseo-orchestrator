@@ -5,6 +5,8 @@ import {
   buildHostCouncilsRoute,
   buildHostProjectIssueRoute,
   buildHostProjectIssuesRoute,
+  buildHostPortfolioRoute,
+  buildHostPortfoliosRoute,
   buildHostRootRoute,
   buildHostRoomRoute,
   buildHostRoomsRoute,
@@ -101,6 +103,13 @@ describe("workspace route parsing", () => {
   it("builds host-scoped room routes with encoded IDs", () => {
     expect(buildHostRoomsRoute("local host")).toBe("/h/local%20host/rooms");
     expect(buildHostRoomRoute("local host", "room/one")).toBe("/h/local%20host/rooms/room%2Fone");
+  });
+
+  it("builds host-scoped portfolio routes with encoded IDs", () => {
+    expect(buildHostPortfoliosRoute("local host")).toBe("/h/local%20host/portfolios");
+    expect(buildHostPortfolioRoute("local host", "portfolio/one")).toBe(
+      "/h/local%20host/portfolios/portfolio%2Fone",
+    );
   });
 
   it("builds host-scoped council routes with encoded case IDs", () => {

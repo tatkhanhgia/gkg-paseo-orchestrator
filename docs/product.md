@@ -24,7 +24,9 @@ Freedom and flexibility. Every design decision follows from this:
 
 ### Projects and workspaces
 
-Projects are grouped in the sidebar, detected automatically from your filesystem and tagged by git remote when available.
+Portfolios group related Projects on one Host so you can manage work that spans multiple codebases. Archiving a Portfolio leaves its Projects and their running work active.
+
+Projects are detected from your filesystem and tagged by git remote when available. A Project belongs to at most one active Portfolio.
 
 Each project opens as a workspace. For git projects, the default workspace is the main checkout. Users can create additional workspaces, which are isolated copies (git worktrees) where agents work without affecting main.
 

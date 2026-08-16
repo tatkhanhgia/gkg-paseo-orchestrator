@@ -36,6 +36,7 @@ import {
   asAgentStorage,
   asDownloadTokenStore,
   asPushNotifications,
+  asPortfolioService,
   asScheduleService,
   asCheckoutDiffManager,
   asGitHubService,
@@ -463,6 +464,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     projectHarnessService: options.projectHarnessService,
     harnessBindingResolver: options.harnessBindingResolver,
     workspaceLabelService: options.workspaceLabelService,
+    portfolioService: asPortfolioService(),
     scheduleService: asScheduleService(),
     checkoutDiffManager: asCheckoutDiffManager(checkoutDiffManager),
     github: asGitHubService(github),
@@ -5496,6 +5498,52 @@ describe("schedule dispatch routing", () => {
     {
       msg: { type: "schedule/update", requestId: "rt-sched-update", scheduleId: "s1", name: "new" },
       code: "schedule_request_failed",
+    },
+    {
+      msg: { type: "portfolio.list.request", requestId: "rt-portfolio-list" },
+      code: "portfolio_request_failed",
+    },
+    {
+      msg: {
+        type: "portfolio.get.request",
+        requestId: "rt-portfolio-get",
+        portfolioId: "pf_test",
+      },
+      code: "portfolio_request_failed",
+    },
+    {
+      msg: {
+        type: "portfolio.create.request",
+        requestId: "rt-portfolio-create",
+        name: "Apps",
+      },
+      code: "portfolio_request_failed",
+    },
+    {
+      msg: {
+        type: "portfolio.project.add.request",
+        requestId: "rt-portfolio-add",
+        portfolioId: "pf_test",
+        projectId: "prj_test",
+      },
+      code: "portfolio_request_failed",
+    },
+    {
+      msg: {
+        type: "portfolio.project.remove.request",
+        requestId: "rt-portfolio-remove",
+        portfolioId: "pf_test",
+        projectId: "prj_test",
+      },
+      code: "portfolio_request_failed",
+    },
+    {
+      msg: {
+        type: "portfolio.archive.request",
+        requestId: "rt-portfolio-archive",
+        portfolioId: "pf_test",
+      },
+      code: "portfolio_request_failed",
     },
   ];
 

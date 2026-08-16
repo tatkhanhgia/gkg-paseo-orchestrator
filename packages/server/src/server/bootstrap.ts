@@ -176,6 +176,8 @@ import {
 } from "./workspace-registry.js";
 import { FileBackedChatService } from "./chat/chat-service.js";
 import { CouncilCaseStore } from "./council/council-case-store.js";
+import { FileBackedPortfolioService } from "./portfolio/portfolio-service.js";
+import { FileBackedPortfolioStore } from "./portfolio/portfolio-store.js";
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { ScheduleService } from "./schedule/service.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
@@ -1037,6 +1039,11 @@ export async function createPaseoDaemon(
     paseoHome: config.paseoHome,
     workspaceRegistry,
   });
+  const portfolioStore = new FileBackedPortfolioStore({
+    paseoHome: config.paseoHome,
+    logger,
+  });
+  const portfolioService = new FileBackedPortfolioService(portfolioStore, projectRegistry);
   const github = createGitHubService();
   const workspaceGitService = new WorkspaceGitServiceImpl({
     logger,
@@ -1159,6 +1166,8 @@ export async function createPaseoDaemon(
   void workspaceReconciliation.reconcileNow().catch((error) => {
     logger.warn({ err: error }, "Initial workspace reconciliation failed");
   });
+  await portfolioStore.initialize();
+  logger.info({ elapsed: elapsed() }, "Portfolio store initialized");
   const checkoutDiffManager = new CheckoutDiffManager({
     logger,
     paseoHome: config.paseoHome,
@@ -1971,6 +1980,7 @@ export async function createPaseoDaemon(
               orchestrationSkills,
               workspaceLabelService,
               councilCaseStore,
+              portfolioService,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();

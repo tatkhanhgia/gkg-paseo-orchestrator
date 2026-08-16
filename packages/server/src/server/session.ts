@@ -192,6 +192,7 @@ import { ProjectHarnessSession } from "./session/project-harness/project-harness
 import type { ProjectHarnessService } from "./project/project-harness-service.js";
 import type { HarnessBindingResolver } from "./project/harness-binding-service.js";
 import { BeadsSession, type BeadsSessionOptions } from "./session/beads/beads-session.js";
+import { PortfolioSession } from "./session/portfolio/portfolio-session.js";
 import type { BeadsService } from "./beads/beads-service.js";
 
 function optionalProjectHarnessService(
@@ -249,6 +250,7 @@ import type { Resolvable } from "./speech/provider-resolver.js";
 import type { SpeechReadinessSnapshot } from "./speech/speech-runtime.js";
 import type pino from "pino";
 import { FileBackedChatService } from "./chat/chat-service.js";
+import type { PortfolioService } from "./portfolio/portfolio-service.js";
 import { resolveAgentIdentifier as resolveStoredAgentIdentifier } from "./agent/identifier.js";
 import { ScheduleService } from "./schedule/service.js";
 import {
@@ -542,6 +544,7 @@ export interface SessionOptions {
   beadsService?: BeadsService;
   directorySync?: DirectorySyncService;
   workspaceLabelService?: WorkspaceLabelService;
+  portfolioService?: PortfolioService;
   filesystem?: SessionFileSystem;
   chatService?: FileBackedChatService;
   councilCaseStore?: CouncilCaseStore;
@@ -697,6 +700,17 @@ function resolveDirectorySync(service: DirectorySyncService | undefined): Direct
   return service ?? new DirectorySyncService();
 }
 
+function resolvePortfolioService(service: PortfolioService | undefined): PortfolioService | null {
+  return service ?? null;
+}
+
+function createPortfolioSession(
+  service: PortfolioService | null,
+  emit: (message: SessionOutboundMessage) => void,
+): PortfolioSession | null {
+  return service ? new PortfolioSession({ host: { emit }, service }) : null;
+}
+
 function describeRegistryTransition(record: ArchivedRecordSnapshot | null): RegistryTransition {
   if (!record) {
     return "created";
@@ -829,6 +843,8 @@ export class Session {
   private readonly projectHarnessService: ProjectHarnessService | null;
   private readonly projectHarnessSession: ProjectHarnessSession;
   private readonly beadsSession: BeadsSession | null;
+  private readonly portfolioService: PortfolioService | null;
+  private readonly portfolioSession: PortfolioSession | null;
   private readonly daemonSession: DaemonSession;
   private readonly hubExecutionController: HubExecutionController | null;
   private readonly workspaceScripts: WorkspaceScriptsService;
@@ -861,6 +877,7 @@ export class Session {
       beadsService,
       directorySync,
       workspaceLabelService,
+      portfolioService,
       filesystem,
       chatService,
       councilCaseStore,
@@ -940,6 +957,7 @@ export class Session {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.projectRegistry = projectRegistry;
+    this.portfolioService = resolvePortfolioService(portfolioService);
     this.workspaceRegistry = workspaceRegistry;
     this.directorySync = resolveDirectorySync(directorySync);
     this.workspaceLabelService = resolveWorkspaceLabelService(workspaceLabelService);
@@ -1101,6 +1119,9 @@ export class Session {
       clientId: this.clientId,
       emit: (message) => this.emit(message),
     });
+    this.portfolioSession = createPortfolioSession(this.portfolioService, (message) =>
+      this.emit(message),
+    );
     this.daemonSession = new DaemonSession({
       host: {
         emit: (msg) => this.emit(msg),
@@ -2148,6 +2169,7 @@ export class Session {
       this.dispatchHubExecutionMessage(msg) ??
       this.dispatchAgentLifecycleMessage(msg) ??
       this.dispatchBeadsMessage(msg) ??
+      this.dispatchPortfolioMessage(msg) ??
       this.dispatchWorkspaceDomainMessage(msg, source) ??
       this.dispatchProviderMessage(msg) ??
       this.dispatchOrchestrationSkillsMessage(msg) ??
@@ -2709,6 +2731,29 @@ export class Session {
   private requireBeadsSession(): BeadsSession {
     if (!this.beadsSession) throw new Error("Beads Central service is unavailable");
     return this.beadsSession;
+  }
+
+  private dispatchPortfolioMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    const portfolioSession = this.portfolioSession;
+    if (!portfolioSession) {
+      return undefined;
+    }
+    switch (msg.type) {
+      case "portfolio.list.request":
+        return portfolioSession.handleList(msg);
+      case "portfolio.get.request":
+        return portfolioSession.handleGet(msg);
+      case "portfolio.create.request":
+        return portfolioSession.handleCreate(msg);
+      case "portfolio.project.add.request":
+        return portfolioSession.handleProjectAdd(msg);
+      case "portfolio.project.remove.request":
+        return portfolioSession.handleProjectRemove(msg);
+      case "portfolio.archive.request":
+        return portfolioSession.handleArchive(msg);
+      default:
+        return undefined;
+    }
   }
 
   // eslint-disable-next-line complexity
@@ -3705,6 +3750,7 @@ export class Session {
           removedWorkspaceIds.push(workspaceId);
         }
 
+        await this.portfolioService?.removeProjectFromAll(resolvedProjectId);
         await this.projectRegistry.remove(resolvedProjectId);
         await removeProjectCustomIcon({
           paseoHome: this.paseoHome,

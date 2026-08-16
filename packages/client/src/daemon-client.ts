@@ -602,6 +602,30 @@ type BeadsIssueClosePayload = Extract<
   SessionOutboundMessage,
   { type: "beads.issue.close.response" }
 >["payload"];
+type PortfolioListPayload = Extract<
+  SessionOutboundMessage,
+  { type: "portfolio.list.response" }
+>["payload"];
+type PortfolioGetPayload = Extract<
+  SessionOutboundMessage,
+  { type: "portfolio.get.response" }
+>["payload"];
+type PortfolioCreatePayload = Extract<
+  SessionOutboundMessage,
+  { type: "portfolio.create.response" }
+>["payload"];
+type PortfolioProjectAddPayload = Extract<
+  SessionOutboundMessage,
+  { type: "portfolio.project.add.response" }
+>["payload"];
+type PortfolioProjectRemovePayload = Extract<
+  SessionOutboundMessage,
+  { type: "portfolio.project.remove.response" }
+>["payload"];
+type PortfolioArchivePayload = Extract<
+  SessionOutboundMessage,
+  { type: "portfolio.archive.response" }
+>["payload"];
 type ScheduleCreatePayload = Extract<
   SessionOutboundMessage,
   { type: "schedule/create/response" }
@@ -858,6 +882,30 @@ export type CreateBeadsIssueOptions = Omit<
 > & { requestId?: string };
 export type CloseBeadsIssueOptions = Omit<
   Extract<SessionInboundMessage, { type: "beads.issue.close.request" }>,
+  "type" | "requestId"
+> & { requestId?: string };
+export type ListPortfoliosOptions = Omit<
+  Extract<SessionInboundMessage, { type: "portfolio.list.request" }>,
+  "type" | "requestId"
+> & { requestId?: string };
+export type GetPortfolioOptions = Omit<
+  Extract<SessionInboundMessage, { type: "portfolio.get.request" }>,
+  "type" | "requestId"
+> & { requestId?: string };
+export type CreatePortfolioOptions = Omit<
+  Extract<SessionInboundMessage, { type: "portfolio.create.request" }>,
+  "type" | "requestId"
+> & { requestId?: string };
+export type AddPortfolioProjectOptions = Omit<
+  Extract<SessionInboundMessage, { type: "portfolio.project.add.request" }>,
+  "type" | "requestId"
+> & { requestId?: string };
+export type RemovePortfolioProjectOptions = Omit<
+  Extract<SessionInboundMessage, { type: "portfolio.project.remove.request" }>,
+  "type" | "requestId"
+> & { requestId?: string };
+export type ArchivePortfolioOptions = Omit<
+  Extract<SessionInboundMessage, { type: "portfolio.archive.request" }>,
   "type" | "requestId"
 > & { requestId?: string };
 export interface CreateScheduleOptions {
@@ -6052,6 +6100,77 @@ export class DaemonClient {
         idempotencyKey: options.idempotencyKey,
       },
       responseType: "beads.issue.close.response",
+    });
+  }
+
+  async listPortfolios(options: ListPortfoliosOptions = {}): Promise<PortfolioListPayload> {
+    return this.sendCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: {
+        type: "portfolio.list.request",
+      },
+      responseType: "portfolio.list.response",
+    });
+  }
+
+  async getPortfolio(options: GetPortfolioOptions): Promise<PortfolioGetPayload> {
+    return this.sendCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: {
+        type: "portfolio.get.request",
+        portfolioId: options.portfolioId,
+      },
+      responseType: "portfolio.get.response",
+    });
+  }
+
+  async createPortfolio(options: CreatePortfolioOptions): Promise<PortfolioCreatePayload> {
+    return this.sendCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: {
+        type: "portfolio.create.request",
+        name: options.name,
+      },
+      responseType: "portfolio.create.response",
+    });
+  }
+
+  async addPortfolioProject(
+    options: AddPortfolioProjectOptions,
+  ): Promise<PortfolioProjectAddPayload> {
+    return this.sendCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: {
+        type: "portfolio.project.add.request",
+        portfolioId: options.portfolioId,
+        projectId: options.projectId,
+      },
+      responseType: "portfolio.project.add.response",
+    });
+  }
+
+  async removePortfolioProject(
+    options: RemovePortfolioProjectOptions,
+  ): Promise<PortfolioProjectRemovePayload> {
+    return this.sendCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: {
+        type: "portfolio.project.remove.request",
+        portfolioId: options.portfolioId,
+        projectId: options.projectId,
+      },
+      responseType: "portfolio.project.remove.response",
+    });
+  }
+
+  async archivePortfolio(options: ArchivePortfolioOptions): Promise<PortfolioArchivePayload> {
+    return this.sendCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: {
+        type: "portfolio.archive.request",
+        portfolioId: options.portfolioId,
+      },
+      responseType: "portfolio.archive.response",
     });
   }
 

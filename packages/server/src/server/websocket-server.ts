@@ -11,6 +11,7 @@ import type { TerminalManager } from "../terminal/terminal-manager.js";
 import type pino from "pino";
 import type { ProjectRegistry, WorkspaceRegistry } from "./workspace-registry.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
+import type { PortfolioService } from "./portfolio/portfolio-service.js";
 import type { ScheduleService } from "./schedule/service.js";
 import type { CheckoutDiffManager, CheckoutDiffMetrics } from "./checkout-diff-manager.js";
 import type { DaemonConfigStore, MutableDaemonConfig } from "./daemon-config-store.js";
@@ -568,6 +569,10 @@ function optionalCouncilCaseStore(store: CouncilCaseStore | undefined): CouncilC
   return store ?? null;
 }
 
+function optionalPortfolioService(service: PortfolioService | undefined): PortfolioService | null {
+  return service ?? null;
+}
+
 interface RequiredWebSocketServices {
   scheduleService: ScheduleService;
   checkoutDiffManager: CheckoutDiffManager;
@@ -609,6 +614,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly chatService: FileBackedChatService | null;
   private readonly councilCaseStore: CouncilCaseStore | null;
   private readonly workspaceLabelService: WorkspaceLabelService | null;
+  private readonly portfolioService: PortfolioService | null;
   private readonly scheduleService: ScheduleService;
   private readonly checkoutDiffManager: CheckoutDiffManager;
   private readonly github: ForgeService;
@@ -714,6 +720,7 @@ export class VoiceAssistantWebSocketServer {
     orchestrationSkills?: SessionOptions["orchestrationSkills"],
     workspaceLabelService?: WorkspaceLabelService,
     councilCaseStore?: CouncilCaseStore,
+    portfolioService?: PortfolioService,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -737,6 +744,7 @@ export class VoiceAssistantWebSocketServer {
     });
     this.workspaceLabelService = workspaceLabelService ?? null;
     this.chatService = chatService ?? null;
+    this.portfolioService = optionalPortfolioService(portfolioService);
     this.councilCaseStore = optionalCouncilCaseStore(councilCaseStore);
     this.beadsService = resolveBeadsService(
       beadsService,
@@ -1510,6 +1518,7 @@ export class VoiceAssistantWebSocketServer {
       chatService: this.chatService ?? undefined,
       councilCaseStore: this.councilCaseStore ?? undefined,
       workspaceLabelService: this.workspaceLabelService ?? undefined,
+      portfolioService: this.portfolioService ?? undefined,
       directorySync: this.directorySync,
       scheduleService: this.scheduleService,
       checkoutDiffManager: this.checkoutDiffManager,
@@ -1897,6 +1906,8 @@ export class VoiceAssistantWebSocketServer {
         peerDelegationDefaultSubrole: true,
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: true,
+        // COMPAT(portfolios): added after v0.3.1-paseo.9, remove gate after 2027-02-15.
+        portfolios: true,
       },
     };
   }

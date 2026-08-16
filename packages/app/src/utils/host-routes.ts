@@ -434,6 +434,23 @@ export function buildHostRoomsRoute(serverId: string) {
   return `${base}/rooms` as const;
 }
 
+export function buildHostPortfoliosRoute(serverId: string) {
+  const base = buildHostRootRoute(serverId);
+  if (base === "/") {
+    return "/" as const;
+  }
+  return `${base}/portfolios` as const;
+}
+
+export function buildHostPortfolioRoute(serverId: string, portfolioId: string) {
+  const base = buildHostPortfoliosRoute(serverId);
+  const normalizedPortfolioId = trimNonEmpty(portfolioId);
+  if (base === "/" || !normalizedPortfolioId) {
+    return base;
+  }
+  return `${base}/${encodeSegment(normalizedPortfolioId)}` as const;
+}
+
 export function buildHostRoomRoute(serverId: string, roomId: string) {
   const base = buildHostRoomsRoute(serverId);
   const normalizedRoomId = trimNonEmpty(roomId);
