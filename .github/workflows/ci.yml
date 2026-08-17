@@ -1,3 +1,7 @@
+# GKG fork CI profile: only static checks and core package tests run here.
+# Jobs that need provider API keys, Playwright E2E, Electron packaging, macOS
+# runners, Windows runners, or upstream release contracts are disabled until
+# those systems are configured. See .github/workflows-disabled/README.md.
 name: CI
 
 on:
@@ -179,7 +183,7 @@ jobs:
   server-tests-windows:
     name: server-tests (windows-latest)
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
+    if: false # GKG: disabled — Windows runner not configured for this fork
     runs-on: windows-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -273,7 +277,7 @@ jobs:
   foundation-cli-macos:
     name: foundation-cli-macos
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.foundation_cli != 'false') }}
+    if: false # GKG: disabled — macOS Foundation qualification not configured
     runs-on: macos-14
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -363,7 +367,7 @@ jobs:
   release-qualification:
     name: release-qualification
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.workspace != 'false' || needs.changes.outputs.app != 'false' || needs.changes.outputs.ci != 'false') }}
+    if: false # GKG: disabled — upstream release toolchain contracts not configured
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -387,7 +391,7 @@ jobs:
   cli-tests-1:
     name: cli-tests (shard 1/3)
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
+    if: false # GKG: disabled — CLI provider tests need agent CLIs and API keys
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -419,7 +423,7 @@ jobs:
   cli-tests-2:
     name: cli-tests (shard 2/3)
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
+    if: false # GKG: disabled — CLI provider tests need agent CLIs and API keys
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -433,7 +437,7 @@ jobs:
   cli-tests-3:
     name: cli-tests (shard 3/3)
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
+    if: false # GKG: disabled — CLI provider tests need agent CLIs and API keys
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
