@@ -469,6 +469,7 @@ interface ACPAgentSessionOptions {
   handle?: AgentPersistenceHandle;
   agentId?: string;
   launchEnv?: Record<string, string>;
+  sessionMeta?: Record<string, unknown>;
   sessionCleanup?: () => Promise<void> | void;
   waitForInitialCommands?: boolean;
   initialCommandsWaitTimeoutMs?: number;
@@ -479,7 +480,18 @@ export interface ACPSessionLaunchPreparation {
   command?: [string, ...string[]];
   env?: Record<string, string>;
   featureValues?: Record<string, unknown>;
+  sessionMeta?: Record<string, unknown>;
   cleanup?: () => Promise<void> | void;
+}
+
+export function withACPSessionMeta<T extends object>(
+  params: T,
+  sessionMeta?: Record<string, unknown>,
+): T & { _meta?: Record<string, unknown> } {
+  if (!sessionMeta) {
+    return params;
+  }
+  return { ...params, _meta: sessionMeta };
 }
 
 export interface SpawnedACPProcess {
@@ -914,6 +926,7 @@ export class ACPAgentClient implements AgentClient {
           launchContext?.env || sessionLaunch?.env
             ? { ...launchContext?.env, ...sessionLaunch?.env }
             : undefined,
+        sessionMeta: sessionLaunch?.sessionMeta,
         sessionCleanup: sessionLaunch?.cleanup,
         extensionCommandsParser: this.extensionCommandsParser,
         waitForInitialCommands: this.waitForInitialCommands,
@@ -976,6 +989,7 @@ export class ACPAgentClient implements AgentClient {
         launchContext?.env || sessionLaunch?.env
           ? { ...launchContext?.env, ...sessionLaunch?.env }
           : undefined,
+      sessionMeta: sessionLaunch?.sessionMeta,
       sessionCleanup: sessionLaunch?.cleanup,
       extensionCommandsParser: this.extensionCommandsParser,
       waitForInitialCommands: this.waitForInitialCommands,
@@ -1468,6 +1482,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   ) => Promise<void>;
   private readonly agentId?: string;
   private readonly launchEnv?: Record<string, string>;
+  private readonly sessionMeta?: Record<string, unknown>;
   private readonly sessionCleanup?: () => Promise<void> | void;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
@@ -1528,6 +1543,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.availableModes = options.defaultModes;
     this.agentId = options.agentId;
     this.launchEnv = options.launchEnv;
+    this.sessionMeta = options.sessionMeta;
     this.sessionCleanup = options.sessionCleanup;
     this.initialHandle = options.handle;
     this.config = { ...config, provider: options.provider };
@@ -1552,10 +1568,15 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       this.agentCapabilities = spawned.initialize.agentCapabilities ?? null;
 
       const response = await this.runACPRequest(() =>
-        this.connection!.newSession({
-          cwd: this.config.cwd,
-          mcpServers: this.acpMcpServers(),
-        }),
+        this.connection!.newSession(
+          withACPSessionMeta(
+            {
+              cwd: this.config.cwd,
+              mcpServers: this.acpMcpServers(),
+            },
+            this.sessionMeta,
+          ),
+        ),
       );
       this.sessionId = response.sessionId;
       this.bootstrapThreadEventPending = true;
@@ -1591,11 +1612,16 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       if (this.agentCapabilities?.loadSession) {
         this.replayingHistory = true;
         const response = await this.runACPRequest(() =>
-          this.connection!.loadSession({
-            sessionId: handle.sessionId,
-            cwd: this.config.cwd,
-            mcpServers: this.acpMcpServers(),
-          }),
+          this.connection!.loadSession(
+            withACPSessionMeta(
+              {
+                sessionId: handle.sessionId,
+                cwd: this.config.cwd,
+                mcpServers: this.acpMcpServers(),
+              },
+              this.sessionMeta,
+            ),
+          ),
         );
         this.deliverTranslatedEvents(this.flushPendingUserMessage());
         this.replayingHistory = false;
@@ -1603,11 +1629,16 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         this.applySessionState(response);
       } else if (sessionCapabilities?.resume) {
         const response = await this.runACPRequest(() =>
-          this.connection!.unstable_resumeSession({
-            sessionId: handle.sessionId,
-            cwd: this.config.cwd,
-            mcpServers: this.acpMcpServers(),
-          }),
+          this.connection!.unstable_resumeSession(
+            withACPSessionMeta(
+              {
+                sessionId: handle.sessionId,
+                cwd: this.config.cwd,
+                mcpServers: this.acpMcpServers(),
+              },
+              this.sessionMeta,
+            ),
+          ),
         );
         this.applySessionState(response);
       } else {

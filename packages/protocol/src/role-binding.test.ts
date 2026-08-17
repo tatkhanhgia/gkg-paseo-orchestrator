@@ -33,6 +33,15 @@ describe("Paseo role binding protocol", () => {
       status: "supported",
       injectionMethod: "mock-launch-context",
     });
+    expect(
+      ProviderRoleBindingSupportSchema.parse({
+        status: "supported",
+        injectionMethod: "grok-acp-session-rules",
+      }),
+    ).toEqual({
+      status: "supported",
+      injectionMethod: "grok-acp-session-rules",
+    });
     expect(() => ProviderRoleBindingSupportSchema.parse({ status: "unsupported" })).toThrow();
     expect(() =>
       ProviderRoleBindingSupportSchema.parse({

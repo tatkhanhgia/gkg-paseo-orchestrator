@@ -172,6 +172,46 @@ function resolveCursorACPRoleBindingSupport(
   };
 }
 
+export function isExactGrokACPCommand(command: readonly string[] | undefined): boolean {
+  if (!commandMatchesExecutable(command, ["grok", "grok.exe"]) || !command) {
+    return false;
+  }
+  const args = command.slice(1);
+  if (args[0] !== "agent") {
+    return false;
+  }
+  if (args.length === 2 && args[1] === "stdio") {
+    return true;
+  }
+  return args.length === 3 && args[1] === "--no-leader" && args[2] === "stdio";
+}
+
+function resolveGrokACPRoleBindingSupport(
+  command: readonly string[] | undefined,
+  hasPaseoToolTransport?: boolean,
+): ProviderRoleBindingSupport {
+  if (!isExactGrokACPCommand(command)) {
+    return {
+      status: "unsupported",
+      reason:
+        "Grok native role binding requires exact 'grok agent stdio' launch without caller-supplied profile, plugin, or extra flags",
+    };
+  }
+  if (hasPaseoToolTransport === false) {
+    return {
+      status: "unsupported",
+      reason:
+        "The current Grok runtime has no qualified Paseo-tool transport for the mandatory Beads checkpoint",
+    };
+  }
+  return {
+    status: "supported",
+    injectionMethod: "grok-acp-session-rules",
+    notice:
+      "Grok binds Foundation roles through ACP session/new and session/load `_meta.rules`, with native subagents disabled for the role-bound process. Assignment no-write is not qualified on this route.",
+  };
+}
+
 function resolveAntigravityNativeRoleBindingSupport(
   command: readonly string[] | undefined,
   hasPaseoToolTransport?: boolean,
@@ -212,6 +252,7 @@ function resolveAntigravityNativeRoleBindingSupport(
 function resolveConfiguredACPRoleBindingSupport(
   nativeRoleBinding: ProviderNativeRoleBindingConfig | undefined,
   command: readonly string[] | undefined,
+  hasPaseoToolTransport?: boolean,
 ): ProviderRoleBindingSupport | null {
   if (nativeRoleBinding?.driver === "cursor-plugin") {
     return {
@@ -225,6 +266,9 @@ function resolveConfiguredACPRoleBindingSupport(
   }
   if (commandMatchesExecutable(command, ["cursor-agent", "cursor-agent.exe"])) {
     return resolveCursorACPRoleBindingSupport(command);
+  }
+  if (commandMatchesExecutable(command, ["grok", "grok.exe"])) {
+    return resolveGrokACPRoleBindingSupport(command, hasPaseoToolTransport);
   }
   return null;
 }
@@ -286,7 +330,11 @@ export function resolveProviderRoleBindingSupport(
   }
   const builtInSupport = resolveBuiltInRoleBindingSupport(family);
   if (builtInSupport) return builtInSupport;
-  const configuredSupport = resolveConfiguredACPRoleBindingSupport(nativeRoleBinding, command);
+  const configuredSupport = resolveConfiguredACPRoleBindingSupport(
+    nativeRoleBinding,
+    command,
+    hasPaseoToolTransport,
+  );
   if (configuredSupport) return configuredSupport;
   return {
     status: "unsupported",

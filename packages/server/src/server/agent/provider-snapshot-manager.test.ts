@@ -291,6 +291,11 @@ describe("ProviderSnapshotManager public surface", () => {
           label: "Antigravity",
           command: ["agy"],
         },
+        grok: {
+          extends: "acp",
+          label: "Grok",
+          command: ["grok", "agent", "stdio"],
+        },
         "plain-acp": {
           extends: "acp",
           label: "Plain ACP",
@@ -303,6 +308,10 @@ describe("ProviderSnapshotManager public surface", () => {
       expect(snapshot.find((entry) => entry.provider === "cursor")?.roleBinding).toMatchObject({
         status: "supported",
         injectionMethod: "cursor-project-rule-capsule",
+      });
+      expect(snapshot.find((entry) => entry.provider === "grok")?.roleBinding).toMatchObject({
+        status: "supported",
+        injectionMethod: "grok-acp-session-rules",
       });
       expect(
         snapshot.find((entry) => entry.provider === "gemini-antigravity")?.roleBinding,

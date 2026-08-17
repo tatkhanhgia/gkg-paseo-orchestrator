@@ -245,6 +245,11 @@ describe("native Foundation role materialization", () => {
           roleIds: ["peer"],
         },
       ],
+      [
+        "grok",
+        "grok-acp-session-rules",
+        { status: "supported", injectionMethod: "grok-acp-session-rules" },
+      ],
     ] as const;
 
     for (const executionProfileId of ["solution-architect", "reviewer"] as const) {
@@ -638,6 +643,48 @@ describe("native Foundation role materialization", () => {
     ).toMatchObject({
       status: "unsupported",
       reason: expect.stringContaining("permission-policy flags"),
+    });
+    expect(
+      resolveProviderRoleBindingSupport("grok", null, null, undefined, ["grok", "agent", "stdio"]),
+    ).toMatchObject({
+      status: "supported",
+      injectionMethod: "grok-acp-session-rules",
+    });
+    expect(
+      resolveProviderRoleBindingSupport("custom-grok", "acp", null, undefined, [
+        "grok",
+        "agent",
+        "--no-leader",
+        "stdio",
+      ]),
+    ).toMatchObject({
+      status: "supported",
+      injectionMethod: "grok-acp-session-rules",
+    });
+    expect(
+      resolveProviderRoleBindingSupport("grok", null, null, undefined, [
+        "grok",
+        "agent",
+        "--plugin-dir",
+        "/tmp/plugin",
+        "stdio",
+      ]),
+    ).toMatchObject({
+      status: "unsupported",
+      reason: expect.stringContaining("exact 'grok agent stdio'"),
+    });
+    expect(
+      resolveProviderRoleBindingSupport(
+        "grok",
+        null,
+        null,
+        undefined,
+        ["grok", "agent", "stdio"],
+        false,
+      ),
+    ).toMatchObject({
+      status: "unsupported",
+      reason: expect.stringContaining("mandatory Beads checkpoint"),
     });
   });
 

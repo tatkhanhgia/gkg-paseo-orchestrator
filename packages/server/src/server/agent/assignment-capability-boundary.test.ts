@@ -94,6 +94,9 @@ test("no-write assignment fails closed for a provider without a qualified mode",
   expect(() =>
     requiredNoWriteMode(roleBinding({ injectionMethod: "omp-append-system-prompt" })),
   ).toThrow("assignment_capability_boundary_required");
+  expect(() =>
+    requiredNoWriteMode(roleBinding({ injectionMethod: "grok-acp-session-rules" })),
+  ).toThrow("assignment_capability_boundary_required");
 });
 
 test("no-write assignment rejects mode and permission escalation", () => {

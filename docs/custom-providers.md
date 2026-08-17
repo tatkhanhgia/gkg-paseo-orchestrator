@@ -553,8 +553,8 @@ absolute workspace paths.
 ACP does not define a system/developer-instruction field. A generic ACP provider therefore stays
 incompatible with Paseo Foundation roles even when its models and sessions work.
 
-Cursor and Antigravity do not require role-specific providers or a manual role-driver field. Paseo
-recognizes their exact transport command while composing the immutable launch contract:
+Cursor, Grok, and Antigravity do not require role-specific providers or a manual role-driver field.
+Paseo recognizes their exact transport command while composing the immutable launch contract:
 
 ```json
 {
@@ -565,7 +565,8 @@ recognizes their exact transport command while composing the immutable launch co
         "label": "Cursor",
         "command": ["cursor-agent", "acp"]
       },
-      "gemini-antigravity": { "command": ["agy"] }
+      "gemini-antigravity": { "command": ["agy"] },
+      "grok": { "extends": "acp", "command": ["grok", "agent", "stdio"] }
     }
   }
 }
@@ -576,6 +577,11 @@ project rule inside that capsule, and launches `cursor-agent --workspace <capsul
 acp`. The target repository is not modified. A caller-supplied `--workspace` is rejected. The old
 `roleBinding.driver: "cursor-plugin"` setting is retired and fails closed because Cursor can silently
 ignore local plugins; remove it from existing config.
+
+For Grok, Paseo keeps the catalog command `grok agent stdio`, then on a role-bound create or resume
+sends exact role bytes as ACP `_meta.rules`, pins `GROK_SUBAGENTS=0`, and inserts `--no-leader`.
+Caller-supplied `--plugin-dir` or `--agent-profile` is rejected. Assignment `no-write` stays fail
+closed until Grok ACP exposes a qualified plan/read-only mode.
 
 Với Antigravity, command canonical là official `agy` executable. Paseo gọi trực tiếp print-mode
 `stream-json`, persist native `conversation_id`, và resume bằng `--conversation`.
