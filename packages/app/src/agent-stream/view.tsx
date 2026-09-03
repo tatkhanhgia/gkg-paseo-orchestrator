@@ -56,6 +56,7 @@ import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
 import { useLoadOlderAgentHistory } from "@/hooks/use-load-older-agent-history";
 import { useSettings } from "@/hooks/use-settings";
 import type { ToastApi } from "@/components/toast-host";
+import { useToast } from "@/contexts/toast-context";
 import { returnToTimelineTail } from "./timeline-tail-navigation";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { ToolCallDetailsContent } from "@/components/tool-call-details";
@@ -1469,6 +1470,7 @@ function PermissionRequestCard({
   } = permissionMutation;
 
   const [respondingActionId, setRespondingActionId] = useState<string | null>(null);
+  const permissionToast = useToast();
 
   useEffect(() => {
     resetPermissionMutation();
@@ -1480,11 +1482,12 @@ function PermissionRequestCard({
         agentId: permission.agentId,
         requestId: permission.request.id,
         response,
-      }).catch((error) => {
-        console.error("[PermissionRequestCard] Failed to respond to permission:", error);
+      }).catch((error: unknown) => {
+        setRespondingActionId(null);
+        permissionToast.error(error instanceof Error ? error.message : String(error));
       });
     },
-    [permission.agentId, permission.request.id, respondToPermission],
+    [permission.agentId, permission.request.id, permissionToast, respondToPermission],
   );
   const handleActionPress = useCallback(
     (action: AgentPermissionAction) => {

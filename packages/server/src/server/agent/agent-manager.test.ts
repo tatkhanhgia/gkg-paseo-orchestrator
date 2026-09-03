@@ -12048,6 +12048,93 @@ test("ordinary non-SLP agents remain available when the bundled SLP artifact is 
   }
 });
 
+test("no-write role assignment can answer a question permission", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-role-question-"));
+  writeFileSync(
+    join(workdir, "WORKSPACE_PROTOCOL.md"),
+    buildWorkspaceProtocolTemplate(workdir),
+    "utf8",
+  );
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+
+  class QuestionSession extends TestAgentSession {
+    override async respondToPermission(requestId: string): Promise<void> {
+      this.pushEvent({
+        type: "permission_resolved",
+        provider: this.provider,
+        requestId,
+        resolution: { behavior: "allow" },
+      });
+    }
+  }
+
+  class QuestionClient extends TestAgentClient {
+    override readonly capabilities = {
+      ...TEST_CAPABILITIES,
+      supportsMcpServers: true,
+      supportsNativePaseoTools: true,
+    };
+
+    async materializeProviderLaunchBinding(input: { config: AgentSessionConfig }) {
+      if (!input.config.model) throw new Error("missing test model");
+      return {
+        providerId: "codex",
+        providerFamily: "codex",
+        model: input.config.model,
+        credentialConfigured: true as const,
+        routeKind: "codex-subscription" as const,
+        modelProviderId: "openai" as const,
+        authMethod: "codex-native" as const,
+      };
+    }
+
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new QuestionSession(config);
+    }
+  }
+
+  const manager = new AgentManager({
+    clients: { codex: new QuestionClient() },
+    registry: storage,
+    logger,
+    idFactory: () => "00000000-0000-4000-8000-000000000117",
+  });
+
+  try {
+    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: "workspace-role-question",
+      roleId: "lead",
+      assignment: leadAssignment(),
+    });
+    expect(created.roleBinding?.assignment?.mutationBoundary.mode).toBe("no-write");
+
+    const agent = manager.getAgent(created.id)!;
+    agent.pendingPermissions.set("perm-question-1", {
+      id: "perm-question-1",
+      provider: "codex",
+      name: "AskUserQuestion",
+      kind: "question",
+      input: { questions: [] },
+    });
+
+    const resolvedRequestIds: string[] = [];
+    manager.subscribe((event) => {
+      if (event.type === "agent_stream" && event.event.type === "permission_resolved") {
+        resolvedRequestIds.push(event.event.requestId);
+      }
+    });
+
+    await manager.respondToPermission(created.id, "perm-question-1", {
+      behavior: "allow",
+      updatedInput: { answers: [{ header: "Approach", answer: "Ship it" }] },
+    });
+
+    expect(resolvedRequestIds).toContain("perm-question-1");
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("mutating Peer grant verification rejects before provider launch and state mutation", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-peer-grant-verification-"));
   writeFileSync(

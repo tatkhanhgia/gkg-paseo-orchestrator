@@ -451,6 +451,9 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
   );
 
   const primaryDisabled = isResponding || (isLastQuestion ? !allAnswered : !activeQuestionAnswered);
+  // Track the parent request, not just the local button press: a rejected response leaves
+  // respondingAction set, and a spinner keyed on it alone never stops.
+  const spinningAction = isResponding ? respondingAction : null;
   const primaryActionLabel = isLastQuestion
     ? t("message.question.submit")
     : t("message.question.next");
@@ -575,7 +578,7 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
           accessibilityLabel={dismissLabel}
           testID="question-form-dismiss"
         >
-          {respondingAction === "dismiss" ? (
+          {spinningAction === "dismiss" ? (
             <LoadingSpinner size="small" color={theme.colors.foregroundMuted} />
           ) : (
             <View style={styles.actionContent}>
@@ -593,7 +596,7 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
           accessibilityLabel={primaryActionLabel}
           testID="question-form-primary-action"
         >
-          {respondingAction === "submit" ? (
+          {spinningAction === "submit" ? (
             <LoadingSpinner size="small" color={theme.colors.accentForeground} />
           ) : (
             <View style={styles.actionContent}>
