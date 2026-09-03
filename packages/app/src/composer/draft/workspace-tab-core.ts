@@ -1,4 +1,6 @@
 import { resolveSubmissionReadiness } from "@/provider-selection/provider-selection";
+import type { AssignmentEffectClass } from "@getpaseo/protocol/assignment-contract";
+import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 
 export interface WorkspaceDraftAutoSubmitConfig {
   provider: string;
@@ -12,6 +14,19 @@ export function claimDraftAutoSubmit(
   if (claim.current === submitKey) return false;
   claim.current = submitKey;
   return true;
+}
+
+export interface WorkspaceDraftRoleContext {
+  roleId: PaseoRoleId | null;
+  assignmentEffect: AssignmentEffectClass;
+  beadsIssueIds: readonly string[];
+}
+
+export function resolveWorkspaceDraftRoleContext(input: {
+  autoSubmitContext: WorkspaceDraftRoleContext | null;
+  composerContext: WorkspaceDraftRoleContext;
+}): WorkspaceDraftRoleContext {
+  return input.autoSubmitContext ?? input.composerContext;
 }
 
 export function shouldAllowEmptyDraftText(input: {

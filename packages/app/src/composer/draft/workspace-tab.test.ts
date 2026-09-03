@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { shouldAllowEmptyDraftText, validateDraftSubmission } from "./workspace-tab-core";
+import {
+  resolveWorkspaceDraftRoleContext,
+  shouldAllowEmptyDraftText,
+  validateDraftSubmission,
+} from "./workspace-tab-core";
 
 const baseComposerState = {
   providerDefinitions: [{ id: "codewhale" }],
@@ -67,5 +71,45 @@ describe("workspace draft empty text readiness", () => {
         attachments: [],
       }),
     ).toBe(false);
+  });
+});
+
+describe("workspace draft role handoff", () => {
+  test("uses the role selected before creating a workspace during auto-submit", () => {
+    expect(
+      resolveWorkspaceDraftRoleContext({
+        autoSubmitContext: {
+          roleId: "lead",
+          assignmentEffect: "delegation",
+          beadsIssueIds: ["issue-123"],
+        },
+        composerContext: {
+          roleId: null,
+          assignmentEffect: "read-only",
+          beadsIssueIds: [],
+        },
+      }),
+    ).toEqual({
+      roleId: "lead",
+      assignmentEffect: "delegation",
+      beadsIssueIds: ["issue-123"],
+    });
+  });
+
+  test("uses the mounted composer role for ordinary manual drafts", () => {
+    expect(
+      resolveWorkspaceDraftRoleContext({
+        autoSubmitContext: null,
+        composerContext: {
+          roleId: "peer",
+          assignmentEffect: "mutating",
+          beadsIssueIds: ["issue-456"],
+        },
+      }),
+    ).toEqual({
+      roleId: "peer",
+      assignmentEffect: "mutating",
+      beadsIssueIds: ["issue-456"],
+    });
   });
 });
