@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { AssignmentEnvelopeSchema } from "@getpaseo/protocol/assignment-contract";
+import {
+  AssignmentEnvelopeSchema,
+  type AssignmentEffectClass,
+} from "@getpaseo/protocol/assignment-contract";
 import type { PolicyOwner } from "@getpaseo/protocol/policy-owner";
 import {
   COUNCIL_REPORT_RECEIPT_VERSION,
@@ -959,7 +962,11 @@ function resolveExecutionProfileRequest(
 }
 
 type AgentScopedRoleTopologyAction =
-  | { kind: "create_agent"; requestedRole: PaseoRoleId | undefined }
+  | {
+      kind: "create_agent";
+      requestedRole: PaseoRoleId | undefined;
+      requestedEffectClass: AssignmentEffectClass | undefined;
+    }
   | { kind: "send_agent_prompt"; targetAgentId: string };
 
 function hasSupervisorDelegationLease(caller: StoredAgentRecord): boolean {
@@ -4144,7 +4151,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         await assertAgentScopedRoleTopologyAuthorized({
           agentStorage,
           callerAgentId,
-          action: { kind: "create_agent", requestedRole: parsed.role },
+          action: {
+            kind: "create_agent",
+            requestedRole: parsed.role,
+            requestedEffectClass: parsed.assignment?.effectClass,
+          },
         });
         const { cwd, workspaceId, createdDirectoryWorkspaceId, worktree } =
           await resolveCreateAgentWorkspace(parsed.workspace, {
@@ -4165,7 +4176,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       await assertAgentScopedRoleTopologyAuthorized({
         agentStorage,
         callerAgentId,
-        action: { kind: "create_agent", requestedRole: parsed.role },
+        action: {
+          kind: "create_agent",
+          requestedRole: parsed.role,
+          requestedEffectClass: parsed.assignment?.effectClass,
+        },
       });
       const { cwd, workspaceId, createdDirectoryWorkspaceId } =
         await resolveCanonicalCreateAgentWorkspace(
