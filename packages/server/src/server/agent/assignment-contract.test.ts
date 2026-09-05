@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { AssignmentEnvelope } from "@getpaseo/protocol/assignment-contract";
+import { assignmentExternalEffectBoundaryFor } from "@getpaseo/protocol/assignment-contract";
 import {
   ASSIGNMENT_CONTRACT_INVALID_ERROR,
   ASSIGNMENT_CONTRACT_REQUIRED_ERROR,
@@ -176,6 +177,57 @@ describe("immutable assignment contract", () => {
     );
   });
 
+  test("rejects a hand-crafted bounded external-effect scope", () => {
+    expect(() =>
+      materialize({
+        roleId: "lead",
+        envelope: envelope({
+          effectClass: "delegation",
+          externalEffectBoundary: {
+            mode: "bounded",
+            scope: "A hand-crafted external scope",
+          },
+        }),
+      }),
+    ).toThrow(
+      `${ASSIGNMENT_CONTRACT_INVALID_ERROR}: external-effect boundary must equal the derived assignment scope`,
+    );
+  });
+
+  test("rejects external access grants when the role and effect require denial", () => {
+    expect(() =>
+      materialize({
+        roleId: "peer",
+        envelope: envelope({
+          disposition: "independent-review",
+          resourceGrants: { externalEffects: ["read sandbox API"] },
+        }),
+      }),
+    ).toThrow(
+      `${ASSIGNMENT_CONTRACT_INVALID_ERROR}: peer read-only cannot receive external access grants`,
+    );
+  });
+
+  test("renders derived external access grants in the assignment instruction", () => {
+    const externalEffects = ["read dev database", "write sandbox API"];
+    const contract = materialize({
+      roleId: "lead",
+      envelope: envelope({
+        effectClass: "delegation",
+        externalEffectBoundary: assignmentExternalEffectBoundaryFor(
+          "lead",
+          "delegation",
+          externalEffects,
+        ),
+        resourceGrants: { externalEffects },
+      }),
+    });
+
+    expect(buildSlpAssignmentInstruction(contract)).toContain(
+      "External access grants: read dev database; write sandbox API.",
+    );
+  });
+
   test("permits an exact bounded bootstrap write", () => {
     expect(
       materialize({
@@ -185,6 +237,7 @@ describe("immutable assignment contract", () => {
             mode: "bounded-write",
             scope: "/repo/WORKSPACE_PROTOCOL.md",
           },
+          externalEffectBoundary: assignmentExternalEffectBoundaryFor("lead", "bootstrap"),
         }),
       }).receipt.mutationBoundary,
     ).toEqual({ mode: "bounded-write", scope: "/repo/WORKSPACE_PROTOCOL.md" });

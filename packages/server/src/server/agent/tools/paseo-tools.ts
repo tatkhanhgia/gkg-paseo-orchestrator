@@ -966,6 +966,7 @@ type AgentScopedRoleTopologyAction =
       kind: "create_agent";
       requestedRole: PaseoRoleId | undefined;
       requestedEffectClass: AssignmentEffectClass | undefined;
+      requestedExternalEffects: readonly string[] | undefined;
     }
   | { kind: "send_agent_prompt"; targetAgentId: string };
 
@@ -1066,6 +1067,19 @@ async function assertAgentScopedRoleTopologyAuthorized(params: {
   }
   if (params.action.kind === "create_agent") {
     assertRoleBoundCreateAuthorized(caller, params.action.requestedRole);
+    const callerExternalEffects = new Set(
+      (caller.roleBinding?.assignmentContract?.envelope.resourceGrants?.externalEffects ?? []).map(
+        (grant) => grant.trim(),
+      ),
+    );
+    const deniedExternalEffects = (params.action.requestedExternalEffects ?? [])
+      .map((grant) => grant.trim())
+      .filter((grant) => !callerExternalEffects.has(grant));
+    if (deniedExternalEffects.length > 0) {
+      throw new Error(
+        `A role-bound Lead may grant a Peer only its own external access grants; denied: ${deniedExternalEffects.join("; ")}`,
+      );
+    }
     return;
   }
   await assertRoleBoundPromptAuthorized({
@@ -4155,6 +4169,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
             kind: "create_agent",
             requestedRole: parsed.role,
             requestedEffectClass: parsed.assignment?.effectClass,
+            requestedExternalEffects: parsed.assignment?.resourceGrants?.externalEffects,
           },
         });
         const { cwd, workspaceId, createdDirectoryWorkspaceId, worktree } =
@@ -4180,6 +4195,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           kind: "create_agent",
           requestedRole: parsed.role,
           requestedEffectClass: parsed.assignment?.effectClass,
+          requestedExternalEffects: parsed.assignment?.resourceGrants?.externalEffects,
         },
       });
       const { cwd, workspaceId, createdDirectoryWorkspaceId } =

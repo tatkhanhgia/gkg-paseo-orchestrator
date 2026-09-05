@@ -46,6 +46,12 @@ export function addRunOptions(cmd: Command): Command {
       )
       .option("--write-scope <scope>", "Narrow write scope for a mutating role assignment")
       .option(
+        "--external-effect <grant>",
+        "Grant bounded external access (can be used multiple times)",
+        collectMultiple,
+        [],
+      )
+      .option(
         "--beads-issue <id>",
         "Grant an exact Beads Central issue to a Peer (can be used multiple times)",
         collectMultiple,
@@ -144,6 +150,7 @@ export interface AgentRunOptions extends CommandOptions {
   role?: string;
   assignmentEffect?: string;
   writeScope?: string;
+  externalEffect?: string[];
   beadsIssue?: string[];
   notebookGrantScope?: string;
   notebookGrantExpiresAt?: string;
@@ -455,6 +462,8 @@ function validateRunOptions(
     } satisfies CommandError;
   }
 
+  validateExternalEffectOptions(roleId, assignmentEffect, options.externalEffect);
+
   const beadsIssueIds = normalizeBeadsIssueIds(options.beadsIssue);
   if (beadsIssueIds.length > 0 && roleId !== "peer") {
     throw {
@@ -531,6 +540,39 @@ function normalizeBeadsIssueIds(values: readonly string[] | undefined): string[]
   return beadsIssueIds;
 }
 
+function normalizeExternalEffects(values: readonly string[] | undefined): string[] {
+  const parsed = AssignmentResourceGrantsSchema.safeParse({ externalEffects: values ?? [] });
+  if (!parsed.success) {
+    throw {
+      code: "INVALID_OPTIONS",
+      message: "Invalid --external-effect value",
+      details: parsed.error.issues.map((issue) => issue.message).join("; "),
+    } satisfies CommandError;
+  }
+  return Array.from(new Set(parsed.data.externalEffects ?? []));
+}
+
+function validateExternalEffectOptions(
+  roleId: PaseoRoleId | undefined,
+  assignmentEffect: AssignmentEffectClass | undefined,
+  values: readonly string[] | undefined,
+): void {
+  const externalEffects = normalizeExternalEffects(values);
+  if (externalEffects.length === 0) return;
+  if (!roleId || !assignmentEffect) {
+    throw {
+      code: "INVALID_OPTIONS",
+      message: "--external-effect requires --role and --assignment-effect",
+    } satisfies CommandError;
+  }
+  if (assignmentExternalEffectBoundaryFor(roleId, assignmentEffect).mode !== "bounded") {
+    throw {
+      code: "INVALID_OPTIONS",
+      message: `--external-effect is not allowed for ${roleId} ${assignmentEffect}`,
+    } satisfies CommandError;
+  }
+}
+
 export function buildCliAssignment(input: {
   roleId: PaseoRoleId;
   effectClass: AssignmentEffectClass;
@@ -538,12 +580,18 @@ export function buildCliAssignment(input: {
   cwd: string;
   writeScope?: string;
   beadsIssueIds?: readonly string[];
+  externalEffects?: readonly string[];
   notebookGrant?: NotebookGrantRequest;
 }): AssignmentEnvelope {
   let disposition: AssignmentEnvelope["disposition"] = "supervision";
   if (input.roleId === "lead") disposition = "lead-direct";
   if (input.roleId === "peer") disposition = "peer-execution";
   const beadsIssueIds = normalizeBeadsIssueIds(input.beadsIssueIds);
+  const externalEffects = normalizeExternalEffects(input.externalEffects);
+  const resourceGrants = {
+    ...(beadsIssueIds.length > 0 ? { beadsIssueIds } : {}),
+    ...(externalEffects.length > 0 ? { externalEffects } : {}),
+  };
   return {
     version: PASEO_ASSIGNMENT_CONTRACT_VERSION,
     disposition,
@@ -555,8 +603,12 @@ export function buildCliAssignment(input: {
         Boolean(input.writeScope?.trim()))
         ? { mode: "bounded-write", scope: input.writeScope?.trim() || input.cwd }
         : { mode: "no-write" },
-    externalEffectBoundary: assignmentExternalEffectBoundaryFor(input.roleId, input.effectClass),
-    ...(beadsIssueIds.length > 0 ? { resourceGrants: { beadsIssueIds } } : {}),
+    externalEffectBoundary: assignmentExternalEffectBoundaryFor(
+      input.roleId,
+      input.effectClass,
+      externalEffects,
+    ),
+    ...(Object.keys(resourceGrants).length > 0 ? { resourceGrants } : {}),
     ...(input.notebookGrant ? { notebookGrant: input.notebookGrant } : {}),
     evidence: "Return exact changed or inspected scope and proportional verification.",
     handbackAndStop:
@@ -571,6 +623,7 @@ function buildOptionalCliAssignment(input: {
   cwd: string;
   writeScope?: string;
   beadsIssueIds?: readonly string[];
+  externalEffects?: readonly string[];
   notebookGrant?: NotebookGrantRequest;
 }): AssignmentEnvelope | undefined {
   if (!input.roleId || !input.effectClass) return undefined;
@@ -581,6 +634,7 @@ function buildOptionalCliAssignment(input: {
     cwd: input.cwd,
     writeScope: input.writeScope,
     beadsIssueIds: input.beadsIssueIds,
+    externalEffects: input.externalEffects,
     notebookGrant: input.notebookGrant,
   });
 }
@@ -873,6 +927,7 @@ export async function runRunCommand(
       cwd: runCwd,
       writeScope: options.writeScope,
       beadsIssueIds: options.beadsIssue,
+      externalEffects: options.externalEffect,
       notebookGrant,
     });
 

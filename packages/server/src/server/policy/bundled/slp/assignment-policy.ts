@@ -1,5 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
   assignmentExternalEffectBoundaryFor,
+  assignmentExternalEffectBoundaryForEnvelope,
   isAssignmentEffectAllowedForRole,
   type AssignmentEnvelope,
 } from "@getpaseo/protocol/assignment-contract";
@@ -42,10 +45,26 @@ function validateEffectBoundaries(envelope: AssignmentEnvelope): void {
 }
 
 function validateExternalEffectBoundary(roleId: PaseoRoleId, envelope: AssignmentEnvelope): void {
-  const requiredMode = assignmentExternalEffectBoundaryFor(roleId, envelope.effectClass).mode;
-  if (requiredMode === "denied" && envelope.externalEffectBoundary.mode !== "denied") {
+  const expectedBoundary = assignmentExternalEffectBoundaryForEnvelope(roleId, envelope);
+  if (expectedBoundary.mode === "denied" && envelope.externalEffectBoundary.mode !== "denied") {
     throw new Error(
-      `${ASSIGNMENT_CONTRACT_INVALID_ERROR}: ${roleId} ${envelope.effectClass} requires external effects ${requiredMode}`,
+      `${ASSIGNMENT_CONTRACT_INVALID_ERROR}: ${roleId} ${envelope.effectClass} requires external effects denied`,
+    );
+  }
+  if (
+    expectedBoundary.mode === "denied" &&
+    envelope.resourceGrants?.externalEffects !== undefined
+  ) {
+    throw new Error(
+      `${ASSIGNMENT_CONTRACT_INVALID_ERROR}: ${roleId} ${envelope.effectClass} cannot receive external access grants`,
+    );
+  }
+  if (
+    expectedBoundary.mode === "bounded" &&
+    !isDeepStrictEqual(envelope.externalEffectBoundary, expectedBoundary)
+  ) {
+    throw new Error(
+      `${ASSIGNMENT_CONTRACT_INVALID_ERROR}: external-effect boundary must equal the derived assignment scope`,
     );
   }
 }
@@ -114,6 +133,7 @@ export function buildSlpAssignmentInstruction(contract: PersistedAssignmentContr
       ? `bounded (${envelope.externalEffectBoundary.scope})`
       : "denied";
   const beadsIssueGrants = envelope.resourceGrants?.beadsIssueIds?.join(", ") || "none";
+  const externalAccessGrants = envelope.resourceGrants?.externalEffects?.join("; ") || "none";
   const trackerCheckpoint = trackerCheckpointForRole(receipt.roleId, envelope.effectClass);
   const technicalCapabilityBoundary =
     envelope.mutationBoundary.mode === "no-write"
@@ -134,6 +154,7 @@ export function buildSlpAssignmentInstruction(contract: PersistedAssignmentContr
     supervisorDelegationBoundary,
     notebookGrantLine,
     `Beads issue grants: ${beadsIssueGrants}.`,
+    `External access grants: ${externalAccessGrants}.`,
     trackerCheckpoint,
     `Evidence: ${envelope.evidence}`,
     `Handback/stop: ${envelope.handbackAndStop}`,

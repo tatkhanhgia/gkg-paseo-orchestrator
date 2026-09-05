@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Command } from "commander";
 import {
+  addRunOptions,
   buildCliAssignment,
   buildCliNotebookGrantRequest,
   resolveExistingRunWorkspace,
@@ -33,6 +35,47 @@ describe("CLI assignment issue grants", () => {
       externalEffectBoundary: {
         mode: "bounded",
         scope: "Beads Central issue/work graph for this assignment only; no other external effects",
+      },
+    });
+  });
+
+  it("parses repeatable external access grants and derives their bounded scope", () => {
+    const command = addRunOptions(new Command());
+    command.parse(
+      [
+        "--role",
+        "peer",
+        "--assignment-effect",
+        "mutating",
+        "--external-effect",
+        "read dev database",
+        "--external-effect",
+        "write sandbox API",
+        "implement task",
+      ],
+      { from: "user" },
+    );
+    const options = command.opts<AgentRunOptions>();
+
+    expect(options.externalEffect).toEqual(["read dev database", "write sandbox API"]);
+    expect(
+      buildCliAssignment({
+        roleId: "peer",
+        effectClass: "mutating",
+        objective: "Implement task",
+        cwd: "/repo",
+        beadsIssueIds: ["ps123-abc"],
+        externalEffects: options.externalEffect,
+      }),
+    ).toMatchObject({
+      resourceGrants: {
+        beadsIssueIds: ["ps123-abc"],
+        externalEffects: ["read dev database", "write sandbox API"],
+      },
+      externalEffectBoundary: {
+        mode: "bounded",
+        scope:
+          "Beads Central issue/work graph for this assignment only; plus Human-leased external access: read dev database; write sandbox API",
       },
     });
   });
@@ -213,6 +256,17 @@ describe("runRunCommand option validation", () => {
     await expectInvalidOptions(
       { role: "lead", assignmentEffect: "read-only", writeScope: "src/**" },
       /--write-scope is not allowed for read-only/,
+    );
+  });
+
+  it("rejects external access grants when the role effect is externally denied", async () => {
+    await expectInvalidOptions(
+      {
+        role: "peer",
+        assignmentEffect: "read-only",
+        externalEffect: ["read dev database"],
+      },
+      /--external-effect is not allowed for peer read-only/,
     );
   });
 

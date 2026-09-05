@@ -5,6 +5,7 @@ import {
   AssignmentEnvelopeSchema,
   AssignmentResourceGrantsSchema,
   assignmentExternalEffectBoundaryFor,
+  assignmentExternalEffectBoundaryForEnvelope,
   isAssignmentEffectAllowedForRole,
   PASEO_BEADS_EXTERNAL_EFFECT_SCOPE,
 } from "./assignment-contract.js";
@@ -114,5 +115,38 @@ describe("notebookGrant compatibility shape", () => {
       someFutureField: "daemon added this later",
     });
     expect(parsed.objective).toBe("test objective");
+  });
+
+  test("derives the bounded scope from trimmed external access grants", () => {
+    const externalEffects = ["  read dev database  ", "write sandbox API"];
+    expect(assignmentExternalEffectBoundaryFor("peer", "mutating", externalEffects)).toEqual({
+      mode: "bounded",
+      scope:
+        "Beads Central issue/work graph for this assignment only; plus Human-leased external access: read dev database; write sandbox API",
+    });
+
+    const envelope = AssignmentEnvelopeSchema.parse({
+      version: 1,
+      disposition: "peer-execution",
+      objective: "Implement the bounded assignment.",
+      effectClass: "mutating",
+      mutationBoundary: { mode: "bounded-write", scope: "/repo" },
+      externalEffectBoundary: assignmentExternalEffectBoundaryFor(
+        "peer",
+        "mutating",
+        externalEffects,
+      ),
+      resourceGrants: { beadsIssueIds: ["ps123-abc"], externalEffects },
+      evidence: "Return focused verification.",
+      handbackAndStop: "Stop after handback.",
+    });
+
+    expect(envelope.resourceGrants?.externalEffects).toEqual([
+      "read dev database",
+      "write sandbox API",
+    ]);
+    expect(assignmentExternalEffectBoundaryForEnvelope("peer", envelope)).toEqual(
+      envelope.externalEffectBoundary,
+    );
   });
 });

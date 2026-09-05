@@ -39,13 +39,22 @@ export function isAssignmentEffectAllowedForRole(
 export function assignmentExternalEffectBoundaryFor(
   roleId: keyof typeof PASEO_ASSIGNMENT_EFFECTS_BY_ROLE,
   effectClass: AssignmentEffectClass,
+  externalEffects?: readonly string[],
 ): AssignmentExternalEffectBoundary {
   const canMutateBeads =
     (roleId === "lead" && effectClass !== "read-only") ||
     (roleId === "peer" && effectClass === "mutating");
-  return canMutateBeads
-    ? { mode: "bounded", scope: PASEO_BEADS_EXTERNAL_EFFECT_SCOPE }
-    : { mode: "denied" };
+  if (!canMutateBeads) {
+    return { mode: "denied" };
+  }
+  const grants = (externalEffects ?? []).map((grant) => grant.trim()).filter(Boolean);
+  return {
+    mode: "bounded",
+    scope:
+      grants.length === 0
+        ? PASEO_BEADS_EXTERNAL_EFFECT_SCOPE
+        : `Beads Central issue/work graph for this assignment only; plus Human-leased external access: ${grants.join("; ")}`,
+  };
 }
 
 export const PASEO_ASSIGNMENT_EFFECT_SUMMARIES = [
@@ -123,6 +132,7 @@ const AssignmentBeadsIssueIdSchema = z
 export const AssignmentResourceGrantsSchema = z
   .object({
     beadsIssueIds: z.array(AssignmentBeadsIssueIdSchema).max(100).optional(),
+    externalEffects: z.array(z.string().trim().min(1).max(500)).max(32).optional(),
   })
   .strict();
 export type AssignmentResourceGrants = z.infer<typeof AssignmentResourceGrantsSchema>;
@@ -180,6 +190,17 @@ export const AssignmentEnvelopeSchema = z.object({
   notebookGrant: NotebookGrantRequestSchema.optional(),
 });
 export type AssignmentEnvelope = z.infer<typeof AssignmentEnvelopeSchema>;
+
+export function assignmentExternalEffectBoundaryForEnvelope(
+  roleId: keyof typeof PASEO_ASSIGNMENT_EFFECTS_BY_ROLE,
+  envelope: Pick<AssignmentEnvelope, "effectClass" | "resourceGrants">,
+): AssignmentExternalEffectBoundary {
+  return assignmentExternalEffectBoundaryFor(
+    roleId,
+    envelope.effectClass,
+    envelope.resourceGrants?.externalEffects,
+  );
+}
 
 export const AssignmentAssignerReceiptSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("human-session") }),

@@ -2322,6 +2322,121 @@ describe("create_agent MCP tool", () => {
     expect(spies.agentManager.createAgent).not.toHaveBeenCalled();
   });
 
+  it("limits Peer external access grants to the role-bound Lead's exact grant set", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const leadExternalEffects = ["read/write dev database"];
+    const leadRoleBinding = {
+      ...createTestRoleBinding("lead"),
+      assignmentContract: materializeAssignmentContract({
+        roleId: "lead",
+        assigner: { kind: "human-session" },
+        workspaceId: "wks_external_effect_lead",
+        cwd: existingCwd,
+        createdAt: new Date("2026-08-09T00:00:00.000Z"),
+        envelope: {
+          version: 1,
+          disposition: "lead-direct",
+          objective: "Route bounded work.",
+          effectClass: "delegation",
+          mutationBoundary: { mode: "no-write" },
+          externalEffectBoundary: assignmentExternalEffectBoundaryFor(
+            "lead",
+            "delegation",
+            leadExternalEffects,
+          ),
+          resourceGrants: { externalEffects: leadExternalEffects },
+          evidence: "Return exact observed evidence.",
+          handbackAndStop: "Stop after the evidence handback.",
+        },
+      }),
+    };
+    const caller = createManagedAgent({
+      id: "external-effect-lead-agent",
+      cwd: existingCwd,
+      workspaceId: "wks_external_effect_lead",
+      roleBinding: leadRoleBinding,
+    });
+    spies.agentManager.getAgent.mockImplementation((agentId: string) =>
+      agentId === caller.id ? caller : null,
+    );
+    mockStoredAgentRecords(spies.agentStorage.get, [
+      createActiveStoredRecord({
+        id: caller.id,
+        cwd: caller.cwd,
+        workspaceId: caller.workspaceId,
+        roleBinding: leadRoleBinding,
+      }),
+    ]);
+    spies.agentManager.createAgent.mockResolvedValue(
+      createManagedAgent({
+        id: "external-effect-peer-agent",
+        cwd: existingCwd,
+        workspaceId: "wks_external_effect_lead",
+        roleBinding: createTestRoleBinding("peer"),
+      }),
+    );
+    const providerSnapshot = createOpenCodeManager();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: providerSnapshot.manager,
+      callerAgentId: caller.id,
+      logger,
+    });
+    const tool = registeredTool(server, "create_agent");
+    const peerAssignment = (externalEffects: readonly string[]) => ({
+      version: 1 as const,
+      disposition: "peer-execution" as const,
+      objective: "Perform bounded mutation.",
+      effectClass: "mutating" as const,
+      mutationBoundary: { mode: "bounded-write" as const, scope: existingCwd },
+      externalEffectBoundary: assignmentExternalEffectBoundaryFor(
+        "peer",
+        "mutating",
+        externalEffects,
+      ),
+      resourceGrants: { beadsIssueIds: ["ps-test-external"], externalEffects },
+      evidence: "Return exact observed evidence.",
+      handbackAndStop: "Stop after the evidence handback.",
+    });
+
+    await expect(
+      tool.handler({
+        title: "Denied Peer",
+        provider: "opencode/gpt-5.4",
+        role: "peer",
+        assignment: peerAssignment(["read/write dev database", "write sandbox API"]),
+        initialPrompt: "Must not run",
+      }),
+    ).rejects.toThrow(
+      "A role-bound Lead may grant a Peer only its own external access grants; denied: write sandbox API",
+    );
+    expect(spies.agentManager.createAgent).not.toHaveBeenCalled();
+
+    const allowedAssignment = peerAssignment([" read/write dev database "]);
+    await tool.handler({
+      title: "Allowed Peer",
+      provider: "opencode/gpt-5.4",
+      role: "peer",
+      assignment: allowedAssignment,
+      initialPrompt: "Perform bounded mutation",
+    });
+
+    expect(spies.agentManager.createAgent).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        assignment: expect.objectContaining({
+          resourceGrants: {
+            beadsIssueIds: ["ps-test-external"],
+            externalEffects: ["read/write dev database"],
+          },
+        }),
+        roleId: "peer",
+      }),
+    );
+  });
+
   it("lets only a role-bound Lead select a Council execution specialization", async () => {
     const { agentManager, agentStorage, spies } = createTestDeps();
     const lead = createManagedAgent({
