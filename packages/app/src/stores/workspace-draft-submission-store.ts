@@ -22,6 +22,7 @@ export interface PendingWorkspaceDraftSubmission {
   roleId?: PaseoRoleId | null;
   assignmentEffect?: AssignmentEffectClass;
   beadsIssueIds?: string[];
+  externalEffects?: string[];
   allowEmptyText?: boolean;
 }
 

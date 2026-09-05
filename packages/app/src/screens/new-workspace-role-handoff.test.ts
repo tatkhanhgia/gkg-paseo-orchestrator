@@ -6,14 +6,16 @@ describe("new workspace role handoff", () => {
   test("preserves the complete selected role context", () => {
     expect(
       buildNewWorkspaceRoleHandoff({
-        roleId: "supervisor",
-        assignmentEffect: "read-only",
+        roleId: "peer",
+        assignmentEffect: "mutating",
         beadsIssueIds: ["issue-123"],
+        externalEffects: ["staging API"],
       }),
     ).toEqual({
-      roleId: "supervisor",
-      assignmentEffect: "read-only",
+      roleId: "peer",
+      assignmentEffect: "mutating",
       beadsIssueIds: ["issue-123"],
+      externalEffects: ["staging API"],
     });
   });
 
@@ -23,6 +25,7 @@ describe("new workspace role handoff", () => {
         roleId: null,
         assignmentEffect: "read-only",
         beadsIssueIds: [],
+        externalEffects: [],
       }),
     ).toEqual({});
   });

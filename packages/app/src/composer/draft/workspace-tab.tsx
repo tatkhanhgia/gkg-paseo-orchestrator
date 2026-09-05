@@ -14,7 +14,8 @@ import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { COMPOSER_PILL_CLEARANCE } from "@/composer/pill-styles";
 import { AgentStreamView } from "@/agent-stream/view";
 import { composerWorkspaceAttachment } from "@/composer/attachments/workspace";
-import { defaultAssignmentEffectForRole, useAgentInputDraft } from "@/composer/draft/input-draft";
+import { useAgentInputDraft } from "@/composer/draft/input-draft";
+import { defaultAssignmentEffectForRole } from "@/workspace-protocol/assignment-authority";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
 import { useDraftAgentCreateFlow, type DraftCreateAttempt } from "@/composer/draft/create-flow";
 import { resolveTurnPresentation, TURN_LIVENESS_IDLE } from "@/timeline/turn-liveness";
@@ -86,6 +87,7 @@ interface AutoSubmitConfig {
   roleId: import("@getpaseo/protocol/role-binding").PaseoRoleId | null;
   assignmentEffect: import("@getpaseo/protocol/assignment-contract").AssignmentEffectClass;
   beadsIssueIds: string[];
+  externalEffects: string[];
 }
 
 function resolveAutoSubmitConfig(
@@ -98,6 +100,7 @@ function resolveAutoSubmitConfig(
     roleId?: import("@getpaseo/protocol/role-binding").PaseoRoleId | null;
     assignmentEffect?: import("@getpaseo/protocol/assignment-contract").AssignmentEffectClass;
     beadsIssueIds?: string[];
+    externalEffects?: string[];
   } | null,
 ): AutoSubmitConfig | null {
   if (!pending) return null;
@@ -108,8 +111,11 @@ function resolveAutoSubmitConfig(
     thinkingOptionId: pending.thinkingOptionId ?? null,
     featureValues: pending.featureValues ?? {},
     roleId: pending.roleId ?? null,
-    assignmentEffect: pending.assignmentEffect ?? defaultAssignmentEffectForRole(pending.roleId),
+    assignmentEffect:
+      pending.assignmentEffect ??
+      (pending.roleId ? defaultAssignmentEffectForRole(pending.roleId) : "read-only"),
     beadsIssueIds: pending.beadsIssueIds ?? [],
+    externalEffects: pending.externalEffects ?? [],
   };
 }
 
@@ -163,6 +169,7 @@ function buildRoleCreateFields(input: {
   objective: string;
   cwd: string;
   beadsIssueIds: readonly string[];
+  externalEffects: readonly string[];
 }): {
   roleId?: import("@getpaseo/protocol/role-binding").PaseoRoleId;
   assignment?: AssignmentEnvelope;
@@ -176,6 +183,7 @@ function buildRoleCreateFields(input: {
       objective: input.objective,
       cwd: input.cwd,
       beadsIssueIds: input.beadsIssueIds,
+      externalEffects: input.externalEffects,
     }),
   };
 }
@@ -184,6 +192,7 @@ interface DraftRoleIntent {
   roleId: import("@getpaseo/protocol/role-binding").PaseoRoleId | null | undefined;
   assignmentEffect: import("@getpaseo/protocol/assignment-contract").AssignmentEffectClass;
   beadsIssueIds: readonly string[];
+  externalEffects: readonly string[];
 }
 
 function resolveDraftRoleIntent(
@@ -192,6 +201,7 @@ function resolveDraftRoleIntent(
     selectedRole?: import("@getpaseo/protocol/role-binding").PaseoRoleId | null;
     selectedAssignmentEffect: import("@getpaseo/protocol/assignment-contract").AssignmentEffectClass;
     selectedBeadsIssueIds: string[];
+    selectedExternalEffects: string[];
   },
 ): DraftRoleIntent {
   if (autoSubmitConfig) {
@@ -199,12 +209,14 @@ function resolveDraftRoleIntent(
       roleId: autoSubmitConfig.roleId,
       assignmentEffect: autoSubmitConfig.assignmentEffect,
       beadsIssueIds: autoSubmitConfig.beadsIssueIds,
+      externalEffects: autoSubmitConfig.externalEffects,
     };
   }
   return {
     roleId: composerState.selectedRole,
     assignmentEffect: composerState.selectedAssignmentEffect,
     beadsIssueIds: composerState.selectedBeadsIssueIds,
+    externalEffects: composerState.selectedExternalEffects,
   };
 }
 
@@ -239,6 +251,7 @@ async function submitDraftCreateRequest(input: {
     effectiveThinkingOptionId: string | null;
     featureValues: Record<string, unknown> | undefined;
     selectedBeadsIssueIds: string[];
+    selectedExternalEffects: string[];
   };
   hostDisconnectedMessage: string;
   selectModelMessage: string;
@@ -293,6 +306,7 @@ async function submitDraftCreateRequest(input: {
       objective: text,
       cwd: workspaceDirectory,
       beadsIssueIds: roleIntent.beadsIssueIds,
+      externalEffects: roleIntent.externalEffects,
     }),
     ...(text ? { initialPrompt: text } : {}),
     clientMessageId: attempt.clientMessageId,
@@ -643,6 +657,7 @@ export function WorkspaceDraftAgentTab({
               objective: text,
               cwd: roleCwd,
               beadsIssueIds: roleIntent.beadsIssueIds,
+              externalEffects: roleIntent.externalEffects,
             })
           : {
               mutationBoundary: { mode: "no-write" as const },

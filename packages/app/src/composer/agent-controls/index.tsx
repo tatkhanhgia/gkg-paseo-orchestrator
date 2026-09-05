@@ -96,11 +96,20 @@ import {
 import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
 import { useRoleProfiles } from "@/hooks/use-role-profiles";
 import { resolveRoleOptions } from "@/workspace-protocol/legacy-role-options";
+import { Field, FormTextInput } from "@/components/ui/form-field";
 
 interface AgentControlOption {
   id: string;
   label: string;
   description?: string;
+}
+
+export interface DraftAgentTextFeature {
+  type: "text";
+  id: string;
+  label: string;
+  description: string;
+  value: string;
 }
 
 type AgentControlSelector =
@@ -138,6 +147,7 @@ interface ControlledAgentControlsProps {
   onCreateAgentProfile?: (seed: AgentProfileSeed) => void;
   onEditAgentProfile?: (profileId: string) => void;
   features?: AgentFeature[];
+  draftTextFeatures?: DraftAgentTextFeature[];
   onSetFeature?: (featureId: string, value: unknown) => void;
   onDropdownClose?: () => void;
   onModelSelectorOpen?: () => void;
@@ -173,6 +183,7 @@ export interface DraftAgentControlsProps {
   onSelectThinkingOption: (thinkingOptionId: string) => void;
   onApplyAgentProfile: DraftAgentProfileControls["applyProfile"];
   features?: AgentFeature[];
+  draftTextFeatures?: DraftAgentTextFeature[];
   onSetFeature?: (featureId: string, value: unknown) => void;
   onDropdownClose?: () => void;
   onModelSelectorOpen?: () => void;
@@ -298,6 +309,7 @@ function resolveHasAnyControl({
   canSelectModel,
   thinkingOptions,
   features,
+  draftTextFeatures,
   hasMode,
 }: {
   roleOptions: AgentControlOption[] | undefined;
@@ -305,6 +317,7 @@ function resolveHasAnyControl({
   canSelectModel: boolean;
   thinkingOptions: AgentControlOption[] | undefined;
   features: AgentFeature[] | undefined;
+  draftTextFeatures: DraftAgentTextFeature[] | undefined;
   hasMode: boolean;
 }) {
   return (
@@ -313,6 +326,7 @@ function resolveHasAnyControl({
     canSelectModel ||
     Boolean(thinkingOptions?.length) ||
     Boolean(features?.length) ||
+    Boolean(draftTextFeatures?.length) ||
     hasMode
   );
 }
@@ -590,6 +604,7 @@ function ControlledAgentControls({
   onCreateAgentProfile,
   onEditAgentProfile,
   features,
+  draftTextFeatures,
   onSetFeature,
   onDropdownClose,
   onModelSelectorOpen,
@@ -652,6 +667,7 @@ function ControlledAgentControls({
     canSelectModel,
     thinkingOptions,
     features,
+    draftTextFeatures,
     hasMode: modeControl !== null && modeControl !== undefined,
   });
   const featureControls = useMemo(
@@ -873,6 +889,7 @@ function ControlledAgentControls({
             thinkingOptions={formattedThinkingOptions}
             selectedThinkingOptionId={selectedThinkingOptionId}
             features={features}
+            draftTextFeatures={draftTextFeatures}
             onSetFeature={onSetFeature}
             onApplyAgentProfile={onApplyAgentProfile}
             onEditAgentProfiles={onEditAgentProfiles}
@@ -942,6 +959,7 @@ function ControlledAgentControls({
             selectedModelId={selectedModelId}
             selectedThinkingOptionId={selectedThinkingOptionId}
             features={features}
+            draftTextFeatures={draftTextFeatures}
             onSetFeature={onSetFeature}
             onApplyAgentProfile={onApplyAgentProfile}
             onEditAgentProfiles={onEditAgentProfiles}
@@ -990,6 +1008,7 @@ interface DesktopAgentControlsContentProps {
   thinkingOptions?: AgentControlOption[];
   selectedThinkingOptionId?: string;
   features?: AgentFeature[];
+  draftTextFeatures?: DraftAgentTextFeature[];
   onSetFeature?: (featureId: string, value: unknown) => void;
   onApplyAgentProfile?: (profileId: string) => void;
   onEditAgentProfiles?: () => void;
@@ -1051,7 +1070,6 @@ interface DesktopAgentControlsContentProps {
 const DESKTOP_SEARCH_THRESHOLD = 6;
 
 function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
-  const { theme } = useUnistyles();
   const { t } = useTranslation();
   const {
     provider,
@@ -1063,6 +1081,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     thinkingOptions,
     selectedThinkingOptionId,
     features,
+    draftTextFeatures,
     onSetFeature,
     onApplyAgentProfile,
     onEditAgentProfiles,
@@ -1119,11 +1138,6 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     () => ({ glyphSize, showCaret: presentation.showCarets }),
     [glyphSize, presentation.showCarets],
   );
-  const featuresSheetHeader = useMemo<SheetHeader>(
-    () => ({ title: t("agentControls.features.title") }),
-    [t],
-  );
-  const handleOpenFeatures = useCallback(() => handleOpenSheet("features"), [handleOpenSheet]);
   return (
     <>
       {roleOptions && roleOptions.length > 0 ? (
@@ -1254,15 +1268,130 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
 
       {modeControl ? <AgentModeControl {...modeControl} onClose={onDropdownClose} /> : null}
 
-      {presentation.aggregateFeatures && features?.length ? (
+      <DesktopFeatureControls
+        aggregateFeatures={presentation.aggregateFeatures}
+        features={features}
+        draftTextFeatures={draftTextFeatures}
+        disabled={disabled}
+        openSelector={openSelector}
+        activeSheet={activeSheet}
+        glyphSize={glyphSize}
+        handleOpenChange={handleOpenChange}
+        handleNestedOpenChange={handleNestedOpenChange}
+        handleOpenSheet={handleOpenSheet}
+        handleCloseSheet={handleCloseSheet}
+        onSetFeature={onSetFeature}
+        onDropdownClose={onDropdownClose}
+      />
+    </>
+  );
+}
+
+function DesktopFeatureControls({
+  aggregateFeatures,
+  features,
+  draftTextFeatures,
+  disabled,
+  openSelector,
+  activeSheet,
+  glyphSize,
+  handleOpenChange,
+  handleNestedOpenChange,
+  handleOpenSheet,
+  handleCloseSheet,
+  onSetFeature,
+  onDropdownClose,
+}: {
+  aggregateFeatures: boolean;
+  features?: AgentFeature[];
+  draftTextFeatures?: DraftAgentTextFeature[];
+  disabled: boolean;
+  openSelector: AgentControlSelector | null;
+  activeSheet: ActiveSheet;
+  glyphSize: number;
+  handleOpenChange: (selector: AgentControlSelector) => (nextOpen: boolean) => void;
+  handleNestedOpenChange: (selector: AgentControlSelector) => (nextOpen: boolean) => void;
+  handleOpenSheet: (sheet: Exclude<ActiveSheet, null>) => void;
+  handleCloseSheet: () => void;
+  onSetFeature?: (featureId: string, value: unknown) => void;
+  onDropdownClose?: () => void;
+}) {
+  const { theme } = useUnistyles();
+  const { t } = useTranslation();
+  const featuresSheetHeader = useMemo<SheetHeader>(
+    () => ({ title: t("agentControls.features.title") }),
+    [t],
+  );
+  const openFeatures = useCallback(() => handleOpenSheet("features"), [handleOpenSheet]);
+  const hasAggregatedFeatures = aggregateFeatures && Boolean(features?.length);
+  const hasTextFeatures = Boolean(draftTextFeatures?.length);
+
+  if (hasAggregatedFeatures || (aggregateFeatures && hasTextFeatures)) {
+    return (
+      <>
+        <Pressable
+          onPress={openFeatures}
+          disabled={disabled}
+          style={styles.modeIconBadge}
+          accessibilityRole="button"
+          accessibilityLabel={t("agentControls.features.open")}
+          testID="agent-controls-features"
+        >
+          <ComposerToolbarGlyph size={glyphSize}>
+            <Settings2 size={glyphSize} color={theme.colors.foregroundMuted} />
+          </ComposerToolbarGlyph>
+        </Pressable>
+        <AdaptiveModalSheet
+          header={featuresSheetHeader}
+          visible={activeSheet === "features"}
+          onClose={handleCloseSheet}
+          testID="agent-features-sheet"
+        >
+          {(features ?? []).map((feature) => (
+            <SheetFeatureItem
+              key={`feature-${feature.id}`}
+              feature={feature}
+              disabled={disabled}
+              openSelector={openSelector}
+              handleOpenChange={handleNestedOpenChange}
+              onSetFeature={onSetFeature}
+            />
+          ))}
+          {(draftTextFeatures ?? []).map((feature) => (
+            <DraftTextFeatureField
+              key={`feature-${feature.id}`}
+              feature={feature}
+              disabled={disabled}
+              onSetFeature={onSetFeature}
+            />
+          ))}
+        </AdaptiveModalSheet>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {features?.map((feature) => (
+        <DesktopFeatureItem
+          key={`feature-${feature.id}`}
+          feature={feature}
+          disabled={disabled}
+          openSelector={openSelector}
+          handleOpenChange={handleOpenChange}
+          onSetFeature={onSetFeature}
+          onActionComplete={onDropdownClose}
+        />
+      ))}
+      {hasTextFeatures ? (
         <>
           <Pressable
-            onPress={handleOpenFeatures}
+            onPress={openFeatures}
             disabled={disabled}
             style={styles.modeIconBadge}
             accessibilityRole="button"
-            accessibilityLabel={t("agentControls.features.open")}
-            testID="agent-controls-features"
+            accessibilityLabel={draftTextFeatures?.[0]?.label}
+            testID="agent-controls-text-features"
           >
             <ComposerToolbarGlyph size={glyphSize}>
               <Settings2 size={glyphSize} color={theme.colors.foregroundMuted} />
@@ -1272,33 +1401,19 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
             header={featuresSheetHeader}
             visible={activeSheet === "features"}
             onClose={handleCloseSheet}
-            testID="agent-features-sheet"
+            testID="agent-text-features-sheet"
           >
-            {features.map((feature) => (
-              <SheetFeatureItem
+            {(draftTextFeatures ?? []).map((feature) => (
+              <DraftTextFeatureField
                 key={`feature-${feature.id}`}
                 feature={feature}
                 disabled={disabled}
-                openSelector={openSelector}
-                handleOpenChange={handleNestedOpenChange}
                 onSetFeature={onSetFeature}
               />
             ))}
           </AdaptiveModalSheet>
         </>
-      ) : (
-        features?.map((feature) => (
-          <DesktopFeatureItem
-            key={`feature-${feature.id}`}
-            feature={feature}
-            disabled={disabled}
-            openSelector={openSelector}
-            handleOpenChange={handleOpenChange}
-            onSetFeature={onSetFeature}
-            onActionComplete={onDropdownClose}
-          />
-        ))
-      )}
+      ) : null}
     </>
   );
 }
@@ -1319,6 +1434,7 @@ interface SheetAgentControlsContentProps {
   selectedModelId?: string;
   selectedThinkingOptionId?: string;
   features?: AgentFeature[];
+  draftTextFeatures?: DraftAgentTextFeature[];
   onSetFeature?: (featureId: string, value: unknown) => void;
   onApplyAgentProfile?: (profileId: string) => void;
   onEditAgentProfiles?: () => void;
@@ -1374,6 +1490,7 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
     selectedModelId,
     selectedThinkingOptionId,
     features,
+    draftTextFeatures,
     onSetFeature,
     onApplyAgentProfile,
     onEditAgentProfiles,
@@ -1464,6 +1581,14 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
           disabled={disabled}
           openSelector={openSelector}
           handleOpenChange={handleOpenChange}
+          onSetFeature={onSetFeature}
+        />
+      ))}
+      {(draftTextFeatures ?? []).map((feature) => (
+        <DraftTextFeatureField
+          key={`feature-${feature.id}`}
+          feature={feature}
+          disabled={disabled}
           onSetFeature={onSetFeature}
         />
       ))}
@@ -1650,6 +1775,40 @@ function DesktopFeatureItem({
   }
 
   return null;
+}
+
+function DraftTextFeatureField({
+  feature,
+  disabled,
+  onSetFeature,
+}: {
+  feature: DraftAgentTextFeature;
+  disabled: boolean;
+  onSetFeature?: (featureId: string, value: unknown) => void;
+}) {
+  const isCompact = useIsCompactFormFactor();
+  const setValue = useCallback(
+    (value: string) => onSetFeature?.(feature.id, value),
+    [feature.id, onSetFeature],
+  );
+
+  return (
+    <Field label={feature.label} hint={feature.description} testID={`agent-feature-${feature.id}`}>
+      <FormTextInput
+        size={isCompact ? "md" : "sm"}
+        initialValue={feature.value}
+        resetKey={feature.id}
+        onChangeText={setValue}
+        editable={!disabled}
+        accessibilityLabel={feature.label}
+        testID={`agent-feature-${feature.id}-input`}
+        style={styles.multilineInput}
+        multiline
+        numberOfLines={4}
+        textAlignVertical="top"
+      />
+    </Field>
+  );
 }
 
 function SheetFeatureItem({
@@ -2109,6 +2268,7 @@ export function DraftAgentControls({
   onSelectThinkingOption,
   onApplyAgentProfile,
   features,
+  draftTextFeatures,
   onSetFeature,
   onDropdownClose,
   onModelSelectorOpen,
@@ -2213,6 +2373,7 @@ export function DraftAgentControls({
         selectedThinkingOptionId={effectiveSelectedThinkingOption}
         onSelectThinkingOption={onSelectThinkingOption}
         features={features}
+        draftTextFeatures={draftTextFeatures}
         onSetFeature={onSetFeature}
         onDropdownClose={onDropdownClose}
         onModelSelectorOpen={onModelSelectorOpen}
@@ -2288,5 +2449,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   combinedSheetControls: {
     gap: theme.spacing[1],
+  },
+  multilineInput: {
+    minHeight: 96,
   },
 }));

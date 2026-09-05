@@ -772,6 +772,7 @@ interface WorkspaceDraftSubmissionConfig {
   roleId: PaseoRoleId | null;
   assignmentEffect: AssignmentEffectClass;
   beadsIssueIds: string[];
+  externalEffects: string[];
   target: WorkspaceTabTarget;
 }
 
@@ -884,6 +885,7 @@ function buildWorkspaceDraftSetupFromComposer(input: {
     roleId: input.composerState.selectedRole,
     assignmentEffect: input.composerState.selectedAssignmentEffect,
     beadsIssueIds: input.composerState.selectedBeadsIssueIds,
+    externalEffects: input.composerState.selectedExternalEffects,
   };
 }
 
@@ -1022,6 +1024,7 @@ function resolveWorkspaceDraftSubmissionConfig(input: {
       roleId: initialSetup.roleId ?? null,
       assignmentEffect: initialSetup.assignmentEffect ?? "read-only",
       beadsIssueIds: initialSetup.beadsIssueIds ?? [],
+      externalEffects: initialSetup.externalEffects ?? [],
       target: { kind: "draft", draftId, setup: initialSetup },
     };
   }
@@ -1035,6 +1038,7 @@ function resolveWorkspaceDraftSubmissionConfig(input: {
     roleId: composerState.selectedRole,
     assignmentEffect: composerState.selectedAssignmentEffect,
     beadsIssueIds: composerState.selectedBeadsIssueIds,
+    externalEffects: composerState.selectedExternalEffects,
     target: {
       kind: "draft",
       draftId,
@@ -1103,6 +1107,7 @@ function submitWorkspaceDraft(input: SubmitDraftInput): void {
     roleId: submission.roleId,
     assignmentEffect: submission.assignmentEffect,
     beadsIssueIds: submission.beadsIssueIds,
+    externalEffects: submission.externalEffects,
     allowEmptyText: true,
   });
   clearDraft("sent");

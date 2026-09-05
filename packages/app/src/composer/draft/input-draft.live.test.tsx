@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDraftStore } from "@/stores/draft-store";
 import type { AttachmentMetadata, ComposerAttachment } from "@/attachments/types";
 import { createWorkspaceFileAttachment } from "@/attachments/workspace-file";
+import { buildAssignmentEnvelope } from "@/workspace-protocol/assignment-envelope";
 
 const { asyncStorage } = vi.hoisted(() => ({
   asyncStorage: new Map<string, string>(),
@@ -184,6 +185,7 @@ vi.mock("@/hooks/use-agent-form-state", () => ({
     modelError: null,
     refreshProviderModels: () => undefined,
     setProviderAndModelFromUser: () => undefined,
+    setProviderAndModelForRole: () => undefined,
     workingDirIsEmpty: false,
     persistFormPreferences: async () => undefined,
   }),
@@ -264,6 +266,115 @@ describe("useAgentInputDraft live contract", () => {
       applyModeId: "bypassPermissions",
       clearRememberedMode: true,
     });
+  });
+
+  it("shows and clears external access grants with the derived assignment boundary", async () => {
+    let latest: ReturnType<typeof useAgentInputDraft> | null = null;
+
+    function getComposerState() {
+      const composerState = latest?.composerState;
+      if (!composerState) {
+        throw new Error("Expected composer state");
+      }
+      return composerState;
+    }
+
+    function Probe() {
+      latest = useAgentInputDraft({
+        draftKey: "draft:external-access",
+        composer: {
+          initialServerId: "host-1",
+          initialValues: { workingDir: "/repo" },
+          isVisible: true,
+          onlineServerIds: ["host-1"],
+          lockedWorkingDir: "/repo",
+          beadsIssueOptions: [{ id: "ps123-abc", label: "ps123-abc — Fix tracker" }],
+        },
+      });
+      return null;
+    }
+
+    const queryClient = new QueryClient();
+    const container = document.getElementById("root");
+    if (!container) {
+      throw new Error("Missing root container");
+    }
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Probe />
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => getComposerState().setRoleFromUser("lead"));
+    expect(getComposerState().agentControls.draftTextFeatures).toEqual([
+      expect.objectContaining({ id: "foundation_external_effects_grant" }),
+    ]);
+
+    // Doctrine's authority model defaults a Peer to "mutating", which permits a
+    // bounded external boundary, so the grant field is offered immediately. Forcing
+    // the Peer to read-only denies external effects and hides the field.
+    await act(async () => getComposerState().setRoleFromUser("peer"));
+    expect(getComposerState().agentControls.draftTextFeatures).toEqual([
+      expect.objectContaining({ id: "foundation_external_effects_grant" }),
+    ]);
+    await act(async () =>
+      getComposerState().agentControls.onSetFeature?.("foundation_assignment_effect", "read-only"),
+    );
+    expect(getComposerState().agentControls.draftTextFeatures).toBeUndefined();
+    await act(async () => {
+      getComposerState().agentControls.onSetFeature?.("foundation_beads_issue_grant", "ps123-abc");
+      getComposerState().agentControls.onSetFeature?.("foundation_assignment_effect", "mutating");
+    });
+    expect(getComposerState().agentControls.draftTextFeatures).toEqual([
+      expect.objectContaining({
+        type: "text",
+        label: "External access",
+        description:
+          "Outside-workspace resources this assignment may touch (DB, API, service). One per line.",
+      }),
+    ]);
+
+    await act(async () => {
+      getComposerState().agentControls.onSetFeature?.(
+        "foundation_external_effects_grant",
+        " read/write dev Postgres \n\n staging API\nread/write dev Postgres ",
+      );
+    });
+    expect(getComposerState().selectedExternalEffects).toEqual([
+      "read/write dev Postgres",
+      "staging API",
+    ]);
+    expect(
+      buildAssignmentEnvelope({
+        roleId: "peer",
+        effectClass: "mutating",
+        objective: "Fix tracker",
+        cwd: "/repo",
+        beadsIssueIds: getComposerState().selectedBeadsIssueIds,
+        externalEffects: getComposerState().selectedExternalEffects,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        externalEffectBoundary: {
+          mode: "bounded",
+          scope:
+            "Beads Central issue/work graph for this assignment only; plus Human-leased external access: read/write dev Postgres; staging API",
+        },
+        resourceGrants: {
+          beadsIssueIds: ["ps123-abc"],
+          externalEffects: ["read/write dev Postgres", "staging API"],
+        },
+      }),
+    );
+
+    await act(async () => getComposerState().setRoleFromUser("supervisor"));
+    expect(getComposerState().agentControls.draftTextFeatures).toBeUndefined();
+    expect(getComposerState().selectedExternalEffects).toEqual([]);
+
+    await act(async () => root.unmount());
   });
 
   it("hydrates persisted text and attachments and returns draft-mode composer state for a caller-provided key", async () => {

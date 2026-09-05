@@ -20,6 +20,7 @@ export interface WorkspaceDraftRoleContext {
   roleId: PaseoRoleId | null;
   assignmentEffect: AssignmentEffectClass;
   beadsIssueIds: readonly string[];
+  externalEffects: readonly string[];
 }
 
 export function resolveWorkspaceDraftRoleContext(input: {

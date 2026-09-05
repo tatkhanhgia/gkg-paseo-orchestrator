@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { UserComposerAttachment } from "@/attachments/types";
 import type { TextReplacement } from "@/composer/types";
-import type { DraftAgentControlsProps } from "@/composer/agent-controls";
+import type { DraftAgentControlsProps, DraftAgentTextFeature } from "@/composer/agent-controls";
 import type { DraftCommandConfig } from "@/hooks/use-agent-commands-query";
 import {
   useAgentFormState,
@@ -30,6 +30,7 @@ import {
   type PaseoRoleId,
 } from "@getpaseo/protocol/role-binding";
 import {
+  assignmentExternalEffectBoundaryFor,
   isAssignmentEffectAllowedForRole,
   type AssignmentEffectClass,
 } from "@getpaseo/protocol/assignment-contract";
@@ -49,6 +50,7 @@ import { resolveRoleOptions } from "@/workspace-protocol/legacy-role-options";
 
 const ASSIGNMENT_EFFECT_FEATURE_ID = "foundation_assignment_effect";
 const BEADS_ISSUE_GRANT_FEATURE_ID = "foundation_beads_issue_grant";
+const EXTERNAL_EFFECTS_GRANT_FEATURE_ID = "foundation_external_effects_grant";
 
 export function resolveRolePinnedModeTransition(input: {
   selectedMode: string;
@@ -147,6 +149,7 @@ type DraftComposerState = UseAgentFormStateResult & {
   setRoleFromUser: (roleId: PaseoRoleId) => void;
   selectedAssignmentEffect: AssignmentEffectClass;
   selectedBeadsIssueIds: string[];
+  selectedExternalEffects: string[];
 };
 
 export interface AgentInputDraft {
@@ -208,6 +211,49 @@ function useBeadsIssueGrantControl(
   };
 }
 
+function parseExternalEffects(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split("\n")
+        .map((grant) => grant.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function useExternalEffectsGrantControl(
+  selectedRole: PaseoRoleId | null,
+  selectedAssignmentEffect: AssignmentEffectClass,
+) {
+  const [value, setValue] = useState("");
+  const isAvailable = selectedRole
+    ? assignmentExternalEffectBoundaryFor(selectedRole, selectedAssignmentEffect).mode === "bounded"
+    : false;
+  const feature = useMemo<DraftAgentTextFeature | null>(
+    () =>
+      isAvailable
+        ? {
+            type: "text",
+            id: EXTERNAL_EFFECTS_GRANT_FEATURE_ID,
+            label: "External access",
+            description:
+              "Outside-workspace resources this assignment may touch (DB, API, service). One per line.",
+            value,
+          }
+        : null,
+    [isAvailable, value],
+  );
+  const selectedExternalEffects = useMemo(() => parseExternalEffects(value), [value]);
+
+  const setFromFeatureValue = useCallback((nextValue: unknown) => {
+    setValue(typeof nextValue === "string" ? nextValue : "");
+  }, []);
+  const clear = useCallback(() => setValue(""), []);
+
+  return { feature, selectedExternalEffects, setFromFeatureValue, clear };
+}
+
 export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDraft {
   const { t } = useTranslation();
   const composerOptions = input.composer ?? null;
@@ -243,6 +289,10 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     selectedRole,
     composerOptions?.beadsIssueOptions,
     initialRoleState.beadsIssueIds,
+  );
+  const externalEffectsGrant = useExternalEffectsGrantControl(
+    selectedRole,
+    selectedAssignmentEffect,
   );
   const text = draft?.text ?? "";
   const attachments = draft?.attachments ?? [];
@@ -520,11 +570,20 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   const setRoleAndNormalizeEffect = useCallback(
     (roleId: PaseoRoleId) => {
       setSelectedRole(roleId);
-      if (roleId !== selectedRole) {
-        setSelectedAssignmentEffect(defaultAssignmentEffectForRole(roleId));
+      const shouldResetEffect =
+        roleId !== selectedRole ||
+        !isAssignmentEffectAllowedForRole(roleId, selectedAssignmentEffect);
+      const nextEffect = shouldResetEffect
+        ? defaultAssignmentEffectForRole(roleId)
+        : selectedAssignmentEffect;
+      if (shouldResetEffect) {
+        setSelectedAssignmentEffect(nextEffect);
+      }
+      if (assignmentExternalEffectBoundaryFor(roleId, nextEffect).mode === "denied") {
+        externalEffectsGrant.clear();
       }
     },
-    [selectedRole],
+    [externalEffectsGrant, selectedAssignmentEffect, selectedRole],
   );
   const setAgentControlFeature = useCallback(
     (featureId: string, value: unknown) => {
@@ -540,6 +599,9 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
           isAssignmentEffectAllowedForRole(selectedRole, selected.id)
         ) {
           setSelectedAssignmentEffect(selected.id);
+          if (assignmentExternalEffectBoundaryFor(selectedRole, selected.id).mode === "denied") {
+            externalEffectsGrant.clear();
+          }
         }
         return;
       }
@@ -547,9 +609,13 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
         beadsIssueGrant.setFromFeatureValue(value);
         return;
       }
+      if (featureId === EXTERNAL_EFFECTS_GRANT_FEATURE_ID) {
+        externalEffectsGrant.setFromFeatureValue(value);
+        return;
+      }
       setDraftFeatureValue(featureId, value);
     },
-    [beadsIssueGrant, selectedRole, setDraftFeatureValue],
+    [beadsIssueGrant, externalEffectsGrant, selectedRole, setDraftFeatureValue],
   );
 
   const applyDraftAgentProfile = useCallback(
@@ -666,28 +732,35 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
       effectiveModelId,
       effectiveThinkingOptionId,
       featureValues: draftFeatureValues,
-      agentControls: buildDraftAgentControls({
-        formState: effectiveFormState,
-        roleOptions: roleSelectionAvailable ? roleOptions : [],
-        selectedRole: roleSelectionAvailable ? selectedRole : null,
-        onSelectRole: setRoleAndNormalizeEffect,
-        modeLockReason: pinnedSelection?.lockReason,
-        features:
-          roleSelectionAvailable && (assignmentEffectFeature || beadsIssueGrant.feature)
-            ? [
-                ...(draftFeatures ?? []),
-                ...(assignmentEffectFeature ? [assignmentEffectFeature] : []),
-                ...(beadsIssueGrant.feature ? [beadsIssueGrant.feature] : []),
-              ]
-            : draftFeatures,
-        onSetFeature: setAgentControlFeature,
-        onApplyAgentProfile: applyDraftAgentProfile,
-      }),
+      agentControls: {
+        ...buildDraftAgentControls({
+          formState: effectiveFormState,
+          roleOptions: roleSelectionAvailable ? roleOptions : [],
+          selectedRole: roleSelectionAvailable ? selectedRole : null,
+          onSelectRole: setRoleAndNormalizeEffect,
+          modeLockReason: pinnedSelection?.lockReason,
+          features:
+            roleSelectionAvailable && (assignmentEffectFeature || beadsIssueGrant.feature)
+              ? [
+                  ...(draftFeatures ?? []),
+                  ...(assignmentEffectFeature ? [assignmentEffectFeature] : []),
+                  ...(beadsIssueGrant.feature ? [beadsIssueGrant.feature] : []),
+                ]
+              : draftFeatures,
+          onSetFeature: setAgentControlFeature,
+          onApplyAgentProfile: applyDraftAgentProfile,
+        }),
+        draftTextFeatures:
+          roleSelectionAvailable && externalEffectsGrant.feature
+            ? [externalEffectsGrant.feature]
+            : undefined,
+      },
       commandDraftConfig,
       selectedRole: roleSelectionAvailable ? selectedRole : null,
       setRoleFromUser: setRoleAndNormalizeEffect,
       selectedAssignmentEffect,
       selectedBeadsIssueIds: beadsIssueGrant.selectedIssueIds,
+      selectedExternalEffects: externalEffectsGrant.selectedExternalEffects,
     };
   }, [
     commandDraftConfig,
@@ -697,6 +770,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     draftFeatures,
     assignmentEffectFeature,
     beadsIssueGrant,
+    externalEffectsGrant,
     draftFeatureValues,
     applyDraftAgentProfile,
     formState,

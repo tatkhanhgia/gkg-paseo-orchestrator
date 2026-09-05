@@ -222,7 +222,7 @@ Target flow dưới đây **chưa ship đầy đủ**:
 1. tạo/chọn workspace;
 2. chọn role;
 3. dùng assignment effect mặc định theo role (`Lead -> mutating`, `Peer|Supervisor -> read-only`),
-   vẫn cho chọn các effect khác được role cho phép và hiển thị authority summary/protocol requirement;
+   vẫn cho chọn các effect khác được role cho phép và hiển thị authority summary/protocol requirement; khi external-effect boundary là `bounded`, nhập mỗi external access grant trên một dòng và Lead chỉ được truyền xuống các grant mà assignment của Lead đang giữ;
 4. chọn một provider tương thích;
 5. chọn model/mode và preview binding receipt;
 6. nhập assignment rồi spawn.

@@ -13,6 +13,7 @@ export interface WorkspaceDraftTabSetup {
   roleId?: PaseoRoleId | null;
   assignmentEffect?: AssignmentEffectClass;
   beadsIssueIds?: string[];
+  externalEffects?: string[];
 }
 
 export interface WorkspaceWorkingDiffTabTarget {

@@ -82,17 +82,20 @@ describe("workspace draft role handoff", () => {
           roleId: "lead",
           assignmentEffect: "delegation",
           beadsIssueIds: ["issue-123"],
+          externalEffects: ["staging API"],
         },
         composerContext: {
           roleId: null,
           assignmentEffect: "read-only",
           beadsIssueIds: [],
+          externalEffects: [],
         },
       }),
     ).toEqual({
       roleId: "lead",
       assignmentEffect: "delegation",
       beadsIssueIds: ["issue-123"],
+      externalEffects: ["staging API"],
     });
   });
 
@@ -104,12 +107,14 @@ describe("workspace draft role handoff", () => {
           roleId: "peer",
           assignmentEffect: "mutating",
           beadsIssueIds: ["issue-456"],
+          externalEffects: ["dev database"],
         },
       }),
     ).toEqual({
       roleId: "peer",
       assignmentEffect: "mutating",
       beadsIssueIds: ["issue-456"],
+      externalEffects: ["dev database"],
     });
   });
 });

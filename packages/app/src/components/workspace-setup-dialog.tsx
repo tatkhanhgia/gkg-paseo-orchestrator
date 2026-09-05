@@ -134,6 +134,7 @@ function buildCreateAgentOptions({
     selectedRole?: import("@getpaseo/protocol/role-binding").PaseoRoleId | null;
     selectedAssignmentEffect: import("@getpaseo/protocol/assignment-contract").AssignmentEffectClass;
     selectedBeadsIssueIds: string[];
+    selectedExternalEffects: string[];
     modeOptions: { id: string }[];
     selectedMode: string;
     effectiveModelId: string | null;
@@ -168,6 +169,7 @@ function buildCreateAgentOptions({
             objective: text,
             cwd: workspaceDirectory,
             beadsIssueIds: composerState.selectedBeadsIssueIds,
+            externalEffects: composerState.selectedExternalEffects,
           }),
         }
       : {}),

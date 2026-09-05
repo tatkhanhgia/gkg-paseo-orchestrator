@@ -79,6 +79,35 @@ describe("assignment envelope", () => {
     ).toEqual({ mode: "denied" });
   });
 
+  test("normalizes external access grants and derives their bounded scope", () => {
+    expect(
+      buildAssignmentEnvelope({
+        roleId: "lead",
+        effectClass: "mutating",
+        objective: "Update staging data",
+        cwd: "/repo",
+        externalEffects: [" staging API ", "", "dev database", "staging API"],
+      }),
+    ).toMatchObject({
+      externalEffectBoundary: {
+        mode: "bounded",
+        scope:
+          "Beads Central issue/work graph for this assignment only; plus Human-leased external access: staging API; dev database",
+      },
+      resourceGrants: { externalEffects: ["staging API", "dev database"] },
+    });
+
+    expect(() =>
+      buildAssignmentEnvelope({
+        roleId: "lead",
+        effectClass: "read-only",
+        objective: "Inspect only",
+        cwd: "/repo",
+        externalEffects: ["staging API"],
+      }),
+    ).toThrow("assignment_contract_required: external access requires a bounded boundary");
+  });
+
   test("rejects a role launch without an objective", () => {
     expect(() =>
       buildAssignmentEnvelope({
