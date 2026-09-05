@@ -221,8 +221,8 @@ Target flow dưới đây **chưa ship đầy đủ**:
 
 1. tạo/chọn workspace;
 2. chọn role;
-3. chọn explicit assignment effect (`read-only|mutating|delegation|bootstrap|recovery`) và hiển thị
-   authority summary/protocol requirement;
+3. dùng assignment effect mặc định theo role (`Lead -> mutating`, `Peer|Supervisor -> read-only`),
+   vẫn cho chọn các effect khác được role cho phép và hiển thị authority summary/protocol requirement;
 4. chọn một provider tương thích;
 5. chọn model/mode và preview binding receipt;
 6. nhập assignment rồi spawn.

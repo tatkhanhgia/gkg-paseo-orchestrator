@@ -14,7 +14,7 @@ import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { COMPOSER_PILL_CLEARANCE } from "@/composer/pill-styles";
 import { AgentStreamView } from "@/agent-stream/view";
 import { composerWorkspaceAttachment } from "@/composer/attachments/workspace";
-import { useAgentInputDraft } from "@/composer/draft/input-draft";
+import { defaultAssignmentEffectForRole, useAgentInputDraft } from "@/composer/draft/input-draft";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
 import { useDraftAgentCreateFlow, type DraftCreateAttempt } from "@/composer/draft/create-flow";
 import { resolveTurnPresentation, TURN_LIVENESS_IDLE } from "@/timeline/turn-liveness";
@@ -108,7 +108,7 @@ function resolveAutoSubmitConfig(
     thinkingOptionId: pending.thinkingOptionId ?? null,
     featureValues: pending.featureValues ?? {},
     roleId: pending.roleId ?? null,
-    assignmentEffect: pending.assignmentEffect ?? "read-only",
+    assignmentEffect: pending.assignmentEffect ?? defaultAssignmentEffectForRole(pending.roleId),
     beadsIssueIds: pending.beadsIssueIds ?? [],
   };
 }
