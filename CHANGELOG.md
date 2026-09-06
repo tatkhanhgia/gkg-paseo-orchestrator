@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.7.0-paseo.57 - 2026-09-06
+
+Bản phát hành ứng viên cục bộ cho tranche G1–G5. Mục này chỉ mô tả source candidate; chưa khẳng định
+artifact đã cài đặt, daemon đang chạy, tuyến provider hoặc engineering acceptance.
+
+### Đã thêm
+
+- Các seam contribution/resolver policy nội bộ trusted cho generic host, gồm real non-SLP catalog path qua
+  cơ chế admission của `AgentManager`, native instruction/tool intersection, persisted state và event
+  delivery.
+- Entrypoint read-only `get_agent_checkpoint` qua production tool catalog với relationship/owner binding,
+  role ceiling, canonical Council receipt và exact target-bound Beads evidence.
+- Event subscription được khai báo, owner/run evidence được capture trước closure và policy teardown
+  được quiesce.
+
+### Đã sửa
+
+- Durable finish-notification watch kiểm tra lại assignment expiry thêm một lần tại shared provider-start
+  boundary sau load/mode preparation; expiry tại boundary này tạo explicit nonretry drop, phân biệt
+  terminal delivery với permission-only record, và biến observed-run persistence không đổi thành no-op
+  để state notification không đệ quy vô hạn.
+- Omission/default semantics của Council và compatibility của roles-only vẫn do policy sở hữu; partial
+  role input vẫn giữ parsing compatibility mà không hàm ý required-method completeness.
+- Semantic-friction matching của attention vẫn giữ live admission phía sau một quoted fixture trước đó,
+  gồm bounded English/Vietnamese corpus.
+
+### Tương thích
+
+- Policy owner hiện có tiếp tục được pin bằng generation digest; nếu historical generation không khả dụng
+  thì fail closed và SLP không bao giờ được thay cho trusted owner khác.
+- Closed agent snapshot tiếp tục giữ active-turn field ở `null`. Lifecycle loss attention yêu cầu
+  started-run evidence đã capture và không phân loại close/cancel thông thường là lost run.
+
+### Xác minh
+
+- Các regression focused hiện tại và static check được ghi trong
+  [handoff triển khai `.57`](docs/research/2026-09-06-maestro-slp-implementation-handoff.md).
+- Local release vẫn yêu cầu hai local commit sạch, artifact provenance, activation có idle gate,
+  daemon/WebUI/Beads readback, provider và role canary mới, cùng Foundation doctor. Các gate này vẫn
+  đang chờ đối với source candidate này.
+
 ## 0.7.0-paseo.56 - 2026-09-05
 
 Bản follow-up này sửa hai release qualification regression lộ ra khi chạy full CI trên promoted
