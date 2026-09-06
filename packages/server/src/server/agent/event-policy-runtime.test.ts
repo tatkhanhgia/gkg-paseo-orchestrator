@@ -42,6 +42,14 @@ function harness() {
 
 async function ignoreEvent(): Promise<void> {}
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("event policy runtime", () => {
   test("loads only enabled policies and tears down the generic subscription", () => {
     const runtimeHarness = harness();
@@ -119,5 +127,45 @@ describe("event policy runtime", () => {
     runtimeHarness.emit({ ...event("turn-legacy"), agentId: "legacy-1" });
     await vi.waitFor(() => expect(handled).toEqual(["slp@current-digest"]));
     runtime.stop();
+  });
+
+  test("quiesces a held lane and suppresses queued work after stop", async () => {
+    const runtimeHarness = harness();
+    const firstStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    let handled = 0;
+    let disposed = false;
+    const policy: AgentEventPolicy = {
+      id: "held.policy",
+      version: "1",
+      enabled: () => true,
+      createProcessor: () => ({
+        async handleEvent() {
+          handled += 1;
+          if (handled === 1) {
+            firstStarted.resolve();
+            await releaseFirst.promise;
+          }
+        },
+        dispose() {
+          disposed = true;
+        },
+      }),
+    };
+    const runtime = startEventPolicyRuntime({
+      dependencies: runtimeHarness.dependencies,
+      policies: [policy],
+    });
+
+    runtimeHarness.emit(event("turn-held"));
+    await firstStarted.promise;
+    runtimeHarness.emit(event("turn-queued"));
+    const stopping = runtime.stop();
+    expect(runtimeHarness.subscribed()).toBe(false);
+    releaseFirst.resolve();
+    await stopping;
+
+    expect(handled).toBe(1);
+    expect(disposed).toBe(true);
   });
 });

@@ -1830,6 +1830,13 @@ export class Session {
           return;
         }
 
+        // Only agent_stream carries `.event`. Internal lifecycle receipts such
+        // as agent_closure are consumed by the policy/runtime boundary and
+        // must not fall through into stream or voice forwarding.
+        if (event.type !== "agent_stream") {
+          return;
+        }
+
         if (
           this.voiceSession.isActiveForAgent(event.agentId) &&
           event.event.type === "permission_requested" &&

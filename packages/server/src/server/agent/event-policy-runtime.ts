@@ -39,13 +39,19 @@ export interface ResolvedAgentEventPolicy extends AgentEventPolicyDispatchContex
 export interface AgentEventPolicy {
   id: string;
   version: string;
+  /**
+   * Event kinds this policy is allowed to receive from the shared host. Existing policies keep
+   * the historical stream-only default; lifecycle-aware policies must opt in explicitly.
+   */
+  subscriptions?: readonly AgentManagerEvent["type"][];
   enabled(environment: NodeJS.ProcessEnv): boolean;
   createProcessor(dependencies: EventPolicyRuntimeDependencies): AgentEventPolicyProcessor;
 }
 
 export interface EventPolicyRuntime {
   enabledPolicies: Array<{ id: string; version: string }>;
-  stop(): void;
+  /** Stop intake and resolve only after already-running policy lanes quiesce. */
+  stop(): Promise<void>;
 }
 
 /**
@@ -55,7 +61,10 @@ export interface EventPolicyRuntime {
 export function startEventPolicyRuntime(input: {
   dependencies: EventPolicyRuntimeDependencies;
   policies?: readonly AgentEventPolicy[];
-  resolvePolicies?: (agentId: string) => readonly ResolvedAgentEventPolicy[];
+  resolvePolicies?: (
+    agentId: string,
+    event: AgentManagerEvent,
+  ) => readonly ResolvedAgentEventPolicy[];
   advertisedPolicies?: readonly AgentEventPolicy[];
   environment?: NodeJS.ProcessEnv;
 }): EventPolicyRuntime {
@@ -75,22 +84,26 @@ export function startEventPolicyRuntime(input: {
     });
   }
   const queues = new Map<string, Promise<void>>();
+  let stopped = false;
+  let stopPromise: Promise<void> | null = null;
 
   const unsubscribe = input.dependencies.agentManager.subscribe(
     (event) => {
-      if (event.type !== "agent_stream") return;
+      if (stopped) return;
+      const agentId = agentIdForEvent(event);
       let resolved: readonly ResolvedAgentEventPolicy[];
       try {
-        resolved = input.resolvePolicies?.(event.agentId) ?? staticPolicies;
+        resolved = input.resolvePolicies?.(agentId, event) ?? staticPolicies;
       } catch (error) {
         input.dependencies.logger.warn(
-          { err: error, agentId: event.agentId },
+          { err: error, agentId },
           "Agent event policy owner could not be resolved",
         );
         return;
       }
       for (const { policy, stateNamespace } of resolved) {
         if (!policy.enabled(environment)) continue;
+        if (!(policy.subscriptions ?? ["agent_stream"]).includes(event.type)) continue;
         const processorKey = `${stateNamespace}:${policy.id}:${policy.version}`;
         let entry = processors.get(processorKey);
         if (!entry) {
@@ -98,13 +111,18 @@ export function startEventPolicyRuntime(input: {
           processors.set(processorKey, entry);
         }
         const processor = entry.processor;
-        const queueKey = `${processorKey}:${event.agentId}`;
+        const queueKey = `${processorKey}:${agentId}`;
         const previous = queues.get(queueKey) ?? Promise.resolve();
         const current = previous
-          .then(() => processor.handleEvent(event, { stateNamespace }))
+          .then(async () => {
+            // A stop can happen while this event is waiting behind another lane item. The
+            // stopped-generation guard prevents queued work from starting after teardown.
+            if (stopped) return undefined;
+            return processor.handleEvent(event, { stateNamespace });
+          })
           .catch((error) => {
             input.dependencies.logger.warn(
-              { err: error, agentId: event.agentId, policyId: policy.id },
+              { err: error, agentId, policyId: policy.id },
               "Agent event policy failed to process an event",
             );
           })
@@ -122,9 +140,26 @@ export function startEventPolicyRuntime(input: {
       .filter((policy) => policy.enabled(environment))
       .map((policy) => ({ id: policy.id, version: policy.version })),
     stop() {
+      if (stopPromise) return stopPromise;
+      stopped = true;
       unsubscribe();
-      queues.clear();
-      for (const { processor } of processors.values()) processor.dispose?.();
+      const inFlight = [...queues.values()];
+      stopPromise = Promise.allSettled(inFlight).then(() => {
+        queues.clear();
+        for (const { processor } of processors.values()) processor.dispose?.();
+        return undefined;
+      });
+      return stopPromise;
     },
   };
+}
+
+function agentIdForEvent(event: AgentManagerEvent): string {
+  if (event.type === "agent_state") return event.agent.id;
+  if (event.type === "provider_subagent") {
+    return event.event.type === "upsert"
+      ? event.event.subagent.parentAgentId
+      : event.event.parentAgentId;
+  }
+  return event.agentId;
 }

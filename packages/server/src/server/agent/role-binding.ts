@@ -437,10 +437,9 @@ function assertAdmissionTimestampCurrent(
   }
 }
 
-/** Revalidate drift-prone authority receipts before every role-bound create or resume. */
-export function assertPersistedRoleAdmissionCurrent(
-  binding: PersistedRoleBinding,
-  cwd: string,
+/** Revalidate only the persisted assignment timestamps at a late dispatch boundary. */
+export function assertPersistedAssignmentCurrent(
+  binding: Pick<PersistedRoleBinding, "assignment">,
   now = new Date(),
 ): void {
   assertAdmissionTimestampCurrent(binding.assignment?.expiresAt, now, "expiresAt");
@@ -449,6 +448,15 @@ export function assertPersistedRoleAdmissionCurrent(
     now,
     "protocolExceptionExpiresAt",
   );
+}
+
+/** Revalidate drift-prone authority receipts before every role-bound create or resume. */
+export function assertPersistedRoleAdmissionCurrent(
+  binding: PersistedRoleBinding,
+  cwd: string,
+  now = new Date(),
+): void {
+  assertPersistedAssignmentCurrent(binding, now);
 
   const current = inspectWorkspaceProtocol(cwd);
   if (binding.workspaceProtocol.path !== current.path) {

@@ -43,18 +43,39 @@ Implementation branch: `codex/slp-bundled-policy-plugin`.
 | WebUI receipts                       | `workspace-protocol/role-binding-receipt.ts` hiển thị exact owner/digest; settings profile card                                                                                                                         | Generic UI + một số SLP wording                                                                  | Generic receipt UI; plugin-fed catalog                                                                                                                                          | 2, 5    | Policy owner projection và dynamic catalog                                                       | Medium: source-green nhưng shipped WebUI stale                                                                       | app unit tests và required browser journey sau install                                                                          |
 | Legacy core materializer/imports     | `agent/legacy-role-binding.ts`, frozen operational compatibility policy và bốn re-export modules dưới `agent/`                                                                                                          | Compatibility layer; không resolve active plugin cho legacy owner                                | Xóa sau migration window                                                                                                                                                        | 4       | Không thêm hook                                                                                  | Medium: production caller quay lại legacy sẽ tạo dual behavior                                                       | literal caller inventory; test production create luôn ghi plugin owner; plugin reload không đổi legacy owner                    |
 
-## Kết luận kiến trúc sau tranche hiện tại
+## Kết luận kiến trúc của baseline và correction wave `.57`
 
-Đường create mới đã có một policy owner duy nhất và materialize qua bundled `slp`; kernel không giả lập root instruction bằng user prompt và không xóa native provider adapters. Exact role instructions, assignment, profile và tool ceiling được persist trước launch; resume dùng lại receipt đó.
+Đường create mới dùng một trusted policy contribution để materialize policy owner; generic kernel không
+chọn SLP bằng host default, không giả lập root instruction bằng user prompt và không xóa native provider
+adapters. Exact role instructions, assignment, profile và tool ceiling được persist trước launch; resume
+dùng lại receipt đó. Một non-SLP trusted fixture đã đi qua real AgentManager/catalog boundary để kiểm tra
+admission, native launch context, tool intersection, state và event delivery.
 
-Council, Lead handoff/coordination, execution-profile resolution và role descriptors hiện được resolve qua contribution của generation đã pin. Static role options chỉ còn trong compatibility lane cho daemon cũ không có feature `roleProfiles`; daemon mới có feature nhưng plugin missing/invalid sẽ fail closed. Những phần provider transport, persistence, Workspace Protocol file validation, Beads ACL, Room identity, lifecycle receipt validation và no-write enforcement vẫn ở kernel vì đó là technical mechanism.
+Council, Lead handoff/coordination, execution-profile resolution, checkpoint semantics và role
+descriptors được resolve qua contribution của generation đã pin. Static role options chỉ còn trong
+compatibility lane cho daemon cũ không có feature `roleProfiles`; daemon mới có plugin missing/invalid
+thì fail closed. Những phần provider transport, persistence, Workspace Protocol file validation, Beads
+ACL, Room identity, lifecycle receipt validation và no-write enforcement vẫn ở kernel vì đó là technical
+mechanism.
 
 Tranche `.46` chuyển automatic attention sang đúng một live bundled-policy path. Kernel không còn chứa
 active SLP classifier/routing/threshold; nó chỉ host generic event policies và durable versioned state.
 Bundled SLP mặc định bật, có emergency disable `PASEO_DISABLE_SLP_ATTENTION_POLICY=1`. `.46` re-arm theo
 episode/fingerprint và fail closed khi target không unique. Supervisor question dùng bounded surface riêng
 với structural observation/question/evidence; broader signal/handoff surface không được mở mặc định cho
-Supervisor hoặc Peer.
+Supervisor hoặc Peer. Correction wave `.57` yêu cầu policy khai báo event subscriptions, và closure
+policy nhận captured owner/run evidence trước deletion thay vì suy lost-run từ closed snapshot.
+
+`.57` cũng bổ sung production `get_agent_checkpoint` qua catalog/bootstrap path. Adapter này giữ
+assignment/resource-grant/Beads ACL, current `beads_status` prerequisite, canonical Council receipt và
+UNKNOWN khi target, disposition hoặc dependency evidence không đủ. Nó không tạo acceptance authority,
+taskgraph, idle-done hay restart action.
+
+Current `.57` source/test evidence và các giới hạn activation được ghi trong
+[implementation handoff](research/2026-09-06-maestro-slp-implementation-handoff.md). Xia report vẫn ở
+read-only Foundation checkout tại
+`/Users/iznogoud/Desktop/Projects-AI/Paseo/paseo-foundation/docs/research/2026-09-06-maestro-slp-adoption-xia-deep.md`,
+cùng probes `2026-09-06-maestro-slp-probes.mjs` và `.json`; Product không copy hoặc sửa các file đó.
 
 **Cập nhật F-04 (Phase 2A):** frozen SLP v1.0 generation `569c7f…483f0` (`.45`) từng được registry dựng lại
 song song `.46`, giữ bằng một untagged, dateless `COMPAT` module. Đây chính là anti-pattern mà audit này

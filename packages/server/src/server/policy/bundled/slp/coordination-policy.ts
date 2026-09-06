@@ -93,9 +93,14 @@ function containsClauseSeparatorOrExtraSentence(value: string): boolean {
 }
 const MODAL_OR_REQUEST_PREFIX =
   /^(?:(?:can|could|would|will|should|may|might|do|does|did|please|kindly)\b|is\s+it\s+possible\b)/iu;
-const MODAL_LANGUAGE = /\b(?:can|could|would|will|should|may|might|must|shall)\b/iu;
 const SECOND_PERSON_REQUEST_LANGUAGE =
   /\b(?:for\s+you\s+to|you\s+(?:must|shall|should|need\s+to|have\s+to|will|are\s+to)|prevents?\s+you\s+from|requires?\s+you\s+to|asks?\s+you\s+to)\b/iu;
+// A modal immediately adjacent to "you" ("what would you do", "could you also...") is directed
+// at the recipient regardless of sentence position, unlike a bare modal elsewhere in the clause
+// (e.g. "what assumption would invalidate..."), which stays a third-person analytical question.
+// This is narrower than a blanket modal-word check: it requires the "you" adjacency that is the
+// actual signal of a directed request, so it does not reintroduce a bare-modal false positive.
+const MODAL_YOU_REQUEST = /\b(?:can|could|would|will|should|may|might|must|shall)\s+you\b/iu;
 const AUTHORITY_MODAL_LANGUAGE = /\b(?:must|shall|should|need(?:s)?\s+to|have\s+to|has\s+to)\b/iu;
 const OBSERVATION_IMPERATIVE_PREFIX =
   /^(?:delete|remove|merge|squash|land|ship|apply|run|execute|assign|take|transfer|handoff|hand\s+off|detach|write|edit|commit|push|release|deploy|restart|stop|start|approve|accept|reject|decide|recover|override|escalate|close)\b/iu;
@@ -131,11 +136,44 @@ const VI_ACTION_OR_EFFECT_LANGUAGE = new RegExp(
   `${UWB_START}(?:${VI_ACTION_OR_EFFECT_TERMS.join("|")})${UWB_END}`,
   "iu",
 );
-const VI_MODAL_OR_REQUEST_TERMS = ["hãy", "vui lòng", "có thể", "nên", "phải", "cần"];
-const VI_MODAL_OR_REQUEST_LANGUAGE = new RegExp(
-  `${UWB_START}(?:${VI_MODAL_OR_REQUEST_TERMS.join("|")})${UWB_END}`,
+// "hãy"/"vui lòng" are imperative-forming particles ("please do X") and are a directive
+// regardless of who the sentence names, so they ban unconditionally. "có thể"/"nên"/"phải"/
+// "cần" are ordinary analytical modals ("could"/"should"/"must"/"need") that only become a
+// directed request when paired with an addressee pronoun in the same clause (mirrors the
+// English MODAL_YOU_REQUEST distinction above) — a third-person modal question with no
+// addressee, e.g. "Giả định nào có thể làm sai lệch kết luận hiện tại?", stays analytical.
+const VI_IMPERATIVE_REQUEST_TERMS = ["hãy", "vui lòng"];
+const VI_IMPERATIVE_REQUEST_LANGUAGE = new RegExp(
+  `${UWB_START}(?:${VI_IMPERATIVE_REQUEST_TERMS.join("|")})${UWB_END}`,
   "iu",
 );
+const VI_CONDITIONAL_MODAL_TERMS = ["có thể", "nên", "phải", "cần"];
+const VI_CONDITIONAL_MODAL_LANGUAGE = new RegExp(
+  `${UWB_START}(?:${VI_CONDITIONAL_MODAL_TERMS.join("|")})${UWB_END}`,
+  "iu",
+);
+const VI_ADDRESSEE_PRONOUN_TERMS = [
+  "bạn",
+  "các bạn",
+  "chúng ta",
+  "chúng tôi",
+  "tôi",
+  "mình",
+  "anh",
+  "chị",
+  "em",
+];
+const VI_ADDRESSEE_PRONOUN = new RegExp(
+  `${UWB_START}(?:${VI_ADDRESSEE_PRONOUN_TERMS.join("|")})${UWB_END}`,
+  "iu",
+);
+
+function matchesViModalOrRequestLanguage(value: string): boolean {
+  return (
+    VI_IMPERATIVE_REQUEST_LANGUAGE.test(value) ||
+    (VI_CONDITIONAL_MODAL_LANGUAGE.test(value) && VI_ADDRESSEE_PRONOUN.test(value))
+  );
+}
 
 function normalizeAttentionQuestionPart(value: string): string {
   return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
@@ -182,6 +220,7 @@ function assertAuthorityNeutralObservation(observation: string): void {
   if (
     containsClauseSeparatorOrExtraSentence(normalized) ||
     SECOND_PERSON_REQUEST_LANGUAGE.test(normalized) ||
+    MODAL_YOU_REQUEST.test(normalized) ||
     AUTHORITY_MODAL_LANGUAGE.test(normalized) ||
     MODAL_OR_REQUEST_PREFIX.test(normalized) ||
     OBSERVATION_IMPERATIVE_PREFIX.test(normalized) ||
@@ -189,7 +228,7 @@ function assertAuthorityNeutralObservation(observation: string): void {
     BOUNDED_AUTHORITY_OR_EFFECT_LANGUAGE.test(normalized) ||
     ROUTING_OR_HANDOFF_LANGUAGE.test(normalized) ||
     VI_ACTION_OR_EFFECT_LANGUAGE.test(normalized) ||
-    VI_MODAL_OR_REQUEST_LANGUAGE.test(normalized)
+    matchesViModalOrRequestLanguage(normalized)
   ) {
     throw new Error("attention_question observation must be authority-neutral factual prose");
   }
@@ -211,12 +250,12 @@ function assertAuthorityNeutralClarificationQuestion(question: string): void {
   }
   if (
     MODAL_OR_REQUEST_PREFIX.test(normalized) ||
-    MODAL_LANGUAGE.test(normalized) ||
     SECOND_PERSON_REQUEST_LANGUAGE.test(normalized) ||
+    MODAL_YOU_REQUEST.test(normalized) ||
     BOUNDED_AUTHORITY_OR_EFFECT_LANGUAGE.test(normalized) ||
     ROUTING_OR_HANDOFF_LANGUAGE.test(normalized) ||
     VI_ACTION_OR_EFFECT_LANGUAGE.test(normalized) ||
-    VI_MODAL_OR_REQUEST_LANGUAGE.test(normalized)
+    matchesViModalOrRequestLanguage(normalized)
   ) {
     throw new Error(
       "attention_question cannot request action, authority, verdict, or external effect",

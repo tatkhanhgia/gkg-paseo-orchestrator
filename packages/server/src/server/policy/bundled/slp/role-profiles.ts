@@ -18,6 +18,8 @@ import {
 import { getFoundationRoleDefinition } from "./role-definitions.js";
 import { loadFoundationSkillPolicy } from "./skill-policy.js";
 
+export const ROLE_PROFILE_POLICY_VERSION = "2";
+
 const READ_ONLY_BROWSER_TOOLS = [
   "browser_list_tabs",
   "browser_snapshot",
@@ -38,6 +40,7 @@ export const ROLE_TOOL_CEILINGS = {
     "transition_lead_handoff",
     "resolve_agent_signal",
     "get_agent_status",
+    "get_agent_checkpoint",
     "list_agents",
     "cancel_agent",
     "archive_agent",
@@ -65,6 +68,7 @@ export const ROLE_TOOL_CEILINGS = {
   peer: [
     "post_room",
     "resolve_agent_signal",
+    "get_agent_checkpoint",
     "beads_status",
     "beads_ready",
     "beads_list",
@@ -82,6 +86,7 @@ export const ROLE_TOOL_CEILINGS = {
     "create_agent",
     "send_agent_prompt",
     "get_agent_status",
+    "get_agent_checkpoint",
     "list_agents",
     "get_agent_activity",
     "read_room",

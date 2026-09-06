@@ -393,7 +393,7 @@ describe("Paseo room tools", () => {
       expect.objectContaining({
         room: "room-1",
         authorAgentId: "agent-caller",
-        body: expect.stringContaining("Sealed seats: scout, architect, reviewer"),
+        body: expect.stringContaining("Sealed seats: architect, reviewer"),
       }),
     ]);
     expect(councilCaseStore.created).toEqual([
@@ -402,7 +402,7 @@ describe("Paseo room tools", () => {
         workspaceId: "workspace-room",
         projectId: "project-room",
         parentAgentId: "agent-caller",
-        roles: ["scout", "architect", "reviewer"],
+        roles: ["architect", "reviewer"],
       }),
     ]);
     expect(result.structuredContent).toEqual(
@@ -411,18 +411,6 @@ describe("Paseo room tools", () => {
         phase: "sealed",
         room: expect.objectContaining({ id: "room-1" }),
         seats: [
-          expect.objectContaining({
-            role: "scout",
-            peerSubrole: "scout",
-            reportStartSentinel: "SCOUT_COUNCIL_REPORT_V1",
-            reportEndSentinel: "SCOUT_COUNCIL_REPORT_END",
-            labels: expect.objectContaining({
-              "council.room_id": "room-1",
-              "council.kickoff_message_id": "message-1",
-              "council.report_start_sentinel": "SCOUT_COUNCIL_REPORT_V1",
-              "council.report_end_sentinel": "SCOUT_COUNCIL_REPORT_END",
-            }),
-          }),
           expect.objectContaining({
             role: "architect",
             peerSubrole: "architect",

@@ -11,7 +11,7 @@ import {
 import {
   foundationExecutionProfileDefinitionDigest,
   getFoundationExecutionProfileDefinition,
-  type FoundationExecutionProfileId,
+  SLP_EXECUTION_PROFILE_POLICY,
 } from "./execution-profiles.js";
 import { getFoundationRoleDefinition } from "./role-definitions.js";
 import { materializeRoleProfileBindingReceipt } from "./role-profiles.js";
@@ -83,29 +83,34 @@ function composeInstructions(input: RoleBindingInstructionCompositionInput): str
     .join("\n\n");
 }
 
-export const SLP_ROLE_BINDING_POLICY: RoleBindingPolicyContribution<FoundationExecutionProfileId> =
-  {
-    getRoleDefinition: getFoundationRoleDefinition,
-    getExecutionProfile: getFoundationExecutionProfileDefinition,
-    executionProfileDefinitionDigest: foundationExecutionProfileDefinitionDigest,
-    materializeRoleProfile: (roleId, preferences, assignmentEffectClass) =>
-      materializeRoleProfileBindingReceipt(roleId, preferences, assignmentEffectClass),
-    workspaceProtocolReadership,
-    composeInstructions,
-    preflight(input) {
-      const envelope = preflightSlpAssignmentEnvelope({
-        roleId: input.roleId,
-        envelope: input.assignment,
-        createdAt: input.createdAt,
-      });
-      if (input.executionProfileId) {
-        const executionProfile = getFoundationExecutionProfileDefinition(input.executionProfileId);
-        if (executionProfile.authorityRoleId !== input.roleId) {
-          throw new Error(
-            `Execution profile '${executionProfile.id}' requires role '${executionProfile.authorityRoleId}'`,
-          );
-        }
+export const SLP_ROLE_BINDING_POLICY: RoleBindingPolicyContribution<string> = {
+  getRoleDefinition: getFoundationRoleDefinition,
+  getExecutionProfile: (profileId) =>
+    getFoundationExecutionProfileDefinition(SLP_EXECUTION_PROFILE_POLICY.parseId(profileId)),
+  executionProfileDefinitionDigest: (profile) =>
+    foundationExecutionProfileDefinitionDigest(
+      getFoundationExecutionProfileDefinition(SLP_EXECUTION_PROFILE_POLICY.parseId(profile.id)),
+    ),
+  materializeRoleProfile: (roleId, preferences, assignmentEffectClass) =>
+    materializeRoleProfileBindingReceipt(roleId, preferences, assignmentEffectClass),
+  workspaceProtocolReadership,
+  composeInstructions,
+  preflight(input) {
+    const envelope = preflightSlpAssignmentEnvelope({
+      roleId: input.roleId,
+      envelope: input.assignment,
+      createdAt: input.createdAt,
+    });
+    if (input.executionProfileId) {
+      const executionProfile = getFoundationExecutionProfileDefinition(
+        SLP_EXECUTION_PROFILE_POLICY.parseId(input.executionProfileId),
+      );
+      if (executionProfile.authorityRoleId !== input.roleId) {
+        throw new Error(
+          `Execution profile '${executionProfile.id}' requires role '${executionProfile.authorityRoleId}'`,
+        );
       }
-      return envelope;
-    },
-  };
+    }
+    return envelope;
+  },
+};

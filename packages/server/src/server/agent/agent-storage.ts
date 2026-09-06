@@ -60,6 +60,85 @@ const BEADS_STATUS_CHECKPOINT_SCHEMA = z
 
 export type BeadsStatusCheckpoint = z.infer<typeof BEADS_STATUS_CHECKPOINT_SCHEMA>;
 
+const FINISH_NOTIFICATION_REASON_SCHEMA = z.enum([
+  "finished",
+  "errored",
+  "needs permission",
+  "was closed",
+]);
+
+export type FinishNotificationReason = z.infer<typeof FINISH_NOTIFICATION_REASON_SCHEMA>;
+
+// A durable record of intent to notify `callerAgentId` about this agent's
+// run outcome, persisted BEFORE the run it watches is launched so a crash
+// between registration and the first observed event still leaves evidence
+// of the intent (reconciled by the resume-on-restart path).
+const FINISH_NOTIFICATION_WATCH_SCHEMA = z
+  .object({
+    watchId: z.string(),
+    callerAgentId: z.string(),
+    requireParentOwnership: z.boolean(),
+    // Compatibility launch identity for older persisted intent records. It is
+    // never used as a run receipt or as proof that a run started.
+    launchToken: z.string(),
+    observedRunId: z.string().nullable().optional(),
+    observedRunStartedAt: z.string().nullable().optional(),
+    registeredAt: z.string(),
+    status: z.enum(["active", "stopped"]),
+  })
+  .strict();
+
+export type FinishNotificationWatch = z.infer<typeof FINISH_NOTIFICATION_WATCH_SCHEMA>;
+
+// One entry per detected terminal/permission event awaiting (or having
+// completed) dispatch to `callerAgentId`. `deliveryId` is a content-addressed
+// dedupe key over (child, run, caller, reason[, permission request]) so two
+// independent watchers observing the same run's completion collapse into a
+// single delivery. `deliveredAt` records that the send was dispatched without
+// the transport throwing — it is NOT proof of provider execution, of the
+// recipient reading it, or of engineering acceptance of the finish.
+const FINISH_NOTIFICATION_PERMISSION_REQUEST_SCHEMA = z
+  .object({
+    id: z.string(),
+    provider: z.string(),
+    kind: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    input: z.unknown().nullable(),
+  })
+  .strict();
+
+const FINISH_NOTIFICATION_DELIVERY_SCHEMA = z
+  .object({
+    deliveryId: z.string(),
+    watchId: z.string(),
+    childAgentId: z.string(),
+    callerAgentId: z.string(),
+    runId: z.string(),
+    runStartedAt: z.string().nullable().optional(),
+    reason: FINISH_NOTIFICATION_REASON_SCHEMA,
+    requireParentOwnership: z.boolean(),
+    // Evidence captured AT DETECTION time, not re-read at dispatch time —
+    // by the time a safe boundary opens, the child's live state may have
+    // moved on (new turn, resolved permission).
+    childTitle: z.string().nullable(),
+    lastAssistantMessage: z.string().nullable(),
+    permissionRequest: FINISH_NOTIFICATION_PERMISSION_REQUEST_SCHEMA.nullable(),
+    detectedAt: z.string(),
+    deliveredAt: z.string().nullable(),
+    // A dispatch receipt is distinct from a dropped/revoked item. `deliveredAt`
+    // remains the historical field name for compatibility; new writes also
+    // populate `dispatchedAt` so the boundary is explicit.
+    dispatchedAt: z.string().nullable().optional(),
+    droppedAt: z.string().nullable().optional(),
+    dropReason: z.string().nullable().optional(),
+    attempts: z.number().int().nonnegative(),
+    lastError: z.string().nullable(),
+  })
+  .strict();
+
+export type FinishNotificationDelivery = z.infer<typeof FINISH_NOTIFICATION_DELIVERY_SCHEMA>;
+
 const STORED_AGENT_SCHEMA = z.object({
   id: z.string(),
   provider: z.string(),
@@ -99,6 +178,8 @@ const STORED_AGENT_SCHEMA = z.object({
   beadsStatusCheckpoint: BEADS_STATUS_CHECKPOINT_SCHEMA.optional(),
   coordinationSignals: z.array(CoordinationSignalSchema).optional(),
   leadHandoffs: z.array(LeadHandoffPacketSchema).optional(),
+  finishNotificationWatches: z.array(FINISH_NOTIFICATION_WATCH_SCHEMA).optional(),
+  finishNotificationDeliveries: z.array(FINISH_NOTIFICATION_DELIVERY_SCHEMA).optional(),
   eventPolicyStates: z
     .record(
       z.string(),
@@ -150,6 +231,12 @@ function preserveCoordinationMetadata(
   }
   if (existing?.leadHandoffs !== undefined) {
     record.leadHandoffs = existing.leadHandoffs;
+  }
+  if (existing?.finishNotificationWatches !== undefined) {
+    record.finishNotificationWatches = existing.finishNotificationWatches;
+  }
+  if (existing?.finishNotificationDeliveries !== undefined) {
+    record.finishNotificationDeliveries = existing.finishNotificationDeliveries;
   }
   if (existing?.eventPolicyStates !== undefined) {
     record.eventPolicyStates = existing.eventPolicyStates;

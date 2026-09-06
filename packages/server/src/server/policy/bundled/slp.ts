@@ -22,6 +22,7 @@ import {
 import {
   buildRoleProfileCatalog,
   ROLE_DEFAULT_TOOLS,
+  ROLE_PROFILE_POLICY_VERSION,
   ROLE_TOOL_CEILINGS,
 } from "./slp/role-profiles.js";
 import { buildFoundationSkillArtifactDescriptor } from "./slp/skill-policy.js";
@@ -35,19 +36,29 @@ import {
   SLP_COORDINATION_POLICY,
   SLP_COORDINATION_POLICY_VERSION,
 } from "./slp/coordination-policy.js";
+import { SLP_CHECKPOINT_POLICY, SLP_CHECKPOINT_POLICY_VERSION } from "./slp/checkpoint-policy.js";
 import {
   SLP_ATTENTION_EVENT_POLICY,
   SLP_ATTENTION_POLICY_VERSION,
 } from "./slp/attention-policy.js";
+import {
+  SLP_LIFECYCLE_ATTENTION_EVENT_POLICY,
+  SLP_LIFECYCLE_ATTENTION_POLICY_VERSION,
+} from "./slp/lifecycle-attention-policy.js";
+import { SLP_FINISH_NOTIFICATION_POLICY_VERSION } from "./slp/finish-notification-policy.js";
 import type { AgentEventPolicy } from "../../agent/event-policy-runtime.js";
+import type { TrustedPolicyContribution } from "../trusted-policy.js";
+import type { RoleBindingPolicyContribution } from "../role-binding-policy.js";
 
-export const SLP_BUNDLED_POLICY_VERSION = "1.2.0";
+export const SLP_BUNDLED_POLICY_VERSION = "1.4.0";
 
 type PluginPolicyOwner = Extract<PolicyOwner, { kind: "plugin" }>;
 
-export interface SlpBundledPolicyContribution {
+export interface SlpBundledPolicyContribution extends TrustedPolicyContribution {
+  roleBindingPolicy: RoleBindingPolicyContribution<string>;
   councilPolicy: typeof SLP_COUNCIL_POLICY;
   coordinationPolicy: typeof SLP_COORDINATION_POLICY;
+  checkpointPolicy: typeof SLP_CHECKPOINT_POLICY;
   eventPolicies: readonly AgentEventPolicy[];
   executionProfilePolicy: typeof SLP_EXECUTION_PROFILE_POLICY;
   buildRoleProfileCatalog(preferences: RoleProfilePreferencesMap): RoleProfileCatalog;
@@ -76,10 +87,14 @@ function canonicalSlpArtifactBytes(): string {
     ),
     roleToolCeilings: ROLE_TOOL_CEILINGS,
     roleDefaultTools: ROLE_DEFAULT_TOOLS,
+    roleProfilePolicyVersion: ROLE_PROFILE_POLICY_VERSION,
     executionProfilePolicyVersion: SLP_EXECUTION_PROFILE_POLICY_VERSION,
     councilPolicyVersion: SLP_COUNCIL_POLICY_VERSION,
     coordinationPolicyVersion: SLP_COORDINATION_POLICY_VERSION,
     attentionPolicyVersion: SLP_ATTENTION_POLICY_VERSION,
+    checkpointPolicyVersion: SLP_CHECKPOINT_POLICY_VERSION,
+    lifecycleAttentionPolicyVersion: SLP_LIFECYCLE_ATTENTION_POLICY_VERSION,
+    finishNotificationPolicyVersion: SLP_FINISH_NOTIFICATION_POLICY_VERSION,
     skills: buildFoundationSkillArtifactDescriptor(),
   });
 }
@@ -106,9 +121,11 @@ function registerDefaultSlpGeneration(
       },
       artifactBytes: canonicalSlpArtifactBytes(),
       contribution: {
+        roleBindingPolicy: SLP_ROLE_BINDING_POLICY,
         councilPolicy: SLP_COUNCIL_POLICY,
         coordinationPolicy: SLP_COORDINATION_POLICY,
-        eventPolicies: [SLP_ATTENTION_EVENT_POLICY],
+        checkpointPolicy: SLP_CHECKPOINT_POLICY,
+        eventPolicies: [SLP_ATTENTION_EVENT_POLICY, SLP_LIFECYCLE_ATTENTION_EVENT_POLICY],
         executionProfilePolicy: SLP_EXECUTION_PROFILE_POLICY,
         buildRoleProfileCatalog,
         workspaceProtocolReadership: (roleId) =>

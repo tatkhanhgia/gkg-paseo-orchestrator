@@ -66,6 +66,10 @@ describe("bundled SLP attention question authority", () => {
     "What made this approach different from the prior attempt?",
     "Mày có vừa làm sai contract nào tao đề ra không?",
     "Tại sao đoạn log này thiếu timestamp?",
+    "What assumption would invalidate the current conclusion?",
+    "Which failure mode could explain the observed divergence?",
+    "What evidence might contradict the stated premise?",
+    "Giả định nào có thể làm sai lệch kết luận hiện tại?",
   ])("allows an open, proposition-specific attention question: %s", (openQuestion) => {
     expect(() =>
       assertAttentionQuestionAuthority({ ...question, question: openQuestion }),
@@ -97,6 +101,8 @@ describe("bundled SLP attention question authority", () => {
     "Bạn có thể xem lại phần này không?",
     "Chúng ta nên làm gì tiếp theo?",
     "Bạn phải xử lý việc này ngay không?",
+    "Bạn nên làm gì tiếp theo?",
+    "What would you do to fix this now?",
   ])("rejects a command, verdict, ownership, handoff, or external-effect request: %s", (value) => {
     expect(() => assertAttentionQuestionAuthority({ ...question, question: value })).toThrow(
       "attention_question cannot request action, authority, verdict, or external effect",

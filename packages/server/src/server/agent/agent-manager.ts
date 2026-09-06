@@ -105,6 +105,7 @@ import type {
   AssignmentAssignerReceipt,
   AssignmentEnvelope,
 } from "@getpaseo/protocol/assignment-contract";
+import type { PolicyOwner } from "@getpaseo/protocol/policy-owner";
 import type { RoleProfilePreferences } from "@getpaseo/protocol/role-profile";
 import type {
   RoleProfileCatalog,
@@ -117,6 +118,7 @@ import {
 } from "./provider-subagents/store.js";
 import {
   applyRolePaseoToolPolicy,
+  assertPersistedAssignmentCurrent,
   assertPersistedRoleAdmissionCurrent,
   assertPersistedRoleBindingMatches,
   policyOwnerForRoleBinding,
@@ -134,6 +136,11 @@ import {
   createFailClosedSlpBundledPolicyRegistry,
   type SlpBundledPolicyContribution,
 } from "../policy/bundled/slp.js";
+import {
+  createTrustedPolicyPackResolver,
+  materializeTrustedRoleBinding,
+  type TrustedPolicyPackResolver,
+} from "../policy/trusted-policy.js";
 import { LEGACY_CORE_OPERATIONAL_POLICY } from "./legacy-role-binding.js";
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
@@ -246,6 +253,24 @@ export type AgentManagerEvent =
   | { type: "agent_state"; agent: ManagedAgent }
   | { type: "provider_subagent"; event: ProviderSubagentStoreEvent }
   | { type: "timeline_replacement"; agentId: string; epoch: string }
+  | {
+      /**
+       * Internal, pre-closure evidence. This event is emitted before the live agent is removed
+       * and before its tracked run is cleared. It is deliberately separate from the closed
+       * snapshot: ManagedAgentClosed must keep all active turn fields null.
+       */
+      type: "agent_closure";
+      agentId: string;
+      cause: "agent closed" | "agent reloaded";
+      lifecycleBeforeClose: Exclude<AgentLifecycleStatus, "closed">;
+      policyOwner?: PolicyOwner;
+      run: {
+        kind: "foreground" | "autonomous";
+        turnId: string | null;
+        startedAt: string | null;
+      } | null;
+      internal: boolean;
+    }
   | {
       type: "agent_stream";
       agentId: string;
@@ -413,6 +438,8 @@ export interface AgentManagerOptions {
   resolveRoleProfilePreferences?: (roleId: PaseoRoleId) => RoleProfilePreferences | undefined;
   verifyRoleResourceGrants?: RoleResourceGrantVerifier;
   bundledPolicyPacks?: BundledPolicyPackRegistry<SlpBundledPolicyContribution>;
+  /** Trusted internal policy selection; never populated from untrusted workflow input. */
+  trustedPolicyResolver?: TrustedPolicyPackResolver;
   appendSystemPrompt?: string;
   agentStreamCoalesceWindowMs?: number;
   durableTimelineCoalesceWindowMs?: number;
@@ -830,6 +857,14 @@ function resolveBundledPolicyPacks(
   return options.bundledPolicyPacks ?? createFailClosedSlpBundledPolicyRegistry();
 }
 
+function resolveTrustedPolicyResolver(
+  options: AgentManagerOptions,
+  bundledPolicyPacks: BundledPolicyPackRegistry<SlpBundledPolicyContribution>,
+): TrustedPolicyPackResolver {
+  if (options.trustedPolicyResolver) return options.trustedPolicyResolver;
+  return createTrustedPolicyPackResolver({ registry: bundledPolicyPacks });
+}
+
 export class AgentManager {
   private readonly clients = new Map<AgentProvider, AgentClient>();
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
@@ -874,6 +909,7 @@ export class AgentManager {
   ) => RoleProfilePreferences | undefined;
   private readonly verifyRoleResourceGrants?: RoleResourceGrantVerifier;
   private readonly bundledPolicyPacks: BundledPolicyPackRegistry<SlpBundledPolicyContribution>;
+  private readonly trustedPolicyResolver: TrustedPolicyPackResolver;
   private readonly trustedSembleRuntime: TrustedSembleRuntime | null;
   private appendSystemPrompt: string;
   private onAgentAttention?: AgentAttentionCallback;
@@ -900,6 +936,7 @@ export class AgentManager {
     this.resolveRoleProfilePreferences = options.resolveRoleProfilePreferences ?? (() => undefined);
     this.verifyRoleResourceGrants = options.verifyRoleResourceGrants;
     this.bundledPolicyPacks = resolveBundledPolicyPacks(options);
+    this.trustedPolicyResolver = resolveTrustedPolicyResolver(options, this.bundledPolicyPacks);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({
       module: "agent",
@@ -1407,6 +1444,10 @@ export class AgentManager {
     return this.timelineStore.getRows(id);
   }
 
+  private getTrustedPolicyResolver(): TrustedPolicyPackResolver {
+    return this.trustedPolicyResolver;
+  }
+
   fetchTimeline(id: string, options?: AgentTimelineFetchOptions): AgentTimelineFetchResult {
     this.requireAgent(id);
     return this.timelineStore.fetch(id, options);
@@ -1453,7 +1494,7 @@ export class AgentManager {
     systemPrompt?: string;
     cwd?: string;
   }): void {
-    const slpGeneration = this.bundledPolicyPacks.resolveActive("slp");
+    const generation = this.getTrustedPolicyResolver().resolveActiveRolePolicy();
     assertRoleSessionInput(
       { provider: input.provider, cwd: "", systemPrompt: input.systemPrompt },
       { roleId: input.roleId, executionProfileId: input.executionProfileId },
@@ -1469,11 +1510,17 @@ export class AgentManager {
         `Provider '${input.provider}' cannot bind Paseo role '${input.roleId}': ${reason}`,
       );
     }
-    const assignment = slpGeneration.contribution.preflightRoleBinding(input);
+    const assignment = generation.contribution.roleBindingPolicy.preflight({
+      roleId: input.roleId,
+      executionProfileId: input.executionProfileId,
+      assignment: input.assignment,
+    });
     if (input.cwd) {
       preflightWorkspaceProtocolAdmission({
         cwd: input.cwd,
-        readership: slpGeneration.contribution.workspaceProtocolReadership(input.roleId),
+        readership: generation.contribution.roleBindingPolicy.workspaceProtocolReadership(
+          input.roleId,
+        ),
         assignment,
       });
     }
@@ -1489,12 +1536,16 @@ export class AgentManager {
     roleBinding: PersistedRoleBinding,
   ): Pick<
     SlpBundledPolicyContribution,
-    "councilPolicy" | "coordinationPolicy" | "executionProfilePolicy"
+    "councilPolicy" | "coordinationPolicy" | "executionProfilePolicy" | "checkpointPolicy"
   > {
     const owner = policyOwnerForRoleBinding(roleBinding);
-    return owner.kind === "plugin"
-      ? this.bundledPolicyPacks.resolvePinned(owner).contribution
-      : LEGACY_CORE_OPERATIONAL_POLICY;
+    if (owner.kind === "legacy-core") return LEGACY_CORE_OPERATIONAL_POLICY;
+    if (owner.pluginId !== "slp") {
+      throw new Error(
+        `slp_policy_generation_unsupported: ${owner.pluginId}@${owner.generationDigest}`,
+      );
+    }
+    return this.bundledPolicyPacks.resolvePinned(owner).contribution;
   }
 
   isStoredAgentPolicyGenerationAvailable(record: StoredAgentRecord): boolean {
@@ -1502,7 +1553,7 @@ export class AgentManager {
     const owner = policyOwnerForRoleBinding(record.roleBinding);
     if (owner.kind !== "plugin") return true;
     try {
-      this.bundledPolicyPacks.resolvePinned(owner);
+      this.getTrustedPolicyResolver().resolvePinned(owner);
       return true;
     } catch {
       return false;
@@ -1550,18 +1601,27 @@ export class AgentManager {
   }
 
   listActiveBundledEventPolicies() {
-    return this.bundledPolicyPacks
+    return this.getTrustedPolicyResolver()
       .listActive()
       .flatMap((generation) => generation.contribution.eventPolicies);
   }
 
-  resolveBundledEventPoliciesForAgent(agentId: string) {
+  resolveBundledEventPoliciesForAgent(
+    agentId: string,
+    closureContext?: Pick<Extract<AgentManagerEvent, { type: "agent_closure" }>, "policyOwner">,
+  ) {
     const agent = this.getAgent(agentId);
-    const roleBinding = agent?.roleBinding;
-    if (!roleBinding) return [];
-    const owner = policyOwnerForRoleBinding(roleBinding);
+    // Closure resolution must use the owner captured in the pre-clear event. Falling back to
+    // the active live agent here could silently substitute a newer generation for a closed one.
+    let owner: PolicyOwner | undefined;
+    if (closureContext) {
+      owner = closureContext.policyOwner;
+    } else if (agent?.roleBinding) {
+      owner = policyOwnerForRoleBinding(agent.roleBinding);
+    }
+    if (!owner) return [];
     if (owner.kind !== "plugin") return [];
-    const generation = this.bundledPolicyPacks.resolvePinned(owner);
+    const generation = this.getTrustedPolicyResolver().resolvePinned(owner);
     return generation.contribution.eventPolicies.map((policy) => ({
       policy,
       stateNamespace: `${owner.pluginId}@${owner.generationDigest}`,
@@ -2823,6 +2883,24 @@ export class AgentManager {
     });
   }
 
+  private async assertAgentStartAuthorityCurrent(
+    agentId: string,
+    agent: ActiveManagedAgent,
+  ): Promise<void> {
+    const record = this.registry ? await this.registry.get(agentId) : null;
+    const capturedBinding = agent.launchContract?.roleBinding ?? agent.roleBinding;
+    if (this.registry && capturedBinding && !record) {
+      throw new Error(`agent_write_lease_state_unavailable: ${agentId}`);
+    }
+
+    assertAgentPromptLease(record);
+    const currentBinding =
+      record?.launchContract?.roleBinding ?? record?.roleBinding ?? capturedBinding;
+    if (currentBinding) {
+      assertPersistedAssignmentCurrent(currentBinding);
+    }
+  }
+
   private async startPendingForegroundTurn(params: {
     agent: ActiveManagedAgent;
     agentId: string;
@@ -2832,6 +2910,10 @@ export class AgentManager {
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
     try {
+      // The outer stream admission only creates a pending run. Re-read the canonical
+      // persisted binding after load/mode preparation and immediately before provider
+      // dispatch, so an assignment that expires while the start is queued cannot launch.
+      await this.assertAgentStartAuthorityCurrent(agentId, agent);
       const result = await agent.session.startTurn(prompt, options);
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
@@ -4114,9 +4196,22 @@ export class AgentManager {
 
   private prepareAgentForClosure(
     agent: LiveManagedAgent,
-    cancelReason: string,
+    cancelReason: "agent closed" | "agent reloaded",
   ): ManagedAgentClosed {
+    const policyOwner = this.captureClosurePolicyOwner(agent);
+    const closureEvent: Extract<AgentManagerEvent, { type: "agent_closure" }> = {
+      type: "agent_closure",
+      agentId: agent.id,
+      cause: cancelReason,
+      lifecycleBeforeClose: agent.lifecycle,
+      ...(policyOwner ? { policyOwner } : {}),
+      run: this.captureClosureRunReceipt(agent),
+      internal: agent.internal === true,
+    };
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
+    // This is the authoritative pre-clear closure receipt. Do not infer a lost run from the
+    // closed snapshot below: it intentionally has no active turn identity.
+    this.dispatch(closureEvent);
     this.agents.delete(agent.id);
     this.previousStatuses.delete(agent.id);
     if (agent.unsubscribeSession) {
@@ -4144,6 +4239,35 @@ export class AgentManager {
       foregroundTurnWaiters: new Set(),
       finalizedForegroundTurnIds: new Set(),
       unsubscribeSession: null,
+    };
+  }
+
+  private captureClosurePolicyOwner(agent: ActiveManagedAgent): PolicyOwner | undefined {
+    if (!agent.roleBinding) return undefined;
+    try {
+      return policyOwnerForRoleBinding(agent.roleBinding);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, agentId: agent.id },
+        "Agent closure evidence could not resolve its pinned policy owner",
+      );
+      return undefined;
+    }
+  }
+
+  private captureClosureRunReceipt(
+    agent: ActiveManagedAgent,
+  ): Extract<AgentManagerEvent, { type: "agent_closure" }>["run"] {
+    const trackedRun = this.runs.getRun(agent.id);
+    const turnId =
+      agent.activeForegroundTurnId ?? agent.activeTurnId ?? this.runs.getTurnId(agent.id);
+    if (!trackedRun && !turnId) {
+      return null;
+    }
+    return {
+      kind: trackedRun?.kind ?? (agent.activeForegroundTurnId ? "foreground" : "autonomous"),
+      turnId,
+      startedAt: agent.activeTurnStartedAt?.toISOString() ?? null,
     };
   }
 
@@ -5491,6 +5615,13 @@ export class AgentManager {
       }
       if (
         subscriber.agentId &&
+        event.type === "agent_closure" &&
+        subscriber.agentId !== event.agentId
+      ) {
+        continue;
+      }
+      if (
+        subscriber.agentId &&
         event.type === "provider_subagent" &&
         subscriber.agentId !==
           (event.event.type === "upsert"
@@ -5509,6 +5640,7 @@ export class AgentManager {
 
   private eventBelongsToInternalAgent(event: AgentManagerEvent): boolean {
     if (event.type === "agent_state") return event.agent.internal === true;
+    if (event.type === "agent_closure") return event.internal;
     if (event.type === "agent_stream") return this.agents.get(event.agentId)?.internal === true;
     if (event.type !== "provider_subagent") return false;
     const parentAgentId =
@@ -5635,24 +5767,21 @@ export class AgentManager {
       );
     }
     if (!roleBinding && role?.roleId) {
-      const slpGeneration = this.bundledPolicyPacks.resolveActive("slp");
-      roleBinding = await slpGeneration.contribution.materializeRoleBinding(
-        {
-          roleId: role.roleId,
-          executionProfileId: role.executionProfileId,
-          provider: storedConfig.provider,
-          providerBaseId,
-          providerSupport: this.providerRoleBindingSupport.get(storedConfig.provider),
-          cwd: storedConfig.cwd,
-          workspaceId: role.workspaceId ?? "",
-          assignment: role.assignment,
-          assignmentAssigner: role.assignmentAssigner ?? {
-            kind: "human-session",
-          },
-          roleProfilePreferences: this.resolveRoleProfilePreferences(role.roleId),
+      const generation = this.getTrustedPolicyResolver().resolveActiveRolePolicy();
+      roleBinding = await materializeTrustedRoleBinding(generation, {
+        roleId: role.roleId,
+        executionProfileId: role.executionProfileId,
+        provider: storedConfig.provider,
+        providerBaseId,
+        providerSupport: this.providerRoleBindingSupport.get(storedConfig.provider),
+        cwd: storedConfig.cwd,
+        workspaceId: role.workspaceId ?? "",
+        assignment: role.assignment,
+        assignmentAssigner: role.assignmentAssigner ?? {
+          kind: "human-session",
         },
-        slpGeneration.owner,
-      );
+        roleProfilePreferences: this.resolveRoleProfilePreferences(role.roleId),
+      });
       const providerBinding = await this.materializeProviderLaunchBinding({
         config: storedConfig,
         providerBaseId,
@@ -5734,7 +5863,7 @@ export class AgentManager {
   ): void {
     const policyOwner = policyOwnerForRoleBinding(roleBinding);
     if (policyOwner.kind === "plugin") {
-      this.bundledPolicyPacks.resolvePinned(policyOwner);
+      this.getTrustedPolicyResolver().resolvePinned(policyOwner);
     }
     const currentSupport = this.providerRoleBindingSupport.get(provider);
     if (

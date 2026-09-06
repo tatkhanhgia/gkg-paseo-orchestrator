@@ -18,7 +18,7 @@ import type {
 } from "../../messages.js";
 import type { AgentManager, CreateAgentOptions, ManagedAgent } from "../agent-manager.js";
 import type { AgentPromptInput, AgentRunOptions, AgentSessionConfig } from "../agent-sdk-types.js";
-import type { AgentStorage } from "../agent-storage.js";
+import type { AgentStorage, FinishNotificationWatch } from "../agent-storage.js";
 import type { AgentOwner } from "../agent-owner.js";
 import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 import type {
@@ -26,7 +26,13 @@ import type {
   AssignmentEnvelope,
 } from "@getpaseo/protocol/assignment-contract";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
-import { setupFinishNotification, startCreatedAgentInitialPrompt } from "../agent-prompt.js";
+import { startCreatedAgentInitialPrompt } from "../agent-prompt.js";
+import {
+  attachFinishNotificationWatch,
+  cancelFinishNotificationWatch,
+  registerFinishNotificationWatch,
+  type FinishNotificationDependencies,
+} from "../finish-notification.js";
 import { resolveCreateAgentTitles } from "../create-agent-title.js";
 import { buildAgentPrompt } from "../prompt-attachments.js";
 import { normalizeClientMessageId, resolveClientMessageId } from "../../client-message-id.js";
@@ -66,6 +72,7 @@ export interface CreateAgentCommandDependencies {
   rollbackWorktreeAfterFailedCreate?: (
     createdWorktree: CreatePaseoWorktreeWorkflowResult,
   ) => Promise<void>;
+  resolveCouncilSeatProjection?: FinishNotificationDependencies["resolveCouncilSeatProjection"];
 }
 
 export type EnsureWorkspaceForCreate = (
@@ -257,6 +264,8 @@ export async function createAgentCommand(
 ): Promise<CreateAgentCommandResult> {
   const transaction = createAgentTransaction(input);
   let createdAgentId: string | null = null;
+  let finishWatch: FinishNotificationWatch | null = null;
+  let finishWatchStop: (() => void) | null = null;
   try {
     assertCouncilCreateAuthority(input);
     preflightRoleCreate(dependencies.agentManager, input);
@@ -276,6 +285,34 @@ export async function createAgentCommand(
       agentId: snapshot.id,
     });
 
+    // Register the durable finish-notification intent BEFORE the initial
+    // prompt is dispatched (not after, as the pre-G1 path did): if the
+    // daemon crashes between dispatch and attaching the live watcher, this
+    // durable record is the only evidence the intent ever existed for
+    // restart recovery to reconcile against.
+    const shouldWatchFinish =
+      input.kind === "mcp" && Boolean(input.notifyOnFinish) && Boolean(input.callerAgentId);
+    const finishNotificationDependencies = {
+      agentManager: dependencies.agentManager,
+      agentStorage: dependencies.agentStorage,
+      logger: dependencies.logger,
+      resolveCouncilSeatProjection: dependencies.resolveCouncilSeatProjection,
+    };
+    if (shouldWatchFinish && input.kind === "mcp" && input.callerAgentId) {
+      finishWatch = await registerFinishNotificationWatch(finishNotificationDependencies, {
+        childAgentId: snapshot.id,
+        callerAgentId: input.callerAgentId,
+        requireParentOwnership: true,
+      });
+      // Subscribe before dispatch so the accepted turn-start state is the
+      // first factual run receipt available to this watch. An idle snapshot
+      // before that point is intentionally not a finish outcome.
+      finishWatchStop = attachFinishNotificationWatch(finishNotificationDependencies, {
+        childAgentId: snapshot.id,
+        watch: finishWatch,
+      });
+    }
+
     let liveSnapshot = snapshot;
     let initialPromptStarted = false;
     let initialPromptError: unknown | null = null;
@@ -292,19 +329,14 @@ export async function createAgentCommand(
       initialPromptError = sendResult.error ?? null;
     }
 
-    if (
-      input.kind === "mcp" &&
-      input.notifyOnFinish &&
-      input.callerAgentId &&
-      initialPromptStarted
-    ) {
-      setupFinishNotification({
-        agentManager: dependencies.agentManager,
-        agentStorage: dependencies.agentStorage,
+    if (finishWatch && !initialPromptStarted) {
+      // The run this watch was for never started: nothing to watch, and
+      // leaving it "active" would linger forever in restart resume.
+      finishWatchStop?.();
+      finishWatchStop = null;
+      await cancelFinishNotificationWatch(finishNotificationDependencies, {
         childAgentId: snapshot.id,
-        callerAgentId: input.callerAgentId,
-        requireParentOwnership: true,
-        logger: dependencies.logger,
+        watch: finishWatch,
       });
     }
 

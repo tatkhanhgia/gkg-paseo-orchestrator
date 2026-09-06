@@ -5613,6 +5613,33 @@ test("keeps selective delivery scoped per socket when a retained session also ha
   ]);
 });
 
+test("does not route an internal agent_closure receipt through stream forwarding", () => {
+  const messages: SessionOutboundMessage[] = [];
+  const agentEventListeners: Array<(event: AgentManagerEvent) => void> = [];
+  createSessionForTest({
+    messages,
+    agentManager: {
+      subscribe: vi.fn((listener: (event: AgentManagerEvent) => void) => {
+        agentEventListeners.push(listener);
+        return () => {};
+      }),
+    },
+  });
+
+  const listener = agentEventListeners[0];
+  if (!listener) throw new Error("Agent event listener was not installed");
+  listener({
+    type: "agent_closure",
+    agentId: "closed-agent",
+    cause: "agent closed",
+    lifecycleBeforeClose: "running",
+    run: null,
+    internal: true,
+  });
+
+  expect(messages).toEqual([]);
+});
+
 test("sends project updates only to capable sockets in a retained session", async () => {
   const messages: SessionOutboundMessage[] = [];
   const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
