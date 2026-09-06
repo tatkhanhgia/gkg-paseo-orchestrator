@@ -100,7 +100,9 @@ const PID_POLL_INTERVAL_MS = 100;
 const DAEMON_LOG_FILENAME = "daemon.log";
 const DAEMON_PID_FILENAME = "paseo.pid";
 
-export const DEFAULT_STOP_TIMEOUT_MS = 15_000;
+// Allow the lifecycle RPC handshake plus the supervisor's 25-second graceful
+// worker cleanup window to complete before the CLI reports a false timeout.
+export const DEFAULT_STOP_TIMEOUT_MS = 35_000;
 export const DEFAULT_KILL_TIMEOUT_MS = 3_000;
 
 const require = createRequire(import.meta.url);

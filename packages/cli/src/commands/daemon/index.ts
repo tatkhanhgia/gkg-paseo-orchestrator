@@ -31,14 +31,14 @@ export function createDaemonCommand(): Command {
 
   addJsonOption(daemon.command("stop").description("Stop the local daemon"))
     .option("--home <path>", "Paseo home directory (default: ~/.paseo)")
-    .option("--timeout <seconds>", "Wait timeout before failing (default: 15)")
+    .option("--timeout <seconds>", "Wait timeout before failing (default: 35)")
     .option("--force", "Send SIGKILL if graceful stop times out")
     .option("--kill-timeout <seconds>", "Wait after SIGKILL before failing (default: 3)")
     .action(withOutput(runStopCommand));
 
   addJsonOption(daemon.command("restart").description("Restart the local daemon"))
     .option("--home <path>", "Paseo home directory (default: ~/.paseo)")
-    .option("--timeout <seconds>", "Wait timeout before force step (default: 15)")
+    .option("--timeout <seconds>", "Wait timeout before force step (default: 35)")
     .option("--force", "Send SIGKILL if graceful stop times out")
     .option(
       "--listen <listen>",

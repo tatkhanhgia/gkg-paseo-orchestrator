@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
+  DEFAULT_STOP_TIMEOUT_MS,
   type DaemonLaunchRuntime,
   type DetachedDaemonProcess,
   resolveLocalDaemonState,
@@ -99,6 +100,10 @@ describe("local daemon launch supervision", () => {
     );
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  test("default stop budget covers the supervised graceful cleanup window", () => {
+    expect(DEFAULT_STOP_TIMEOUT_MS).toBeGreaterThan(30_000);
   });
 
   test("foreground start spawns supervisor-entrypoint instead of server/index", async () => {

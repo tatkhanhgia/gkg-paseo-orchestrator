@@ -139,7 +139,7 @@ export function createCli(): Command {
       .description('Restart local daemon (alias for "paseo daemon restart")'),
   )
     .option("--home <path>", "Paseo home directory (default: ~/.paseo)")
-    .option("--timeout <seconds>", "Wait timeout before force step (default: 15)")
+    .option("--timeout <seconds>", "Wait timeout before force step (default: 35)")
     .option("--force", "Send SIGKILL if graceful stop times out")
     .option(
       "--listen <listen>",

@@ -11,7 +11,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "zx";
+import { tryConnectToDaemon } from "../src/utils/client.ts";
 import { getAvailablePort } from "./helpers/network.ts";
+import { createTestBeadsCentralEnv } from "./helpers/test-daemon.ts";
 
 $.verbose = false;
 
@@ -109,6 +111,8 @@ async function waitFor(
 console.log("=== Daemon Stop (supervisor regression) ===\n");
 
 const port = await getAvailablePort();
+const host = `127.0.0.1:${port}`;
+const beadsCentralEnv = await createTestBeadsCentralEnv([port]);
 const paseoHome = await mkdtemp(join(tmpdir(), "paseo-stop-supervisor-"));
 const cliRoot = join(import.meta.dirname, "..");
 
@@ -126,8 +130,9 @@ try {
       env: {
         ...process.env,
         ...testEnv,
+        ...beadsCentralEnv,
         PASEO_HOME: paseoHome,
-        PASEO_LISTEN: `127.0.0.1:${port}`,
+        PASEO_LISTEN: host,
         PASEO_RELAY_ENABLED: "false",
         CI: "true",
       },
@@ -145,9 +150,17 @@ try {
   await waitFor(
     async () => {
       const status = await readDaemonStatus(paseoHome);
-      return (
-        status.localDaemon === "running" && status.pid !== null && isProcessRunning(status.pid)
-      );
+      if (
+        status.localDaemon !== "running" ||
+        status.pid === null ||
+        !isProcessRunning(status.pid)
+      ) {
+        return false;
+      }
+      const client = await tryConnectToDaemon({ host, timeout: 500 });
+      if (!client) return false;
+      await client.close().catch(() => undefined);
+      return true;
     },
     120000,
     "daemon did not become running in time",
@@ -174,7 +187,12 @@ try {
   console.log("Test 2: `paseo daemon stop` should stop without respawn");
   const stopResult =
     await $`PASEO_HOME=${paseoHome} PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD=${testEnv.PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD} PASEO_DICTATION_ENABLED=${testEnv.PASEO_DICTATION_ENABLED} PASEO_VOICE_MODE_ENABLED=${testEnv.PASEO_VOICE_MODE_ENABLED} npx paseo daemon stop --home ${paseoHome} --json`.nothrow();
-  assert.strictEqual(stopResult.exitCode, 0, `stop should succeed: ${stopResult.stderr}`);
+  const stopFailureLogs = await readCapturedSupervisorLogs(paseoHome, recentSupervisorLogs);
+  assert.strictEqual(
+    stopResult.exitCode,
+    0,
+    `stop should succeed: ${stopResult.stderr}\nSupervisor logs:\n${stopFailureLogs}`,
+  );
   const stopJson = JSON.parse(stopResult.stdout) as { action?: unknown };
   assert.strictEqual(stopJson.action, "stopped", "stop should report stopped action");
 
@@ -222,7 +240,7 @@ try {
     `stop should log the graceful worker shutdown request, logs:\n${capturedSupervisorLogs}`,
   );
   assert(
-    capturedSupervisorLogs.includes("Server closed"),
+    capturedSupervisorLogs.includes("Server and bundled Beads Central sidecar closed"),
     `stop should run daemon cleanup before the worker exits, logs:\n${capturedSupervisorLogs}`,
   );
   assert(

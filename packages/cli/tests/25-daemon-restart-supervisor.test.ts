@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { $ } from "zx";
 import { tryConnectToDaemon } from "../src/utils/client.ts";
 import { getAvailablePort } from "./helpers/network.ts";
+import { createTestBeadsCentralEnv } from "./helpers/test-daemon.ts";
 
 $.verbose = false;
 
@@ -119,6 +120,7 @@ async function waitFor(
 console.log("=== Daemon Restart (supervisor regression) ===\n");
 
 const port = await getAvailablePort();
+const beadsCentralEnv = await createTestBeadsCentralEnv([port]);
 const paseoHome = await mkdtemp(join(tmpdir(), "paseo-restart-supervisor-"));
 const cliRoot = join(import.meta.dirname, "..");
 const host = `127.0.0.1:${port}`;
@@ -137,6 +139,7 @@ try {
       env: {
         ...process.env,
         ...testEnv,
+        ...beadsCentralEnv,
         PASEO_HOME: paseoHome,
         PASEO_LISTEN: host,
         PASEO_RELAY_ENABLED: "false",
@@ -156,9 +159,17 @@ try {
   await waitFor(
     async () => {
       const status = await readDaemonStatus(paseoHome);
-      return (
-        status.localDaemon === "running" && status.pid !== null && isProcessRunning(status.pid)
-      );
+      if (
+        status.localDaemon !== "running" ||
+        status.pid === null ||
+        !isProcessRunning(status.pid)
+      ) {
+        return false;
+      }
+      const client = await tryConnectToDaemon({ host, timeout: 500 });
+      if (!client) return false;
+      await client.close().catch(() => undefined);
+      return true;
     },
     120000,
     "daemon did not become running in time",
@@ -198,14 +209,24 @@ try {
   }
 
   await waitFor(
-    () => {
+    async () => {
       const workerPid = readWorkerPid(supervisorPid);
-      return (
-        workerPid !== null && workerPid !== workerPidBeforeRestart && isProcessRunning(workerPid)
-      );
+      if (
+        workerPid === null ||
+        workerPid === workerPidBeforeRestart ||
+        !isProcessRunning(workerPid)
+      ) {
+        return false;
+      }
+      const status = await readDaemonStatus(paseoHome);
+      if (status.localDaemon !== "running") return false;
+      const restartedClient = await tryConnectToDaemon({ host, timeout: 500 });
+      if (!restartedClient) return false;
+      await restartedClient.close().catch(() => undefined);
+      return true;
     },
-    20000,
-    "worker pid did not change after restart request",
+    120000,
+    "replacement worker did not become ready after restart request",
   );
 
   const workerPidAfterRestart = readWorkerPid(supervisorPid);
@@ -238,7 +259,7 @@ try {
     `restart should log the graceful worker shutdown request, logs:\n${capturedSupervisorLogs}`,
   );
   assert(
-    capturedSupervisorLogs.includes("Server closed"),
+    capturedSupervisorLogs.includes("Server and bundled Beads Central sidecar closed"),
     `restart should run daemon cleanup before replacing the worker, logs:\n${capturedSupervisorLogs}`,
   );
   console.log("✓ app-style restart keeps daemon healthy and restarts worker\n");
