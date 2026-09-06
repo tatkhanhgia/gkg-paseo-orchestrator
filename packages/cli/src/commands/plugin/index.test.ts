@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listPlugins = vi.fn(async () => []);
-const installDirectoryPlugin = vi.fn(async () => ({ id: "example" }));
+const installDirectoryPlugin = vi.fn(async () => ({
+  id: "trusted-plugin",
+  path: "/plugins/trusted-plugin",
+  enabled: true,
+  status: "running" as const,
+}));
 const reloadPlugin = vi.fn(async () => ({ id: "example" }));
 const enablePlugin = vi.fn(async () => ({ id: "example" }));
 const disablePlugin = vi.fn(async () => ({ id: "example" }));
 const removePlugin = vi.fn(async () => undefined);
-const installPluginSource = vi.fn(async () => ({ id: "example" }));
+const installPluginSource = vi.fn(async () => ({
+  id: "trusted-plugin",
+  path: "/plugins/trusted-plugin",
+  enabled: true,
+  status: "running" as const,
+}));
 const getPluginSourceStatus = vi.fn(async () => []);
 const updatePluginSources = vi.fn(async () => []);
 const getPluginLogs = vi.fn(async () => [
@@ -44,6 +54,7 @@ vi.mock("../../utils/client.js", () => ({
 import { render } from "../../output/index.js";
 import {
   assertPluginLifecycleHumanContext,
+  createPluginCommand,
   runPluginActionCommand,
   runPluginInitCommand,
   runPluginInstallCommand,
@@ -141,5 +152,56 @@ describe("plugin management commands", () => {
     await expect(runPluginStatusCommand(undefined, {}, {} as never)).resolves.toMatchObject({
       type: "list",
     });
+  });
+
+  it("makes trust explicit at the plugin add entry point", () => {
+    const command = createPluginCommand();
+    expect(
+      command.commands.find((subcommand) => subcommand.name() === "install")?.description(),
+    ).toContain("Trust and install");
+    expect(command.helpInformation()).toContain("trusted, unsandboxed plugins");
+  });
+
+  it("prints the trust acknowledgement before installing", async () => {
+    features.pluginManagement = true;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const command = createPluginCommand();
+
+    await command.parseAsync(["install", "/plugins/trusted-plugin"], { from: "user" });
+
+    expect(stderr).toHaveBeenCalledWith(
+      expect.stringContaining("Git build commands run unsandboxed on the daemon host"),
+    );
+    expect(installDirectoryPlugin).toHaveBeenCalledWith("/plugins/trusted-plugin", undefined);
+    stderr.mockRestore();
+  });
+
+  it("folds the legacy --path option into the plugin source reference", async () => {
+    features.pluginGitManagement = true;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const command = createPluginCommand();
+
+    await command.parseAsync(["install", "owner/monorepo", "--path", "plugins/review"], {
+      from: "user",
+    });
+
+    expect(installPluginSource).toHaveBeenCalledWith({
+      source: "owner/monorepo:plugins/review",
+    });
+    stderr.mockRestore();
+  });
+
+  it("keeps an absolute monorepo path as one plugin source reference", async () => {
+    features.pluginGitManagement = true;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const command = createPluginCommand();
+
+    await command.parseAsync(["install", "/plugins/monorepo:plugins/review"], { from: "user" });
+
+    expect(installPluginSource).toHaveBeenCalledWith({
+      source: "/plugins/monorepo:plugins/review",
+    });
+    expect(installDirectoryPlugin).not.toHaveBeenCalled();
+    stderr.mockRestore();
   });
 });

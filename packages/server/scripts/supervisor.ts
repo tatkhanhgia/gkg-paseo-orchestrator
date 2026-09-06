@@ -5,7 +5,7 @@ import { createStream as createRotatingFileStream } from "rotating-file-stream";
 import { signalProcessTree } from "../src/utils/tree-kill.js";
 
 const WORKER_HEARTBEAT_INTERVAL_MS = 1_000;
-const WORKER_TERMINATION_GRACE_MS = 10_000;
+export const DEFAULT_WORKER_TERMINATION_GRACE_MS = 25_000;
 
 interface SupervisorLogFileOptions {
   path: string;
@@ -33,6 +33,11 @@ interface SupervisorHeartbeatMessage {
   type: "paseo:supervisor-heartbeat";
 }
 
+interface SupervisorGracefulShutdownMessage {
+  type: "paseo:graceful-shutdown";
+  reason: string;
+}
+
 interface SupervisorOptions {
   name: string;
   startupMessage: string;
@@ -47,6 +52,7 @@ interface SupervisorOptions {
   } | null;
   onWorkerReady?: (message: { listen: string }) => Promise<void> | void;
   restartOnCrash?: boolean;
+  workerTerminationGraceMs?: number;
   onSupervisorExit?: () => Promise<void> | void;
   logFile?: SupervisorLogFileOptions;
 }
@@ -119,6 +125,8 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   const workerEnv = options.workerEnv ?? process.env;
   const workerExecArgv = options.workerExecArgv ?? ["--import", "tsx"];
   const resolveWorkerSpawnSpec = options.resolveWorkerSpawnSpec;
+  const workerTerminationGraceMs =
+    options.workerTerminationGraceMs ?? DEFAULT_WORKER_TERMINATION_GRACE_MS;
 
   let child: ChildProcess | null = null;
   let restarting = false;
@@ -192,11 +200,14 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       if (child !== currentChild) {
         return;
       }
-      writeLifecycleLog("Worker did not exit after SIGTERM; forcing SIGKILL", {
-        reason,
-        supervisorPid: process.pid,
-        workerPid: currentChild.pid ?? null,
-      });
+      writeLifecycleLog(
+        "Worker did not exit after graceful shutdown request; forcing process tree kill",
+        {
+          reason,
+          supervisorPid: process.pid,
+          workerPid: currentChild.pid ?? null,
+        },
+      );
       void signalProcessTree(currentChild, "SIGKILL").catch((error) => {
         writeLifecycleLog("Failed to force-kill worker process tree", {
           error: error instanceof Error ? error.message : String(error),
@@ -204,7 +215,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
           workerPid: currentChild.pid ?? null,
         });
       });
-    }, WORKER_TERMINATION_GRACE_MS);
+    }, workerTerminationGraceMs);
     forceKillTimer.unref();
   };
 
@@ -327,17 +338,38 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     });
   };
 
-  const signalWorker = (signal: NodeJS.Signals, reason: string): void => {
+  const requestWorkerShutdown = (reason: string): void => {
     if (!child) {
       return;
     }
-    writeLifecycleLog("Supervisor sending signal to worker", {
+    const currentChild = child;
+    const message: SupervisorGracefulShutdownMessage = {
+      type: "paseo:graceful-shutdown",
       reason,
-      signal,
+    };
+    writeLifecycleLog("Supervisor requesting graceful worker shutdown", {
+      reason,
       supervisorPid: process.pid,
-      workerPid: child.pid ?? null,
+      workerPid: currentChild.pid ?? null,
     });
-    child.kill(signal);
+    if (!currentChild.connected) {
+      writeLifecycleLog("Graceful worker shutdown IPC unavailable", {
+        reason,
+        supervisorPid: process.pid,
+        workerPid: currentChild.pid ?? null,
+      });
+      return;
+    }
+    currentChild.send?.(message, (error) => {
+      if (error) {
+        writeLifecycleLog("Graceful worker shutdown IPC send failed", {
+          error: error instanceof Error ? error.message : String(error),
+          reason,
+          supervisorPid: process.pid,
+          workerPid: currentChild.pid ?? null,
+        });
+      }
+    });
   };
 
   const requestRestart = (reason: string) => {
@@ -347,7 +379,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     restarting = true;
     writeLifecycleLog("Restart requested", { reason });
     log(`${reason}. Stopping worker for restart...`);
-    signalWorker("SIGTERM", reason);
+    requestWorkerShutdown(reason);
     scheduleForceKill(reason);
   };
 
@@ -363,7 +395,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       exitSupervisor(0);
       return;
     }
-    signalWorker("SIGTERM", reason);
+    requestWorkerShutdown(reason);
     scheduleForceKill(reason);
   };
 

@@ -58,9 +58,14 @@ const EXPECTED_CLAUDE_MODELS = [
     descriptionFragment: "Latest release",
   },
   {
+    id: "claude-fable-5-1",
+    model: "Fable 5.1",
+    descriptionFragment: "Most powerful",
+  },
+  {
     id: "claude-fable-5",
     model: "Fable 5",
-    descriptionFragment: "Most powerful",
+    descriptionFragment: "Previous release",
   },
   {
     id: "claude-opus-4-8[1m]",
@@ -165,7 +170,6 @@ function assertClaudeModels(data: ProviderModel[]): void {
     data.length >= EXPECTED_CLAUDE_CATALOG_MODELS.length,
     "claude output should contain every canonical catalog model",
   );
-
   const byId = new Map(data.map((model) => [model.id, model]));
 
   assert.strictEqual(byId.size, data.length, "claude model IDs should be unique");
@@ -183,6 +187,18 @@ function assertClaudeModels(data: ProviderModel[]): void {
       `${expectedModel.id} description should mention ${expectedModel.descriptionFragment}`,
     );
   }
+
+  const fable51Index = data.findIndex((model) => model.id === "claude-fable-5-1");
+  const fable5Index = data.findIndex((model) => model.id === "claude-fable-5");
+  assert.strictEqual(
+    fable5Index,
+    fable51Index + 1,
+    "Fable models should stay adjacent and newest-first",
+  );
+  assert(
+    !byId.has("claude-fable-5[1m]"),
+    "compatibility-only Fable aliases should not appear in CLI output",
+  );
 }
 
 try {
@@ -430,9 +446,9 @@ try {
       "should have one line per Claude model returned by --json",
     );
     assert.deepStrictEqual(
-      [...lines].sort(),
-      [...claudeModelIdsFromJson].sort(),
-      "--quiet should print the same model IDs returned by --json",
+      lines,
+      claudeModelIdsFromJson,
+      "--quiet should print the same ordered model IDs returned by --json",
     );
     assert(
       claudeModelsFromJson.some((m) => m.id === "claude-sonnet-5"),
