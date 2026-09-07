@@ -26,6 +26,7 @@ import {
   ROLE_TOOL_CEILINGS,
 } from "./slp/role-profiles.js";
 import { buildFoundationSkillArtifactDescriptor } from "./slp/skill-policy.js";
+import { buildHarnessPackageArtifactDescriptor } from "./slp/harness-package-policy.js";
 import {
   BundledPolicyPackRegistry,
   type BundledPolicyPackGeneration,
@@ -96,6 +97,7 @@ function canonicalSlpArtifactBytes(): string {
     lifecycleAttentionPolicyVersion: SLP_LIFECYCLE_ATTENTION_POLICY_VERSION,
     finishNotificationPolicyVersion: SLP_FINISH_NOTIFICATION_POLICY_VERSION,
     skills: buildFoundationSkillArtifactDescriptor(),
+    harness: buildHarnessPackageArtifactDescriptor(),
   });
 }
 

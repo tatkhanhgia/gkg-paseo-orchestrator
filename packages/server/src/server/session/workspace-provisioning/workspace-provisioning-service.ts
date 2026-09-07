@@ -15,7 +15,12 @@ import {
 import type { WorkspaceGitService } from "../../workspace-git-service.js";
 import type { CreatePaseoWorktreeWorkflowResult } from "../../worktree-session.js";
 import { deriveProjectKey } from "../../project-key.js";
-import { areEquivalentPaths, createRealpathAwarePathMatcher } from "../../../utils/path.js";
+import {
+  areEquivalentPaths,
+  createRealpathAwarePathMatcher,
+  isRealpathInsideRoot,
+} from "../../../utils/path.js";
+import { resolveRegisteredProjectForWorkspaceCwd } from "../../project/harness-binding-scope.js";
 
 export interface ResolveOrCreateWorkspaceIdInput {
   createdWorktree: CreatePaseoWorktreeWorkflowResult | null;
@@ -46,6 +51,20 @@ export interface CreateWorktreeWorkspaceInput {
   expectsInitialAgent?: boolean;
 }
 
+export interface ResolveProjectHarnessTargetInput {
+  projectId: string;
+  workspaceId: string;
+  cwd?: string;
+}
+
+export interface ProjectHarnessTargetResolution {
+  projectId: string;
+  workspaceId: string;
+  projectRoot: string;
+  workspaceRoot: string;
+  cwd: string;
+}
+
 export interface WorkspaceProvisioningService {
   runInImportWorkspace<T>(
     input: ImportWorkspaceInput,
@@ -63,6 +82,9 @@ export interface WorkspaceProvisioningService {
     input: CreateWorktreeWorkspaceInput,
   ): Promise<PersistedWorkspaceRecord>;
   findOrCreateProjectForDirectory(cwd: string): Promise<PersistedProjectRecord>;
+  resolveProjectHarnessTarget(
+    input: ResolveProjectHarnessTargetInput,
+  ): Promise<ProjectHarnessTargetResolution>;
   ensureWorkspaceRecordUnarchived(
     workspace: PersistedWorkspaceRecord,
   ): Promise<PersistedWorkspaceRecord>;
@@ -180,6 +202,51 @@ export function createWorkspaceProvisioningService(deps: {
     if (!project) throw new WorkspaceProvisioningError("unknown_project", projectId);
     if (project.archivedAt) throw new WorkspaceProvisioningError("archived_project", projectId);
     return project;
+  }
+
+  async function resolveProjectHarnessTarget(
+    input: ResolveProjectHarnessTargetInput,
+  ): Promise<ProjectHarnessTargetResolution> {
+    const workspace = await workspaceRegistry.get(input.workspaceId);
+    if (!workspace || workspace.archivedAt) {
+      throw new Error(`harness_project_workspace_unavailable: ${input.workspaceId}`);
+    }
+    if (workspace.projectId !== input.projectId) {
+      throw new Error(
+        `harness_project_identity_stale: workspace '${input.workspaceId}' belongs to project '${workspace.projectId}'`,
+      );
+    }
+    const project = await projectRegistry.get(input.projectId);
+    if (!project || project.archivedAt) {
+      throw new Error(`harness_project_project_unavailable: ${input.projectId}`);
+    }
+    const workspaceRoot = workspace.cwd ?? project.rootPath;
+    const cwd = resolve(input.cwd ?? workspaceRoot);
+    if (!isRealpathInsideRoot(workspaceRoot, cwd)) {
+      throw new Error(
+        `harness_project_cwd_mismatch: cwd '${cwd}' is outside registered workspace '${input.workspaceId}'`,
+      );
+    }
+    const topology = resolveRegisteredProjectForWorkspaceCwd({
+      cwd,
+      workspaceRoot,
+      projectId: project.projectId,
+      registeredProjects: await projectRegistry.list(),
+    });
+    if (topology.status === "unresolved") {
+      throw new Error(
+        topology.reason === "ambiguous_registered_roots"
+          ? "harness_project_registered_topology_ambiguous"
+          : `harness_project_registered_topology_mismatch: project '${project.projectId}' does not own cwd '${cwd}'`,
+      );
+    }
+    return {
+      projectId: project.projectId,
+      workspaceId: workspace.workspaceId,
+      projectRoot: project.rootPath,
+      workspaceRoot,
+      cwd,
+    };
   }
 
   async function createWorkspaceForDirectory(
@@ -445,6 +512,7 @@ export function createWorkspaceProvisioningService(deps: {
     createWorkspaceForDirectory,
     createWorkspaceForWorktree,
     findOrCreateProjectForDirectory,
+    resolveProjectHarnessTarget,
     ensureWorkspaceRecordUnarchived,
   };
 }

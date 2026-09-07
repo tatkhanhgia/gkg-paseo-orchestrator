@@ -123,12 +123,16 @@ export function buildSlpAssignmentInstruction(contract: PersistedAssignmentContr
     receipt.roleId === "supervisor" && envelope.effectClass === "delegation"
       ? "Human-issued topology lease: you may create and prompt only your own direct role-bound Lead children through Paseo. Those Leads own their project engineering and may delegate only to their own Peers; do not bypass a Lead to direct its Peers."
       : null;
+  const notebookGrantLine = receipt.notebookGrant
+    ? `Notebook grant: durable write access to project notebook ${receipt.notebookGrant.location} (notebookId=${receipt.notebookGrant.notebookId}, projectId=${receipt.notebookGrant.projectId}); scope: ${receipt.notebookGrant.scope}; expires ${receipt.notebookGrant.expiresAt}. This is a narrow explicit effect independent of the mutation/external-effect boundaries above.`
+    : null;
   return [
     `Assignment Contract: sha256=${receipt.assignmentDigest}; disposition=${envelope.disposition}; effect=${envelope.effectClass}.`,
     `Objective: ${envelope.objective}`,
     `Mutation boundary: ${writeScope}. External effects: ${externalScope}.`,
     technicalCapabilityBoundary,
     supervisorDelegationBoundary,
+    notebookGrantLine,
     `Beads issue grants: ${beadsIssueGrants}.`,
     trackerCheckpoint,
     `Evidence: ${envelope.evidence}`,

@@ -127,6 +127,43 @@ export const AssignmentResourceGrantsSchema = z
   .strict();
 export type AssignmentResourceGrants = z.infer<typeof AssignmentResourceGrantsSchema>;
 
+/**
+ * Caller-authored REQUEST for a Supervisor notebook-write capability. Only
+ * `scope`/`expiresAt` are caller-chosen; the daemon never accepts a
+ * caller-supplied notebook identity, filesystem location, or writer
+ * identity — those are always derived from the authoritative registered
+ * project/notebook binding when the request is admitted (see
+ * `NotebookGrantReceiptSchema`). This is a top-level optional field on
+ * `AssignmentEnvelopeSchema`, NOT a member of the `.strict()`
+ * `AssignmentResourceGrantsSchema`, and it does not add a new
+ * `AssignmentEffectClassSchema` value — both would be narrowing/breaking for
+ * an old client parsing a new daemon's payload per docs/protocol-compatibility.md.
+ */
+export const NotebookGrantRequestSchema = z.object({
+  scope: z.string().trim().min(1),
+  expiresAt: AssignmentTimestampSchema,
+});
+export type NotebookGrantRequest = z.infer<typeof NotebookGrantRequestSchema>;
+
+/**
+ * Daemon-computed, immutable notebook-write grant receipt. Every identity
+ * field (`notebookId`, `location`, `projectId`, `designatedWriterId`) is
+ * resolved authoritatively at admission time from the registered
+ * project/notebook binding — an agent cannot choose an arbitrary filesystem
+ * path or caller identity through this object; only `scope`/`expiresAt`
+ * ever originate from the caller's request.
+ */
+export const NotebookGrantReceiptSchema = z.object({
+  effect: z.literal("notebook-write"),
+  notebookId: z.string().min(1),
+  location: z.string().min(1),
+  projectId: z.string().min(1),
+  scope: z.string().trim().min(1),
+  designatedWriterId: z.string().min(1),
+  expiresAt: AssignmentTimestampSchema,
+});
+export type NotebookGrantReceipt = z.infer<typeof NotebookGrantReceiptSchema>;
+
 /** Caller-authored one-task envelope. Cross-field authority checks remain daemon-owned. */
 export const AssignmentEnvelopeSchema = z.object({
   version: z.literal(PASEO_ASSIGNMENT_CONTRACT_VERSION),
@@ -140,6 +177,7 @@ export const AssignmentEnvelopeSchema = z.object({
   resourceGrants: AssignmentResourceGrantsSchema.optional(),
   expiresAt: AssignmentTimestampSchema.optional(),
   protocolException: WorkspaceProtocolAdmissionExceptionSchema.optional(),
+  notebookGrant: NotebookGrantRequestSchema.optional(),
 });
 export type AssignmentEnvelope = z.infer<typeof AssignmentEnvelopeSchema>;
 
@@ -167,5 +205,6 @@ export const AssignmentContractReceiptSchema = z.object({
   protocolExceptionExpiresAt: AssignmentTimestampSchema.optional(),
   createdAt: AssignmentTimestampSchema,
   expiresAt: AssignmentTimestampSchema.optional(),
+  notebookGrant: NotebookGrantReceiptSchema.optional(),
 });
 export type AssignmentContractReceipt = z.infer<typeof AssignmentContractReceiptSchema>;

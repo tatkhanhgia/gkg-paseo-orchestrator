@@ -31,6 +31,17 @@ import {
 } from "../agent-checkpoint.js";
 import { readBeadsCheckpoint } from "../agent-checkpoint-adapter.js";
 import {
+  buildAgentEpisodeReport,
+  EpisodeReportRequestSchema,
+  type AgentEpisodeReportSources,
+  type EpisodeActivitySource,
+  type EpisodeAssignmentSource,
+  type EpisodeHandoffSource,
+  type EpisodeNotebookSource,
+  type EpisodeProjectSource,
+  type EpisodeReportRequest,
+} from "../agent-episode-report.js";
+import {
   AgentProfileLaunchReceiptSchema,
   AgentProfileSchema,
   PeerSubroleSchema,
@@ -81,6 +92,7 @@ import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js
 import type { FirstAgentContext } from "../../messages.js";
 import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
 import { expandUserPath, isSameOrDescendantPath, resolvePathFromBase } from "../../path-utils.js";
+import { isRealpathInsideRoot } from "../../../utils/path.js";
 import type { TerminalManager } from "../../../terminal/terminal-manager.js";
 import type {
   CreatePaseoWorktreeWorkflowFn,
@@ -134,6 +146,7 @@ import type {
   ProjectRegistry,
   WorkspaceRegistry,
 } from "../../workspace-registry.js";
+import { resolveRegisteredProjectForWorkspaceCwd } from "../../project/harness-binding-scope.js";
 import { resolveWorktreeSourceCwd } from "../../workspace-source.js";
 import type { WorkspaceScriptsService } from "../../session/workspace-scripts/workspace-scripts-service.js";
 import {
@@ -144,7 +157,18 @@ import {
 import { registerBrowserTools } from "../../browser-tools/tools.js";
 import type { BrowserToolsBroker } from "../../browser-tools/broker.js";
 import { registerBeadsTools } from "../../beads/beads-tools.js";
+import { registerProjectNotebookTools } from "../../project/project-notebook-tools.js";
 import { beadsActorForAgent, type BeadsService } from "../../beads/beads-service.js";
+import { DEFAULT_HARNESS_PROJECT_METADATA_PATH } from "../../project/harness-bootstrap-defaults.js";
+import { inspectHarnessProjectMetadata } from "../../project/harness-project-metadata-file.js";
+import {
+  inspectProjectNotebook,
+  type ProjectNotebookRevision,
+} from "../../../utils/project-notebook-file.js";
+import {
+  SupervisorNotebookRecordSchema,
+  type SupervisorNotebookRecord,
+} from "@getpaseo/protocol/notebook-record";
 import type {
   PaseoToolCatalog,
   PaseoToolConfig,
@@ -737,6 +761,23 @@ function registerConfiguredBeadsTools(
   });
 }
 
+function registerConfiguredProjectNotebookTools(
+  options: PaseoToolHostDependencies,
+  registerTool: Parameters<typeof registerBeadsTools>[0]["registerTool"],
+): void {
+  if (!options.callerAgentId || !options.workspaceRegistry || !options.projectRegistry) return;
+  const roleBinding = resolveCatalogRoleBinding(options.agentManager, options.callerAgentId);
+  if (!roleBinding) return;
+  registerProjectNotebookTools({
+    registerTool,
+    agentStorage: options.agentStorage,
+    workspaceRegistry: options.workspaceRegistry,
+    projectRegistry: options.projectRegistry,
+    callerAgentId: options.callerAgentId,
+    roleId: roleBinding.roleId,
+  });
+}
+
 function resolveCatalogRoleBinding(agentManager: AgentManager, agentId: string) {
   const resolver = (
     agentManager as AgentManager & {
@@ -828,7 +869,7 @@ type CheckpointToolRegistrar = (
   name: string,
   config: PaseoToolConfig,
   handler: (
-    input: { agentId: string },
+    input: { agentId: string; report?: EpisodeReportRequest },
     context: PaseoToolExecutionContext,
   ) => Promise<PaseoToolResult>,
 ) => void;
@@ -845,22 +886,39 @@ function registerAgentCheckpointTool(input: {
     {
       title: "Get agent checkpoint",
       description:
-        "Read a bounded, evidence-backed checkpoint for an exact agent relationship. This is read-only: it reports lifecycle, pending permission, coordination, canonical Council, and exact target-bound Beads evidence without inferring completion or acceptance.",
+        "Read a bounded, evidence-backed checkpoint for an exact agent relationship. This is read-only: it reports lifecycle, pending permission, coordination, canonical Council, and exact target-bound Beads evidence without inferring completion or acceptance. An explicit report request adds bounded task-episode lineage and activity analysis without loading a provider session or granting writer, Beads, acceptance, or rule-promotion authority.",
       inputSchema: {
         agentId: z.string().trim().min(1),
+        report: EpisodeReportRequestSchema.optional(),
       },
     },
-    async ({ agentId }, context) => ({
-      content: [],
-      structuredContent: ensureValidJson({
-        checkpoint: await buildProductionAgentCheckpoint({
+    async ({ agentId, report }, context) => {
+      if (report) {
+        const reportRequest = EpisodeReportRequestSchema.parse(report);
+        const result = await buildProductionAgentEpisodeReport({
           options: input.options,
           callerAgentId,
           targetAgentId: agentId,
+          request: reportRequest,
           signal: context.signal,
+        });
+        return {
+          content: [],
+          structuredContent: ensureValidJson(result),
+        };
+      }
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          checkpoint: await buildProductionAgentCheckpoint({
+            options: input.options,
+            callerAgentId,
+            targetAgentId: agentId,
+            signal: context.signal,
+          }),
         }),
-      }),
-    }),
+      };
+    },
   );
 }
 
@@ -1312,12 +1370,24 @@ async function resolveCheckpointBeads(input: {
   });
 }
 
-async function buildProductionAgentCheckpoint(input: {
+interface ProductionCheckpointResolution {
+  checkpoint: ReturnType<typeof buildAgentCheckpoint>;
+  sources: AgentCheckpointSources;
+  checkpointPolicy: CheckpointPolicy;
+  caller: StoredAgentRecord;
+  callerBinding: PersistedRoleBinding;
+  target: StoredAgentRecord | null;
+  targetLive: ManagedAgent | null;
+  targetBinding: PersistedRoleBinding | undefined;
+  relationship: CheckpointCallerRelationship;
+}
+
+async function resolveProductionAgentCheckpoint(input: {
   options: PaseoToolHostDependencies;
   callerAgentId: string;
   targetAgentId: string;
   signal?: AbortSignal;
-}): Promise<ReturnType<typeof buildAgentCheckpoint>> {
+}): Promise<ProductionCheckpointResolution> {
   const caller = await input.options.agentStorage.get(input.callerAgentId);
   const callerLive = input.options.agentManager.getAgent(input.callerAgentId);
   const { caller: resolvedCaller, callerBinding } = requireCheckpointCaller({
@@ -1396,7 +1466,537 @@ async function buildProductionAgentCheckpoint(input: {
     // non-SLP contribution masquerade as SLP) through this read-only tool.
     throw new Error("checkpoint_policy_generation_unavailable");
   }
-  return buildAgentCheckpoint(sources, checkpointPolicy);
+  return {
+    checkpoint: buildAgentCheckpoint(sources, checkpointPolicy),
+    sources,
+    checkpointPolicy,
+    caller: resolvedCaller,
+    callerBinding,
+    target,
+    targetLive,
+    targetBinding,
+    relationship,
+  };
+}
+
+async function buildProductionAgentCheckpoint(input: {
+  options: PaseoToolHostDependencies;
+  callerAgentId: string;
+  targetAgentId: string;
+  signal?: AbortSignal;
+}): Promise<ReturnType<typeof buildAgentCheckpoint>> {
+  return (await resolveProductionAgentCheckpoint(input)).checkpoint;
+}
+
+const EPISODE_NOTEBOOK_RECORD_MARKER = "<!-- paseo-supervisor-notebook-record-v1 -->";
+const MAX_EPISODE_NOTEBOOK_BYTES = 128 * 1024;
+const MAX_EPISODE_NOTEBOOK_RECORDS = 64;
+const MAX_EPISODE_HANDOFF_PACKETS = 32;
+
+function episodeAssignmentSource(
+  binding: PersistedRoleBinding | undefined,
+): EpisodeAssignmentSource | null {
+  const contract = binding?.assignmentContract;
+  if (!contract) return null;
+  return {
+    receipt: contract.receipt,
+    objective: contract.envelope.objective,
+    effectClass: contract.envelope.effectClass,
+    roleId: contract.receipt.roleId,
+    handbackAndStop: contract.envelope.handbackAndStop,
+    evidence: contract.envelope.evidence,
+  };
+}
+
+function unavailableEpisodeActivity(reason: string): EpisodeActivitySource {
+  return { status: "unavailable", rows: [], truncated: false, reason };
+}
+
+function unavailableEpisodeNotebook(reason: string): EpisodeNotebookSource {
+  return {
+    status: "unavailable",
+    location: null,
+    revision: null,
+    records: [],
+    parseErrors: 0,
+    reason,
+  };
+}
+
+function unavailableEpisodeHandoff(reason: string): EpisodeHandoffSource {
+  return { status: "unavailable", packets: [], reason };
+}
+
+function unavailableEpisodeProject(
+  reason: string,
+  status: EpisodeProjectSource["status"] = "unavailable",
+): EpisodeProjectSource {
+  return {
+    status,
+    projectId: null,
+    workspaceId: null,
+    cwd: null,
+    rootPath: null,
+    reason,
+  };
+}
+
+function episodeProjectIdentityIsCurrent(input: {
+  target: StoredAgentRecord;
+  binding: NonNullable<PersistedRoleBinding["harnessBinding"]>;
+  workspace: { workspaceId: string; cwd: string };
+  project: { projectId: string; rootPath: string };
+  workspaceRoot: string;
+}): boolean {
+  return (
+    input.target.workspaceId === input.binding.workspaceId &&
+    input.workspace.workspaceId === input.binding.workspaceId &&
+    input.workspace.cwd === input.binding.workspaceRoot &&
+    input.project.projectId === input.binding.projectId &&
+    input.project.rootPath === input.binding.projectRoot &&
+    input.target.cwd === input.binding.cwd &&
+    isRealpathInsideRoot(input.workspaceRoot, input.target.cwd)
+  );
+}
+
+async function resolveEpisodeProjectTopology(
+  projectRegistry: Pick<ProjectRegistry, "list">,
+  target: StoredAgentRecord,
+  workspaceRoot: string,
+  projectId: string,
+): Promise<"available" | "unavailable" | "stale" | "ambiguous"> {
+  const registeredProjects = await projectRegistry.list().catch(() => null);
+  if (!registeredProjects) return "unavailable";
+  const topology = resolveRegisteredProjectForWorkspaceCwd({
+    cwd: target.cwd,
+    workspaceRoot,
+    projectId,
+    registeredProjects,
+  });
+  if (topology.status === "allowed") return "available";
+  return topology.reason === "ambiguous_registered_roots" ? "ambiguous" : "stale";
+}
+
+function episodeProjectTopologyReason(status: "unavailable" | "stale" | "ambiguous"): string {
+  if (status === "unavailable") return "registered project topology is unavailable";
+  if (status === "ambiguous") return "registered workspace/project topology is ambiguous";
+  return "registered workspace/project topology does not own target cwd";
+}
+
+async function readEpisodeProjectSource(
+  options: PaseoToolHostDependencies,
+  target: StoredAgentRecord | null,
+  targetBinding: PersistedRoleBinding | undefined,
+): Promise<EpisodeProjectSource> {
+  if (!target?.workspaceId || !options.workspaceRegistry || !options.projectRegistry) {
+    return unavailableEpisodeProject("registered workspace/project source is unavailable");
+  }
+  const binding = targetBinding?.harnessBinding;
+  if (!binding?.workspaceRoot) {
+    return unavailableEpisodeProject("target harness project identity is missing", "stale");
+  }
+  const workspace = await options.workspaceRegistry.get(target.workspaceId).catch(() => null);
+  if (!workspace || workspace.archivedAt) {
+    return unavailableEpisodeProject("target workspace is unavailable or archived");
+  }
+  const project = await options.projectRegistry.get(workspace.projectId).catch(() => null);
+  if (!project || project.archivedAt) {
+    return unavailableEpisodeProject("target project is unavailable or archived");
+  }
+  const workspaceRoot = workspace.cwd ?? project.rootPath;
+  if (!episodeProjectIdentityIsCurrent({ target, binding, workspace, project, workspaceRoot })) {
+    return unavailableEpisodeProject(
+      "target harness project/workspace/cwd identity is stale",
+      "stale",
+    );
+  }
+  const topologyStatus = await resolveEpisodeProjectTopology(
+    options.projectRegistry,
+    target,
+    workspaceRoot,
+    project.projectId,
+  );
+  if (topologyStatus !== "available") {
+    return unavailableEpisodeProject(episodeProjectTopologyReason(topologyStatus), topologyStatus);
+  }
+  return {
+    status: "available",
+    projectId: project.projectId,
+    workspaceId: workspace.workspaceId,
+    cwd: target.cwd,
+    rootPath: project.rootPath,
+  };
+}
+
+async function readEpisodeActivitySource(
+  agentManager: AgentManager,
+  targetAgentId: string,
+  request: EpisodeReportRequest,
+): Promise<EpisodeActivitySource> {
+  try {
+    // This is the existing durable timeline seam. It never loads/resumes a
+    // provider session, and the explicit request supplies the hard row cap.
+    const fetched = await agentManager.fetchDurableTimeline(targetAgentId, {
+      direction: "tail",
+      limit: request.window.maxActivityItems,
+    });
+    const rows = fetched.rows.slice(0, request.window.maxActivityItems);
+    const truncated = fetched.hasOlder || fetched.rows.length > rows.length;
+    if (fetched.staleCursor) {
+      return {
+        status: "stale",
+        rows,
+        truncated,
+        reason: "durable activity cursor is stale",
+      };
+    }
+    if (fetched.reset || fetched.gap) {
+      return {
+        status: "ambiguous",
+        rows,
+        truncated,
+        reason: "durable activity contains a reset or sequence gap",
+      };
+    }
+    return { status: "available", rows, truncated };
+  } catch {
+    return unavailableEpisodeActivity("durable activity source is unavailable");
+  }
+}
+
+function parseEpisodeNotebookRecords(content: string): {
+  records: SupervisorNotebookRecord[];
+  parseErrors: number;
+} {
+  const lines = content.split(/\r?\n/u);
+  const records: SupervisorNotebookRecord[] = [];
+  let parseErrors = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index]?.trim() !== EPISODE_NOTEBOOK_RECORD_MARKER) continue;
+    const payload = lines[index + 1]?.trim();
+    if (!payload) {
+      parseErrors += 1;
+      continue;
+    }
+    const parsed = SupervisorNotebookRecordSchema.safeParse(safeParseEpisodeJson(payload));
+    if (!parsed.success) {
+      parseErrors += 1;
+      continue;
+    }
+    if (records.length < MAX_EPISODE_NOTEBOOK_RECORDS) {
+      records.push(parsed.data);
+    } else {
+      parseErrors += 1;
+    }
+    index += 1;
+  }
+  return { records, parseErrors };
+}
+
+function safeParseEpisodeJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function sameEpisodeNotebookRevision(
+  left: ProjectNotebookRevision,
+  right: NonNullable<EpisodeReportRequest["notebookRevision"]>,
+): boolean {
+  return left.mtimeMs === right.mtimeMs && left.size === right.size && left.sha256 === right.sha256;
+}
+
+type EpisodeNotebookLocationResolution = { location: string } | { source: EpisodeNotebookSource };
+
+interface EpisodeNotebookIdentityFields {
+  notebookId: string;
+  location: string;
+}
+
+function episodeNotebookIdentityConflict(input: {
+  projectId: string;
+  claim?: EpisodeNotebookIdentityFields;
+  durableIdentity?: EpisodeNotebookIdentityFields;
+  targetBinding: PersistedRoleBinding | undefined;
+}): string | null {
+  if (
+    input.claim &&
+    input.durableIdentity &&
+    (input.claim.notebookId !== input.durableIdentity.notebookId ||
+      input.claim.location !== input.durableIdentity.location)
+  ) {
+    return "durable notebook identity does not match its writer claim";
+  }
+  const binding = input.targetBinding?.harnessBinding;
+  const bindingNotebook = binding?.notebook;
+  if (binding?.projectId && binding.projectId !== input.projectId) {
+    return "target harness binding project does not match registry";
+  }
+  const configuredIdentity = input.durableIdentity ?? input.claim;
+  if (
+    bindingNotebook &&
+    configuredIdentity &&
+    (bindingNotebook.notebookId !== configuredIdentity.notebookId ||
+      bindingNotebook.location !== configuredIdentity.location)
+  ) {
+    return "target harness notebook binding is stale";
+  }
+  if (bindingNotebook && !input.claim && bindingNotebook.designatedWriterId !== null) {
+    return "target harness notebook claim was revoked";
+  }
+  return null;
+}
+
+function resolveEpisodeNotebookLocation(
+  project: EpisodeProjectSource,
+  targetBinding: PersistedRoleBinding | undefined,
+): EpisodeNotebookLocationResolution {
+  const metadata = inspectHarnessProjectMetadata(
+    project.rootPath!,
+    DEFAULT_HARNESS_PROJECT_METADATA_PATH,
+  );
+  if (metadata.status === "unreadable") {
+    return { source: unavailableEpisodeNotebook("harness metadata is unreadable") };
+  }
+  if (metadata.status === "corrupt") {
+    return {
+      source: { ...unavailableEpisodeNotebook("harness metadata is corrupt"), status: "ambiguous" },
+    };
+  }
+
+  const claim = metadata.status === "valid" ? metadata.metadata.supervisorNotebook : undefined;
+  const durableIdentity =
+    metadata.status === "valid" ? metadata.metadata.supervisorNotebookIdentity : undefined;
+  const conflict = episodeNotebookIdentityConflict({
+    projectId: project.projectId!,
+    claim,
+    durableIdentity,
+    targetBinding,
+  });
+  if (conflict) {
+    return {
+      source: {
+        ...unavailableEpisodeNotebook(conflict),
+        status: "stale",
+      },
+    };
+  }
+
+  const location =
+    durableIdentity?.location ??
+    claim?.location ??
+    targetBinding?.harnessBinding?.notebook?.location;
+  if (!location) {
+    return {
+      source: {
+        status: "missing",
+        location: null,
+        revision: null,
+        records: [],
+        parseErrors: 0,
+        reason: "no durable supervisor notebook claim is present",
+      },
+    };
+  }
+  return { location };
+}
+
+function readEpisodeNotebookFile(
+  projectRoot: string,
+  location: string,
+  request: EpisodeReportRequest,
+): EpisodeNotebookSource {
+  const snapshot = inspectProjectNotebook(projectRoot, location);
+  if (snapshot.status === "missing") {
+    return {
+      status: "missing",
+      location,
+      revision: null,
+      records: [],
+      parseErrors: 0,
+      reason: "designated supervisor notebook file is missing",
+    };
+  }
+  if (snapshot.status === "unreadable") {
+    return {
+      status: "unavailable",
+      location,
+      revision: null,
+      records: [],
+      parseErrors: 0,
+      reason: "designated supervisor notebook file is unreadable",
+    };
+  }
+  if (snapshot.revision.size > MAX_EPISODE_NOTEBOOK_BYTES) {
+    return {
+      status: "ambiguous",
+      location,
+      revision: snapshot.revision,
+      records: [],
+      parseErrors: 0,
+      reason: "designated supervisor notebook exceeds the bounded report size",
+    };
+  }
+  if (
+    request.notebookRevision &&
+    !sameEpisodeNotebookRevision(snapshot.revision, request.notebookRevision)
+  ) {
+    return {
+      status: "stale",
+      location,
+      revision: snapshot.revision,
+      records: [],
+      parseErrors: 0,
+      reason: "designated supervisor notebook revision does not match the request",
+    };
+  }
+  const parsed = parseEpisodeNotebookRecords(snapshot.content);
+  return {
+    status: parsed.parseErrors > 0 ? "ambiguous" : "available",
+    location,
+    revision: snapshot.revision,
+    records: parsed.records,
+    parseErrors: parsed.parseErrors,
+    ...(parsed.parseErrors > 0
+      ? { reason: "one or more notebook record markers were invalid or exceeded the bound" }
+      : {}),
+  };
+}
+
+function readEpisodeNotebookSource(
+  project: EpisodeProjectSource,
+  targetBinding: PersistedRoleBinding | undefined,
+  request: EpisodeReportRequest,
+): EpisodeNotebookSource {
+  if (project.status !== "available" || !project.rootPath || !project.projectId) {
+    return unavailableEpisodeNotebook("registered project source is unavailable");
+  }
+  const resolved = resolveEpisodeNotebookLocation(project, targetBinding);
+  return "source" in resolved
+    ? resolved.source
+    : readEpisodeNotebookFile(project.rootPath, resolved.location, request);
+}
+
+function readEpisodeHandoffSource(target: StoredAgentRecord | null): EpisodeHandoffSource {
+  if (!target) return unavailableEpisodeHandoff("target lifecycle record is unavailable");
+  const packets = target.leadHandoffs ?? [];
+  if (packets.length > MAX_EPISODE_HANDOFF_PACKETS) {
+    return {
+      status: "ambiguous",
+      packets: packets.slice(-MAX_EPISODE_HANDOFF_PACKETS),
+      reason: "handoff packet history exceeded the bounded report limit",
+    };
+  }
+  return { status: "available", packets };
+}
+
+function episodeSourcesForResolution(
+  resolution: ProductionCheckpointResolution,
+  project: EpisodeProjectSource,
+  activity: EpisodeActivitySource,
+  notebook: EpisodeNotebookSource,
+  handoff: EpisodeHandoffSource,
+  authorizedSources: boolean,
+): AgentEpisodeReportSources {
+  return {
+    callerAgentId: resolution.sources.caller.agentId,
+    targetAgentId: resolution.sources.target.agentId,
+    callerRoleId: resolution.sources.caller.roleId,
+    relationshipToTarget: resolution.relationship,
+    readAuthorization: resolution.sources.readAuthorization,
+    checkpoint: resolution.checkpoint,
+    assignment: authorizedSources ? episodeAssignmentSource(resolution.targetBinding) : null,
+    project,
+    beads: resolution.sources.beads,
+    activity,
+    notebook,
+    handoff,
+  };
+}
+
+async function buildProductionAgentEpisodeReport(input: {
+  options: PaseoToolHostDependencies;
+  callerAgentId: string;
+  targetAgentId: string;
+  request: EpisodeReportRequest;
+  signal?: AbortSignal;
+}): Promise<{
+  checkpoint: ReturnType<typeof buildAgentCheckpoint>;
+  episodeReport: ReturnType<typeof buildAgentEpisodeReport>;
+}> {
+  const resolution = await resolveProductionAgentCheckpoint(input);
+  const episodePolicy = resolution.checkpointPolicy.episodeReport;
+  if (!episodePolicy) throw new Error("episode_report_policy_generation_unavailable");
+
+  if (!resolution.sources.readAuthorization.authorized) {
+    const sources = episodeSourcesForResolution(
+      resolution,
+      unavailableEpisodeProject("episode report authorization denied"),
+      unavailableEpisodeActivity("episode report authorization denied"),
+      unavailableEpisodeNotebook("episode report authorization denied"),
+      unavailableEpisodeHandoff("episode report authorization denied"),
+      false,
+    );
+    return {
+      checkpoint: resolution.checkpoint,
+      episodeReport: buildAgentEpisodeReport(sources, input.request, episodePolicy),
+    };
+  }
+
+  const project = await readEpisodeProjectSource(
+    input.options,
+    resolution.target,
+    resolution.targetBinding,
+  );
+  const assignment = episodeAssignmentSource(resolution.targetBinding);
+  const issueIds =
+    resolution.targetBinding?.assignmentContract?.envelope.resourceGrants?.beadsIssueIds;
+  const exactProject =
+    project.status === "available" && project.projectId === input.request.projectId;
+  const exactAssignment = Boolean(
+    assignment &&
+    assignment.receipt.assignmentDigest === input.request.assignmentDigest &&
+    assignment.objective === input.request.objective,
+  );
+  const exactIssueGrant = issueIds?.length === 1 && issueIds[0] === input.request.issueId;
+  if (!exactProject || !exactAssignment || !exactIssueGrant) {
+    const sources = episodeSourcesForResolution(
+      resolution,
+      project,
+      unavailableEpisodeActivity(
+        "episode identity did not match; bounded activity was not fetched",
+      ),
+      unavailableEpisodeNotebook("episode identity did not match; notebook was not fetched"),
+      unavailableEpisodeHandoff("episode identity did not match; handoff history was not fetched"),
+      true,
+    );
+    return {
+      checkpoint: resolution.checkpoint,
+      episodeReport: buildAgentEpisodeReport(sources, input.request, episodePolicy),
+    };
+  }
+
+  const activity = await readEpisodeActivitySource(
+    input.options.agentManager,
+    input.targetAgentId,
+    input.request,
+  );
+  const notebook = readEpisodeNotebookSource(project, resolution.targetBinding, input.request);
+  const handoff = readEpisodeHandoffSource(resolution.target);
+  const sources = episodeSourcesForResolution(
+    resolution,
+    project,
+    activity,
+    notebook,
+    handoff,
+    true,
+  );
+  return {
+    checkpoint: resolution.checkpoint,
+    episodeReport: buildAgentEpisodeReport(sources, input.request, episodePolicy),
+  };
 }
 
 function parseTimestamp(value: string | null | undefined): number {
@@ -2738,6 +3338,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   }
 
   registerConfiguredBeadsTools(options, registerTool);
+  registerConfiguredProjectNotebookTools(options, registerTool);
 
   if (callerAgentId && options.chatService) {
     if (callerRoleId === "lead") {

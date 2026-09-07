@@ -4,6 +4,10 @@ import type {
   RoleProfileBindingReceipt,
   WorkspaceProtocolBindingReceipt,
 } from "@getpaseo/protocol/role-binding";
+import type {
+  HarnessBindingContext,
+  HarnessBindingReceipt,
+} from "@getpaseo/protocol/harness-binding";
 import type { RoleProfilePreferences } from "@getpaseo/protocol/role-profile";
 
 import type { PersistedAssignmentContract } from "../agent/assignment-contract.js";
@@ -29,6 +33,7 @@ export interface RoleBindingInstructionCompositionInput<
   hasProtocolException: boolean;
   assignmentContract: PersistedAssignmentContract;
   roleProfile: RoleProfileBindingReceipt;
+  harnessBinding?: HarnessBindingReceipt;
 }
 
 /**
@@ -52,6 +57,13 @@ export interface RoleBindingPolicyContribution<TExecutionProfileId extends strin
     assignmentEffectClass: AssignmentEnvelope["effectClass"],
   ): RoleProfileBindingReceipt;
   workspaceProtocolReadership(roleId: PaseoRoleId): WorkspaceProtocolBindingReceipt["readership"];
+  /** SLP-owned immutable Project Harness projection; absent for neutral policies. */
+  materializeHarnessBinding?(input: {
+    roleId: PaseoRoleId;
+    context: HarnessBindingContext;
+  }): HarnessBindingReceipt;
+  /** Revalidate the pinned package/resources without selecting a newer generation. */
+  assertHarnessBindingCurrent?(binding: HarnessBindingReceipt): void;
   composeInstructions(input: RoleBindingInstructionCompositionInput<TExecutionProfileId>): string;
   preflight(input: {
     roleId: PaseoRoleId;

@@ -60,6 +60,7 @@ export const ROLE_TOOL_CEILINGS = {
     "beads_close",
     "beads_add_dependency",
     "beads_prime",
+    "read_project_notebook",
     "list_providers",
     "list_models",
     "inspect_provider",
@@ -78,6 +79,7 @@ export const ROLE_TOOL_CEILINGS = {
     "beads_update",
     "beads_add_dependency",
     "beads_prime",
+    "read_project_notebook",
     ...READ_ONLY_BROWSER_TOOLS,
   ],
   supervisor: [
@@ -107,6 +109,8 @@ export const ROLE_TOOL_CEILINGS = {
     "beads_list",
     "beads_get",
     "beads_prime",
+    "read_project_notebook",
+    "append_project_notebook_record",
     ...READ_ONLY_BROWSER_TOOLS,
   ],
 } as const satisfies Record<PaseoRoleId, readonly string[]>;

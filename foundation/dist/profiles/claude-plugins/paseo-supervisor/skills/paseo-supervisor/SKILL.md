@@ -103,6 +103,14 @@ Không để two Leads split-brain.
 
 Khi binding chỉ ra Supervisor Notebook, chỉ record episode novel/material hoặc materially stronger evidence; aggregate repeated occurrences theo pattern. Suspected mechanism luôn là hypothesis cho tới khi evidence support. Notebook không phải transcript, task tracker, product truth hoặc acceptance authority.
 
+Ghi vào notebook chỉ hợp lệ khi binding hiện tại cấp một explicit grant (`scope` + `expiry`). Grant đó là
+một bounded Product capability do runtime cấp có kiểm soát — **không bao giờ** là một provider/shell
+filesystem write; Supervisor filesystem access vẫn no-write kể cả khi có grant. Nếu package harness
+(`paseo-project-harness`) cấp một `supervisorNotebookTemplate` resource, đó là bootstrap input dùng đúng
+một lần khi tạo notebook mới cho project, không phải instruction đọc lại mỗi turn sau khi notebook đã
+bound. Thiếu grant nghĩa là `observe + propose only`: ghi đề xuất record vào handback text cho Lead/Human
+thay vì tự ý ghi vào notebook.
+
 Material report dùng:
 
 ```text

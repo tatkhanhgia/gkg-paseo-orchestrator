@@ -520,7 +520,7 @@ async function resolveMcpCreateAgent(
   const intent = await resolveCreateAgentIntent({
     explicitWorkspaceId: setupContinuation ? createdWorkspaceId : input.workspaceId,
     caller: parentAgent
-      ? { id: parentAgent.id, cwd: parentAgent.cwd, workspaceId: parentAgent.workspaceId }
+      ? { id: parentAgent.id, cwd: resolvedCwd, workspaceId: parentAgent.workspaceId }
       : null,
     labels: input.labels,
     childAgentDefaultLabels: input.callerContext?.childAgentDefaultLabels,

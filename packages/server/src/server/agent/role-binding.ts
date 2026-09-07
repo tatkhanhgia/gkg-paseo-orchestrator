@@ -31,6 +31,12 @@ import {
   PersistedAssignmentContractSchema,
 } from "./assignment-contract.js";
 import type { RoleBindingPolicyContribution } from "../policy/role-binding-policy.js";
+import type { NotebookGrantResolver } from "../project/notebook-grant-resolver.js";
+import type {
+  HarnessBindingResolver,
+  PreparedHarnessBinding,
+} from "../project/harness-binding-service.js";
+import type { HarnessBindingReceipt } from "@getpaseo/protocol/harness-binding";
 
 export const WORKSPACE_PROTOCOL_ADMISSION_ERROR = "workspace_protocol_admission_required";
 export const ASSIGNMENT_CONTRACT_EXPIRED_ERROR = "assignment_contract_expired";
@@ -69,6 +75,23 @@ export interface MaterializeRoleBindingInput<TExecutionProfileId extends string 
   assignmentAssigner: AssignmentAssignerReceipt;
   roleProfilePreferences?: RoleProfilePreferences;
   createdAt?: Date;
+  /**
+   * Identity of the agent this binding is being materialized for. Required
+   * for policy-owned durable Project Harness bindings; a notebook grant is
+   * always established for one exact caller identity, never inferred or
+   * accepted as unauthenticated tool input.
+   */
+  agentId?: string;
+  /** Generic kernel seam; SLP/project semantics live entirely in the resolver. */
+  resolveNotebookGrant?: NotebookGrantResolver;
+  /** Two-phase durable Project Harness binding used by SLP role admission. */
+  resolveHarnessBinding?: HarnessBindingResolver;
+}
+
+export interface PreparedRoleBinding {
+  binding: PersistedRoleBinding;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
 }
 
 function sha256(value: string): string {
@@ -312,7 +335,8 @@ export function preflightWorkspaceProtocolAdmission(input: {
 }): void {
   const performsMaterialWork =
     input.assignment.mutationBoundary.mode !== "no-write" ||
-    input.assignment.externalEffectBoundary.mode !== "denied";
+    input.assignment.externalEffectBoundary.mode !== "denied" ||
+    input.assignment.notebookGrant !== undefined;
   requireWorkspaceProtocol(
     input.cwd,
     input.readership,
@@ -320,13 +344,10 @@ export function preflightWorkspaceProtocolAdmission(input: {
   );
 }
 
-export async function materializeRoleBindingWithPolicy<TExecutionProfileId extends string>(
-  input: MaterializeRoleBindingInput<TExecutionProfileId>,
-  policy: RoleBindingPolicyContribution<TExecutionProfileId>,
-): Promise<PersistedRoleBinding> {
-  const support =
-    input.providerSupport ??
-    resolveProviderRoleBindingSupport(input.provider, input.providerBaseId);
+function assertProviderRoleBindingAdmission(
+  input: MaterializeRoleBindingInput,
+  support: ProviderRoleBindingSupport,
+): Extract<ProviderRoleBindingSupport, { status: "supported" }> {
   if (support.roleIds && !support.roleIds.includes(input.roleId)) {
     throw new Error(
       `Provider '${input.provider}' cannot bind Paseo role '${input.roleId}': provider eligibility is limited to role(s): ${support.roleIds.join(", ")}`,
@@ -342,8 +363,29 @@ export async function materializeRoleBindingWithPolicy<TExecutionProfileId exten
       `Provider '${input.provider}' cannot bind Paseo role '${input.roleId}': provider eligibility is limited to role(s): ${support.roleIds?.join(", ") ?? "none"}`,
     );
   }
+  return support;
+}
 
-  const createdAt = input.createdAt ?? new Date();
+function aggregateWithCause(
+  errors: readonly unknown[],
+  message: string,
+  cause: unknown,
+): AggregateError {
+  const aggregate = new AggregateError(errors, message);
+  Object.defineProperty(aggregate, "cause", {
+    configurable: true,
+    enumerable: false,
+    value: cause,
+    writable: true,
+  });
+  return aggregate;
+}
+
+function buildRoleBindingComponents<TExecutionProfileId extends string>(
+  input: MaterializeRoleBindingInput<TExecutionProfileId>,
+  policy: RoleBindingPolicyContribution<TExecutionProfileId>,
+  createdAt: Date,
+) {
   const validatedAssignment = policy.preflight({
     roleId: input.roleId,
     executionProfileId: input.executionProfileId,
@@ -381,46 +423,194 @@ export async function materializeRoleBindingWithPolicy<TExecutionProfileId exten
   const hasProtocolException = envelope.protocolException !== undefined;
   const performsMaterialWork =
     envelope.mutationBoundary.mode !== "no-write" ||
-    envelope.externalEffectBoundary.mode !== "denied";
+    envelope.externalEffectBoundary.mode !== "denied" ||
+    envelope.notebookGrant !== undefined;
   const workspaceProtocol = requireWorkspaceProtocol(
     input.cwd,
     policy.workspaceProtocolReadership(input.roleId),
     hasProtocolException || !performsMaterialWork,
   );
-  const instructions = policy.composeInstructions({
-    definition,
-    executionProfile,
-    workspaceProtocol,
-    hasProtocolException,
-    assignmentContract,
-    roleProfile,
-  });
-
   return {
-    policyOwner: PolicyOwnerSchema.parse(input.policyOwner ?? LEGACY_CORE_POLICY_OWNER),
-    roleId: input.roleId,
-    definitionVersion: definition.version,
-    definitionDigest: sha256(definition.instructions),
-    bindingDigest: sha256(instructions),
-    provider: input.provider,
-    injectionMethod: support.injectionMethod,
-    qualification: "implementation-supported",
-    workspaceProtocol,
-    assignment: assignmentContract.receipt,
-    roleProfile,
     assignmentContract,
-    createdAt: createdAt.toISOString(),
-    instructions,
-    ...(executionProfile
-      ? {
-          executionProfile: {
-            id: executionProfile.id,
-            version: executionProfile.version,
-            definitionDigest: policy.executionProfileDefinitionDigest(executionProfile),
-          },
-        }
-      : {}),
+    definition,
+    roleProfile,
+    executionProfile,
+    hasProtocolException,
+    workspaceProtocol,
   };
+}
+
+async function prepareHarnessBindingForRole<TExecutionProfileId extends string>(
+  input: MaterializeRoleBindingInput<TExecutionProfileId>,
+  policy: RoleBindingPolicyContribution<TExecutionProfileId>,
+  assignmentContract: ReturnType<typeof materializeAssignmentContract>,
+): Promise<{
+  assignmentContract: ReturnType<typeof materializeAssignmentContract>;
+  harnessBinding: HarnessBindingReceipt | undefined;
+  preparedHarnessBinding: PreparedHarnessBinding | undefined;
+}> {
+  let preparedHarnessBinding: PreparedHarnessBinding | undefined;
+  try {
+    if (policy.materializeHarnessBinding) {
+      if (!input.resolveHarnessBinding || !input.agentId) {
+        throw new Error(
+          "harness_binding_resolver_required: every SLP role binding needs an injected durable Project Harness resolver and agent identity",
+        );
+      }
+      preparedHarnessBinding = await input.resolveHarnessBinding.prepare({
+        agentId: input.agentId,
+        roleId: input.roleId,
+        workspaceId: input.workspaceId,
+        cwd: input.cwd,
+        ...(assignmentContract.envelope.notebookGrant
+          ? { request: assignmentContract.envelope.notebookGrant }
+          : {}),
+      });
+      const harnessBinding = policy.materializeHarnessBinding({
+        roleId: input.roleId,
+        context: preparedHarnessBinding.context,
+      });
+      if (assignmentContract.envelope.notebookGrant && !preparedHarnessBinding.notebookGrant) {
+        throw new Error("notebook_grant_resolution_missing_receipt");
+      }
+      if (!preparedHarnessBinding.notebookGrant) {
+        return { assignmentContract, harnessBinding, preparedHarnessBinding };
+      }
+      return {
+        assignmentContract: PersistedAssignmentContractSchema.parse({
+          envelope: assignmentContract.envelope,
+          receipt: {
+            ...assignmentContract.receipt,
+            notebookGrant: preparedHarnessBinding.notebookGrant,
+          },
+        }),
+        harnessBinding,
+        preparedHarnessBinding,
+      };
+    }
+    if (assignmentContract.envelope.notebookGrant) {
+      throw new Error(
+        "notebook_grant_policy_unsupported: only the SLP Project Harness policy may issue notebook grants",
+      );
+    }
+    return { assignmentContract, harnessBinding: undefined, preparedHarnessBinding: undefined };
+  } catch (error) {
+    if (preparedHarnessBinding) {
+      try {
+        await preparedHarnessBinding.rollback();
+      } catch (rollbackError) {
+        throw aggregateWithCause(
+          [error, rollbackError],
+          "role_binding_prepare_harness_failed_and_rollback_failed",
+          rollbackError,
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+export async function prepareRoleBindingWithPolicy<TExecutionProfileId extends string>(
+  input: MaterializeRoleBindingInput<TExecutionProfileId>,
+  policy: RoleBindingPolicyContribution<TExecutionProfileId>,
+): Promise<PreparedRoleBinding> {
+  const candidateSupport =
+    input.providerSupport ??
+    resolveProviderRoleBindingSupport(input.provider, input.providerBaseId);
+  const support = assertProviderRoleBindingAdmission(input, candidateSupport);
+
+  const createdAt = input.createdAt ?? new Date();
+  const components = buildRoleBindingComponents(input, policy, createdAt);
+  const preparedHarness = await prepareHarnessBindingForRole(
+    input,
+    policy,
+    components.assignmentContract,
+  );
+  const { assignmentContract, harnessBinding, preparedHarnessBinding } = preparedHarness;
+  try {
+    const instructions = policy.composeInstructions({
+      definition: components.definition,
+      executionProfile: components.executionProfile,
+      workspaceProtocol: components.workspaceProtocol,
+      hasProtocolException: components.hasProtocolException,
+      assignmentContract,
+      roleProfile: components.roleProfile,
+      ...(harnessBinding ? { harnessBinding } : {}),
+    });
+
+    const binding: PersistedRoleBinding = {
+      policyOwner: PolicyOwnerSchema.parse(input.policyOwner ?? LEGACY_CORE_POLICY_OWNER),
+      roleId: input.roleId,
+      definitionVersion: components.definition.version,
+      definitionDigest: sha256(components.definition.instructions),
+      bindingDigest: sha256(instructions),
+      provider: input.provider,
+      injectionMethod: support.injectionMethod,
+      qualification: "implementation-supported",
+      workspaceProtocol: components.workspaceProtocol,
+      assignment: assignmentContract.receipt,
+      roleProfile: components.roleProfile,
+      assignmentContract,
+      createdAt: createdAt.toISOString(),
+      instructions,
+      ...(harnessBinding ? { harnessBinding } : {}),
+      ...(components.executionProfile
+        ? {
+            executionProfile: {
+              id: components.executionProfile.id,
+              version: components.executionProfile.version,
+              definitionDigest: policy.executionProfileDefinitionDigest(
+                components.executionProfile,
+              ),
+            },
+          }
+        : {}),
+    };
+    return {
+      binding,
+      commit: async () => {
+        if (preparedHarnessBinding) await preparedHarnessBinding.commit();
+      },
+      rollback: async () => {
+        if (preparedHarnessBinding) await preparedHarnessBinding.rollback();
+      },
+    };
+  } catch (error) {
+    if (preparedHarnessBinding) {
+      try {
+        await preparedHarnessBinding.rollback();
+      } catch (rollbackError) {
+        throw aggregateWithCause(
+          [error, rollbackError],
+          "role_binding_prepare_failed_and_harness_rollback_failed",
+          rollbackError,
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+export async function materializeRoleBindingWithPolicy<TExecutionProfileId extends string>(
+  input: MaterializeRoleBindingInput<TExecutionProfileId>,
+  policy: RoleBindingPolicyContribution<TExecutionProfileId>,
+): Promise<PersistedRoleBinding> {
+  const prepared = await prepareRoleBindingWithPolicy(input, policy);
+  try {
+    await prepared.commit();
+    return prepared.binding;
+  } catch (error) {
+    try {
+      await prepared.rollback();
+    } catch (rollbackError) {
+      throw aggregateWithCause(
+        [error, rollbackError],
+        "role_binding_commit_failed_and_harness_rollback_failed",
+        rollbackError,
+      );
+    }
+    throw error;
+  }
 }
 
 export function toRoleBindingReceipt(binding: PersistedRoleBinding): RoleBindingReceipt {
@@ -432,7 +622,9 @@ function assertAdmissionTimestampCurrent(
   now: Date,
   field: "expiresAt" | "protocolExceptionExpiresAt",
 ): void {
-  if (value !== undefined && Date.parse(value) <= now.getTime()) {
+  if (value !== undefined) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed) && parsed > now.getTime()) return;
     throw new Error(`${ASSIGNMENT_CONTRACT_EXPIRED_ERROR}: ${field}=${value}`);
   }
 }
@@ -501,7 +693,8 @@ export function assertPersistedRoleAdmissionCurrent(
   }
   const performsMaterialWork =
     assignment.mutationBoundary.mode !== "no-write" ||
-    assignment.externalEffectBoundary.mode !== "denied";
+    assignment.externalEffectBoundary.mode !== "denied" ||
+    assignment.notebookGrant !== undefined;
   if (performsMaterialWork && !assignment.protocolExceptionExpiresAt) {
     throw new Error(
       `${WORKSPACE_PROTOCOL_ADMISSION_ERROR}: missing_protocol_blocks_material_assignment: ${current.path}`,

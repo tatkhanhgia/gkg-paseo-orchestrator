@@ -70,6 +70,21 @@ import {
   createNonSlpFixtureRegistry,
 } from "../policy/non-slp-fixture-policy.js";
 import { createTrustedPolicyPackResolver } from "../policy/trusted-policy.js";
+import { createProjectHarnessBindingService } from "../project/harness-binding-service.js";
+
+function testHarnessResolver(projectRoot: string) {
+  return createProjectHarnessBindingService({
+    workspaceRegistry: {
+      get: async (workspaceId) =>
+        ({ workspaceId, projectId: "project-test", cwd: projectRoot, archivedAt: null }) as never,
+    },
+    projectRegistry: {
+      get: async (projectId) => ({ projectId, rootPath: projectRoot, archivedAt: null }) as never,
+      list: async () =>
+        [{ projectId: "project-test", rootPath: projectRoot, archivedAt: null }] as never,
+    },
+  });
+}
 
 function leadAssignment(
   effectClass: AssignmentEnvelope["effectClass"] = "read-only",
@@ -686,6 +701,7 @@ async function startAndSteerThroughManager(
     activeTurnBehavior: behavior,
     runOptions: { clientMessageId: "replacement-client" },
   });
+  await manager.waitForAgentRunStart(agent.id);
   return { manager, agentId: agent.id, workdir };
 }
 
@@ -11688,6 +11704,7 @@ test("role-bound create persists immutable binding and passes only launch instru
     clients: { codex: client },
     bundledPolicyPacks,
     registry: storage,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
     idFactory: () => "00000000-0000-4000-8000-000000000116",
     mcpBaseUrl: "http://127.0.0.1:6767/mcp/agents",
@@ -11957,6 +11974,7 @@ test("daemon-style reload preserves the pinned SLP owner and exact native instru
     clients: { codex: firstClient },
     registry: storage,
     bundledPolicyPacks: firstBundledPolicyPacks,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
   });
 
@@ -11980,6 +11998,7 @@ test("daemon-style reload preserves the pinned SLP owner and exact native instru
       clients: { codex: restartedClient },
       registry: storage,
       bundledPolicyPacks: restartedBundledPolicyPacks,
+      resolveHarnessBinding: testHarnessResolver(workdir),
       logger,
     });
     const restored = await ensureAgentLoaded(created.id, {
@@ -12056,6 +12075,7 @@ test("mutating Peer grant verification rejects before provider launch and state 
     .mockRejectedValue(new Error("beads_issue_grant_verification_failed: missing issue"));
   const manager = new AgentManager({
     clients: { codex: client },
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
     verifyRoleResourceGrants,
   });
@@ -12142,6 +12162,7 @@ test("Council specialization persists exact bytes through create and resume", as
   const manager = new AgentManager({
     clients: { codex: client },
     registry: storage,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
   });
 
@@ -12236,6 +12257,7 @@ test("preapproves the exact Paseo role-tool ceiling and trusted Semble tools", a
       codex: { enabled: true, supportsExactMcpPreapproval: true },
     },
     registry: storage,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
     idFactory: () => "00000000-0000-4000-8000-000000000118",
     mcpBaseUrl: "http://127.0.0.1:6767/mcp/agents",
@@ -12431,6 +12453,7 @@ test("Antigravity Peer fails before launch when its bridge cannot carry mandator
         },
       },
     },
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
   });
 

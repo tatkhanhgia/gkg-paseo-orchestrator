@@ -187,6 +187,7 @@ import { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { DaemonConfigBrowserToolsPolicy } from "./browser-tools/policy.js";
 import { BeadsCentralService } from "./beads/beads-central-service.js";
 import { createMutatingPeerGrantVerifier } from "./beads/beads-grant-verifier.js";
+import { createNotebookGrantResolver } from "./project/notebook-grant-resolver.js";
 import { FoundationCredentialStore } from "./foundation-credential-store.js";
 import { WorkspaceGitServiceImpl } from "./workspace-git-service.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
@@ -1086,6 +1087,10 @@ export async function createPaseoDaemon(
     config.paseoHome,
     logger,
   );
+  const harnessBindingResolver = createNotebookGrantResolver({
+    workspaceRegistry,
+    projectRegistry,
+  });
   const agentManager = new AgentManager({
     durableTimelineStore: timelineStore,
     clients: initialAgentManagerState.clients,
@@ -1105,6 +1110,8 @@ export async function createPaseoDaemon(
       service: beadsService,
       workspaceRegistry,
     }),
+    resolveNotebookGrant: harnessBindingResolver,
+    resolveHarnessBinding: harnessBindingResolver,
     logger,
   });
 

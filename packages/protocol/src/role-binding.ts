@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AssignmentContractReceiptSchema } from "./assignment-contract.js";
+import { HarnessBindingReceiptSchema } from "./harness-binding.js";
 import { PolicyOwnerSchema } from "./policy-owner.js";
 
 export const PASEO_ROLE_IDS = ["lead", "peer", "supervisor"] as const;
@@ -106,6 +107,9 @@ export const RoleBindingReceiptSchema = z.object({
   assignment: AssignmentContractReceiptSchema.optional(),
   // COMPAT(roleProfiles): agents created before host role profiles omit this immutable snapshot.
   roleProfile: RoleProfileBindingReceiptSchema.optional(),
+  // COMPAT(harnessBinding): added in R1; legacy persisted bindings omit the
+  // receipt and must not be used for a new SLP launch.
+  harnessBinding: HarnessBindingReceiptSchema.optional(),
   createdAt: z.string(),
 });
 export type RoleBindingReceipt = z.infer<typeof RoleBindingReceiptSchema>;

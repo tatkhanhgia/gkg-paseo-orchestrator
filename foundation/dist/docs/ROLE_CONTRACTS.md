@@ -56,6 +56,10 @@ Lead phải:
 - review stable candidate và dùng proportional evidence;
 - dùng Reviewer/Council theo risk, không theo ceremony;
 - preserve objective, accepted decisions, ownership, unknowns và next action khi handoff.
+- khi project có `paseo-project-harness` package binding (xem
+  [`templates/harness/README.md`](../templates/harness/README.md)), `entryMap` là mandatory standing
+  resource, không thể deselect; dùng nó để tìm authority/validation của repository và route Peer đúng
+  resource slice, không phải cả harness.
 
 Lead chỉ viết product dưới exact tiny-task lease khi applicable Human/repository/protocol binding cho
 phép và transfer không thêm independent judgment. Lead không implement rồi tự accept material change.
@@ -72,6 +76,9 @@ Peer phải:
 - dùng `REOPEN_REQUEST`, `DEPENDENCY_REQUEST`, `BLOCKED` hoặc `COUNCIL_REQUEST` cho material conflict;
 - preserve unrelated state, tự verify writes và hand back exact artifact/evidence;
 - không create/coordinate/replace agent, không tự mở rộng scope và không claim acceptance.
+- khi assignment mang `paseo-project-harness` package binding, `entryMap` là mandatory standing minimum,
+  không thể deselect; chỉ dùng đúng resource slice Lead đã assign, không tự đọc/áp dụng resource khác
+  của harness ngoài assignment.
 
 `Engineer` cần exact write lease và nhận ownership của đúng moving scope được giao. Mọi disposition không có write lease giữ non-mutating bằng
 provider/OS no-write boundary đã qualify; nếu boundary đó unavailable thì launch fail closed. Reviewer
@@ -102,6 +109,12 @@ Supervisor phải:
 - có thể propose protocol/profile change nhưng không tự apply;
 - khi exact Human recovery lease cho phép và Lead unavailable hoặc continued action tạo material lease/safety/irreversibility risk: có thể gửi bounded `STOP`/`FREEZE` hoặc relay exact Human decision trực tiếp tới Peer, đồng thời notify Lead/Human và preserve evidence;
 - khi replacement được authorize: checkpoint → handoff → revoke old Lead → activate new Lead → reconcile/ACK.
+- khi assignment mang `paseo-project-harness` package binding, `entryMap` là mandatory standing minimum,
+  không thể deselect; resource template notebook (nếu có trong package) chỉ là bootstrap input dùng một
+  lần khi tạo notebook mới, không phải instruction đọc lại sau khi notebook đã bound. Ghi vào notebook chỉ
+  qua một explicit bounded Product capability (scope + expiry) trong binding hiện tại — đây không bao giờ
+  là provider filesystem write, và filesystem access của Supervisor vẫn no-write dù có grant đó. Thiếu
+  grant nghĩa là observe + propose only.
 
 Ngoài bounded recovery exception trên, Supervisor không plan/staff product work, direct Peer, chọn product architecture, mutate/review product thay Peer hoặc accept engineering result. Recovery không cấp quyền giao solution, mở rộng scope, chuyển ownership ngầm hoặc duy trì parallel command chain. Full runtime capability không đổi boundary này.
 

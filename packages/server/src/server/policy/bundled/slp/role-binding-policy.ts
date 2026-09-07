@@ -3,6 +3,10 @@ import type {
   RoleProfileBindingReceipt,
   WorkspaceProtocolBindingReceipt,
 } from "@getpaseo/protocol/role-binding";
+import type {
+  HarnessBindingContext,
+  HarnessBindingReceipt,
+} from "@getpaseo/protocol/harness-binding";
 
 import {
   buildSlpAssignmentInstruction,
@@ -13,6 +17,11 @@ import {
   getFoundationExecutionProfileDefinition,
   SLP_EXECUTION_PROFILE_POLICY,
 } from "./execution-profiles.js";
+import {
+  buildHarnessPackageArtifactDescriptor,
+  loadHarnessPackageDescriptor,
+  projectRoleHarnessResources,
+} from "./harness-package-policy.js";
 import { getFoundationRoleDefinition } from "./role-definitions.js";
 import { materializeRoleProfileBindingReceipt } from "./role-profiles.js";
 import { loadFoundationSkillPolicy } from "./skill-policy.js";
@@ -71,12 +80,40 @@ function buildBeadsSkillAdmissionInstruction(
   return "Role skill admission: `beads-issue-tracker` is active from the immutable Foundation bundle. Its assignment-start checkpoint, mutation boundary, and handback rule are projected in the Assignment Contract above; do not search for or load a second copy.";
 }
 
+/**
+ * Mandatory Project Harness admission for EVERY SLP role, including Peer.
+ * Unlike `buildBeadsSkillAdmissionInstruction`, this is never gated on
+ * `roleProfile.allowedSkills` or any `roleProfilePreferences` opt-out — a
+ * role cannot deselect its own harness minimum. This function only reads the
+ * immutable imported bundle (`loadHarnessPackageDescriptor`) and states the
+ * role's already-validated minimum resource path(s); it performs no file
+ * writes and never invents bootstrap state (H2's inspect/preview/apply RPC
+ * owns actually materializing `docs/harness/*` into a project).
+ */
+function buildHarnessAdmissionInstruction(
+  roleId: PaseoRoleId,
+  harnessBinding: HarnessBindingReceipt,
+): string {
+  const entryMap = harnessBinding.resources.find((resource) => resource.key === "entryMap");
+  if (!entryMap) {
+    throw new Error(`harness_binding_missing_role_minimum: ${roleId}: entryMap`);
+  }
+  const resourcePins = harnessBinding.resources
+    .map((resource) => `${resource.key}=${resource.path}#${resource.digest}`)
+    .join(", ");
+  return `Mandatory Project Harness admission (package ${harnessBinding.package}, generation ${harnessBinding.generation}, artifact ${harnessBinding.artifactDigest}; project=${harnessBinding.projectId}, workspace=${harnessBinding.workspaceId}): read ${entryMap.path} before orchestration. Pinned resources: ${resourcePins}. This is a mandatory role minimum, not an optional skill — it cannot be declined via role-profile preferences.`;
+}
+
 function composeInstructions(input: RoleBindingInstructionCompositionInput): string {
+  const harnessInstruction = input.harnessBinding
+    ? buildHarnessAdmissionInstruction(input.definition.id, input.harnessBinding)
+    : undefined;
   return [
     input.definition.instructions,
     input.executionProfile?.instructions,
     buildProtocolInstruction(input.workspaceProtocol, input.hasProtocolException),
     buildSlpAssignmentInstruction(input.assignmentContract),
+    harnessInstruction,
     buildBeadsSkillAdmissionInstruction(input.definition.id, input.roleProfile),
   ]
     .filter((part): part is string => Boolean(part))
@@ -94,6 +131,63 @@ export const SLP_ROLE_BINDING_POLICY: RoleBindingPolicyContribution<string> = {
   materializeRoleProfile: (roleId, preferences, assignmentEffectClass) =>
     materializeRoleProfileBindingReceipt(roleId, preferences, assignmentEffectClass),
   workspaceProtocolReadership,
+  materializeHarnessBinding(input: {
+    roleId: PaseoRoleId;
+    context: HarnessBindingContext;
+  }): HarnessBindingReceipt {
+    const descriptor = loadHarnessPackageDescriptor();
+    const projection = projectRoleHarnessResources(descriptor, input.roleId);
+    return {
+      schemaVersion: 1,
+      package: descriptor.package,
+      generation: descriptor.generation,
+      artifactDigest: descriptor.artifactDigest,
+      descriptorPath: descriptor.descriptorPath,
+      descriptorDigest: descriptor.descriptorDigest,
+      resources: projection.resourceKeys.map((key) => ({
+        key,
+        path: descriptor.resourcePaths[key],
+        digest: descriptor.resourceDigests[key],
+      })),
+      projectId: input.context.projectId,
+      workspaceId: input.context.workspaceId,
+      workspaceRoot: input.context.workspaceRoot,
+      projectRoot: input.context.projectRoot,
+      cwd: input.context.cwd,
+      ...(input.context.notebook ? { notebook: input.context.notebook } : {}),
+    };
+  },
+  assertHarnessBindingCurrent(binding: HarnessBindingReceipt): void {
+    const descriptor = loadHarnessPackageDescriptor(binding.descriptorPath);
+    const current = buildHarnessPackageArtifactDescriptor(descriptor);
+    if (
+      descriptor.package !== binding.package ||
+      descriptor.generation !== binding.generation ||
+      descriptor.descriptorPath !== binding.descriptorPath ||
+      current.artifactDigest !== binding.artifactDigest ||
+      current.descriptorDigest !== binding.descriptorDigest
+    ) {
+      throw new Error(
+        `harness_binding_stale: pinned=${binding.package}@${binding.generation}/${binding.artifactDigest}; current=${descriptor.package}@${descriptor.generation}/${current.artifactDigest}`,
+      );
+    }
+    for (const resource of binding.resources) {
+      const currentResource = current.resources.find((candidate) => candidate.key === resource.key);
+      const currentPath = currentResource?.path;
+      if (
+        !currentResource ||
+        currentPath !==
+          descriptor.resourceRelativePaths[
+            resource.key as keyof typeof descriptor.resourceRelativePaths
+          ] ||
+        descriptor.resourcePaths[resource.key as keyof typeof descriptor.resourcePaths] !==
+          resource.path ||
+        currentResource.digest !== resource.digest
+      ) {
+        throw new Error(`harness_binding_stale: resource ${resource.key}`);
+      }
+    }
+  },
   composeInstructions,
   preflight(input) {
     const envelope = preflightSlpAssignmentEnvelope({

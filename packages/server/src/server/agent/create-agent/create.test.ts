@@ -660,6 +660,48 @@ test("mcp create stamps the new worktree's workspaceId, not the parent's", async
   }
 });
 
+test("mcp child creation keeps the parent workspace while pinning the requested child cwd", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "create-agent-child-cwd-test-"));
+  const childCwd = join(workdir, "child");
+  mkdirSync(childCwd, { recursive: true });
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const agentManager = createRealAgentManager(storage);
+  const providerSnapshotManager = createProviderSnapshotManagerStub().manager;
+
+  try {
+    const { snapshot: parent } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "session",
+        config: { provider: "codex", cwd: workdir },
+        workspaceId: "ws-parent",
+        labels: {},
+        provisionalTitle: null,
+        firstAgentContext: { attachments: [] },
+        buildSessionConfig: async (config) => ({ sessionConfig: config }),
+      },
+    );
+
+    const { snapshot: child } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "mcp",
+        provider: "codex/gpt-5.4",
+        title: "child cwd",
+        background: true,
+        notifyOnFinish: false,
+        callerAgentId: parent.id,
+        cwd: "child",
+      },
+    );
+
+    expect(child.cwd).toBe(childCwd);
+    expect((await storage.get(child.id))?.workspaceId).toBe("ws-parent");
+  } finally {
+    await removeRealAgentManagerWorkdir({ agentManager, storage, workdir });
+  }
+});
+
 test("mcp create exposes the created worktree before dispatching the initial prompt", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "create-agent-worktree-callback-test-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);

@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  requiresMaterialWorkspaceProtocol,
   requireWorkspaceProtocolForRole,
   WorkspaceProtocolCreateAdmissionError,
 } from "./create-admission";
@@ -29,10 +30,52 @@ const baseInput = {
   projectId: "project-a",
   repoRoot: "/repo/worktree",
   roleId: "lead" as const,
+  assignment: {
+    mutationBoundary: { mode: "bounded-write" as const, scope: "/repo/worktree" },
+    externalEffectBoundary: { mode: "denied" as const },
+  },
   supported: true,
 };
 
 describe("role create Workspace Protocol admission", () => {
+  test("treats only material assignment authority as a Workspace Protocol gate", () => {
+    expect(
+      requiresMaterialWorkspaceProtocol({
+        mutationBoundary: { mode: "no-write" },
+        externalEffectBoundary: { mode: "denied" },
+      }),
+    ).toBe(false);
+    expect(requiresMaterialWorkspaceProtocol(baseInput.assignment)).toBe(true);
+    expect(
+      requiresMaterialWorkspaceProtocol({
+        mutationBoundary: { mode: "no-write" },
+        externalEffectBoundary: { mode: "bounded", scope: "Beads Central" },
+      }),
+    ).toBe(true);
+    expect(
+      requiresMaterialWorkspaceProtocol({
+        mutationBoundary: { mode: "no-write" },
+        externalEffectBoundary: { mode: "denied" },
+        notebookGrant: { scope: "append", expiresAt: "2026-09-07T01:00:00.000Z" },
+      }),
+    ).toBe(true);
+  });
+
+  test("permits a read-only role launch when Workspace Protocol is missing or unsupported", async () => {
+    const client = { inspectWorkspaceProtocol: vi.fn() };
+    await requireWorkspaceProtocolForRole({
+      ...baseInput,
+      client,
+      roleId: "peer",
+      assignment: {
+        mutationBoundary: { mode: "no-write" },
+        externalEffectBoundary: { mode: "denied" },
+      },
+      supported: false,
+    });
+    expect(client.inspectWorkspaceProtocol).not.toHaveBeenCalled();
+  });
+
   test("does not inspect an unbound create", async () => {
     const client = { inspectWorkspaceProtocol: vi.fn() };
     await requireWorkspaceProtocolForRole({ ...baseInput, client, roleId: null });

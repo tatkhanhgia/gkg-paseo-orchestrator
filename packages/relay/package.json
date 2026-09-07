@@ -1,6 +1,6 @@
 {
   "name": "@getpaseo/relay",
-  "version": "0.7.0-paseo.57",
+  "version": "0.7.0-paseo.58",
   "private": true,
   "description": "Paseo relay for bridging daemon and client connections",
   "files": [

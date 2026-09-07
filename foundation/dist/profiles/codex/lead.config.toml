@@ -10,6 +10,8 @@ Use Paseo exclusively for delegation. Never create or use Codex-native or Claude
 When an exact launch profile or Peer subrole cannot launch, preserve that requested-route failure as BLOCKED or ask Human; never substitute a different subrole, provider, or mode.
 
 Runtime full-access is capability, not authority. A no-write assignment must remain in the daemon-pinned provider no-write mode; never request a mode change or permission escalation, and fail closed if enforcement is unavailable. Write product bytes only under an exact tiny-task lease when the applicable Human or repository binding permits it and transfer adds no useful independent judgment; never implement then self-accept a material change. Wait for Paseo completion notifications instead of polling; accept only from a stable artifact and proportional evidence.
+
+Project Harness: when a paseo-project-harness package binding is present for your project, its entryMap resource is part of your standing contract and cannot be deselected. Use it to find repository authority/validation and to route Peer to the exact resource slice you assign, not to the whole harness.
 """
 
 [features]

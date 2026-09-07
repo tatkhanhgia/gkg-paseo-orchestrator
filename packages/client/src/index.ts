@@ -34,6 +34,10 @@ import type {
   FetchAgentTimelinePayload,
   FetchAgentTimelineProjection,
   WaitForFinishResult,
+  ProjectHarnessMutationInput,
+  ProjectHarnessNotebookReleaseInput,
+  ProjectHarnessPreviewInput,
+  ProjectHarnessTargetInput,
 } from "./daemon-client.js";
 
 /**
@@ -155,6 +159,25 @@ export interface PaseoWorkspaceHandle {
 
 export interface PaseoProjectActions {
   list(options?: PaseoProjectListOptions): Promise<PaseoProjectListResult>;
+  harness: PaseoProjectHarnessActions;
+}
+
+export interface PaseoProjectHarnessActions {
+  inspect(
+    options: ProjectHarnessTargetInput,
+  ): Promise<Awaited<ReturnType<DaemonClient["inspectProjectHarness"]>>>;
+  preview(
+    options: ProjectHarnessPreviewInput,
+  ): Promise<Awaited<ReturnType<DaemonClient["previewProjectHarness"]>>>;
+  apply(
+    options: ProjectHarnessMutationInput,
+  ): Promise<Awaited<ReturnType<DaemonClient["applyProjectHarness"]>>>;
+  update(
+    options: ProjectHarnessMutationInput,
+  ): Promise<Awaited<ReturnType<DaemonClient["updateProjectHarness"]>>>;
+  releaseNotebook(
+    options: ProjectHarnessNotebookReleaseInput,
+  ): Promise<Awaited<ReturnType<DaemonClient["releaseProjectHarnessNotebook"]>>>;
 }
 
 export interface PaseoWorkspaceActions {
@@ -462,6 +485,13 @@ export function createPaseoApi(daemonClient: DaemonClient): PaseoApi {
   return {
     projects: {
       list: (options) => daemonClient.listProjects(options),
+      harness: {
+        inspect: (options) => daemonClient.inspectProjectHarness(options),
+        preview: (options) => daemonClient.previewProjectHarness(options),
+        apply: (options) => daemonClient.applyProjectHarness(options),
+        update: (options) => daemonClient.updateProjectHarness(options),
+        releaseNotebook: (options) => daemonClient.releaseProjectHarnessNotebook(options),
+      },
     },
     workspaces: {
       list: (options) => daemonClient.fetchWorkspaces(options),

@@ -115,6 +115,19 @@ import {
   type WorkspaceProtocolRpcError,
   type WorkspaceProtocolSnapshot,
 } from "./workspace-protocol-schema.js";
+import {
+  ProjectHarnessApplyRequestSchema,
+  ProjectHarnessApplyResponseSchema,
+  ProjectHarnessInspectRequestSchema,
+  ProjectHarnessInspectResponseSchema,
+  ProjectHarnessPreviewRequestSchema,
+  ProjectHarnessPreviewResponseSchema,
+  ProjectHarnessUpdateRequestSchema,
+  ProjectHarnessUpdateResponseSchema,
+  ProjectHarnessNotebookReleaseRequestSchema,
+  ProjectHarnessNotebookReleaseResponseSchema,
+} from "./project-harness/rpc-schemas.js";
+export * from "./project-harness/rpc-schemas.js";
 export {
   PaseoConfigRawSchema,
   PaseoLifecycleCommandRawSchema,
@@ -3409,6 +3422,11 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WriteProjectConfigRequestMessageSchema,
   WorkspaceProtocolInspectRequestMessageSchema,
   WorkspaceProtocolWriteRequestMessageSchema,
+  ProjectHarnessInspectRequestSchema,
+  ProjectHarnessPreviewRequestSchema,
+  ProjectHarnessApplyRequestSchema,
+  ProjectHarnessUpdateRequestSchema,
+  ProjectHarnessNotebookReleaseRequestSchema,
   DictationStreamStartMessageSchema,
   DictationStreamChunkMessageSchema,
   DictationStreamFinishMessageSchema,
@@ -3805,6 +3823,9 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceFileEditing: z.boolean().optional(),
         // COMPAT(workspaceProtocolEditing): added in the Foundation WebUI slice; keep optional for older daemons.
         workspaceProtocolEditing: z.boolean().optional(),
+        // COMPAT(projectHarness): additive feature; the release owner assigns its
+        // release floor. Keep optional while older daemons remain connectable.
+        projectHarness: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
@@ -6983,6 +7004,11 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WriteProjectConfigResponseMessageSchema,
   WorkspaceProtocolInspectResponseMessageSchema,
   WorkspaceProtocolWriteResponseMessageSchema,
+  ProjectHarnessInspectResponseSchema,
+  ProjectHarnessPreviewResponseSchema,
+  ProjectHarnessApplyResponseSchema,
+  ProjectHarnessUpdateResponseSchema,
+  ProjectHarnessNotebookReleaseResponseSchema,
   SetAgentModeResponseMessageSchema,
   SetAgentModelResponseMessageSchema,
   SetAgentThinkingResponseMessageSchema,

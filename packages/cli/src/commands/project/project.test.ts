@@ -43,6 +43,7 @@ describe("project commands", () => {
       "ls",
       "rename",
       "delete",
+      "harness",
     ]);
   });
 

@@ -349,6 +349,18 @@ export function WorkspaceSetupDialog() {
           workspaceId: ensuredWorkspace.id,
           workspaceDirectory: ensuredWorkspace.workspaceDirectory,
         });
+        const assignment = composerState.selectedRole
+          ? buildAssignmentEnvelope({
+              roleId: composerState.selectedRole,
+              effectClass: composerState.selectedAssignmentEffect,
+              objective: text,
+              cwd: workspaceDirectory,
+              beadsIssueIds: composerState.selectedBeadsIssueIds,
+            })
+          : {
+              mutationBoundary: { mode: "no-write" as const },
+              externalEffectBoundary: { mode: "denied" as const },
+            };
         try {
           await requireWorkspaceProtocolForRole({
             client: connectedClient,
@@ -356,6 +368,7 @@ export function WorkspaceSetupDialog() {
             projectId: ensuredWorkspace.projectId,
             repoRoot: workspaceDirectory,
             roleId: composerState.selectedRole,
+            assignment,
             supported: supportsWorkspaceProtocol,
           });
         } catch (error) {

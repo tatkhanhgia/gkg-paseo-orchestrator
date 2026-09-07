@@ -31,8 +31,13 @@ export const LEGACY_CORE_OPERATIONAL_POLICY = Object.freeze({
 export function materializeRoleBinding(
   input: MaterializeRoleBindingInput,
 ): Promise<PersistedRoleBinding> {
+  const legacyPolicy = {
+    ...SLP_ROLE_BINDING_POLICY,
+    materializeHarnessBinding: undefined,
+    assertHarnessBindingCurrent: undefined,
+  };
   return materializeRoleBindingWithPolicy(
     { ...input, policyOwner: LEGACY_CORE_POLICY_OWNER },
-    SLP_ROLE_BINDING_POLICY,
+    legacyPolicy,
   );
 }

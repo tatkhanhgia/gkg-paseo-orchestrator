@@ -3,7 +3,9 @@ import { PolicyPluginIdSchema, type PolicyOwner } from "@getpaseo/protocol/polic
 import type { AgentEventPolicy } from "../agent/event-policy-runtime.js";
 import {
   materializeRoleBindingWithPolicy,
+  prepareRoleBindingWithPolicy,
   type MaterializeRoleBindingInput,
+  type PreparedRoleBinding,
   type PersistedRoleBinding,
 } from "../agent/role-binding.js";
 import type {
@@ -74,6 +76,19 @@ export async function materializeTrustedRoleBinding(
   input: MaterializeRoleBindingInput<string>,
 ): Promise<PersistedRoleBinding> {
   return materializeRoleBindingWithPolicy(
+    {
+      ...input,
+      policyOwner: generation.owner,
+    },
+    generation.contribution.roleBindingPolicy,
+  );
+}
+
+export async function prepareTrustedRoleBinding(
+  generation: TrustedPolicyPackGeneration,
+  input: MaterializeRoleBindingInput<string>,
+): Promise<PreparedRoleBinding> {
+  return prepareRoleBindingWithPolicy(
     {
       ...input,
       policyOwner: generation.owner,

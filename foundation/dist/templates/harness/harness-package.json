@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "package": "paseo-project-harness",
+  "generation": 1,
+  "roles": ["lead", "peer", "supervisor"],
+  "resources": {
+    "entryMap": "README.md",
+    "entrypointBlock": "entrypoint-block.md",
+    "supervisorNotebookTemplate": "SUPERVISOR_NOTEBOOK.EMPTY.md"
+  },
+  "roleMinimum": {
+    "lead": ["entryMap"],
+    "peer": ["entryMap"],
+    "supervisor": ["entryMap"]
+  },
+  "entrypointPlaceholders": {
+    "HARNESS:ENTRY_MAP_PATH": "entry-map path, relative to the entrypoint file being written",
+    "HARNESS:WORKSPACE_PROTOCOL_PATH": "WORKSPACE_PROTOCOL.md path, relative to the entrypoint file being written"
+  },
+  "notebook": {
+    "bindingRequiredFields": [
+      "notebookId",
+      "location",
+      "projectScope",
+      "reportingTarget",
+      "designatedWriter",
+      "grant"
+    ],
+    "grantFields": ["scope", "expiry"],
+    "writeSemantics": "revision-safe (expected-revision write); one designated writer at a time; preserve disproof/history; no per-worktree notebook creation from workspace context alone",
+    "wireRepresentation": "PROVISIONAL — Product-owned top-level optional envelope/receipt field; not part of resourceGrants, not a new effectClass value"
+  }
+}

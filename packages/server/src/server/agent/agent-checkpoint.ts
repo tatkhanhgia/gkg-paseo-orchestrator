@@ -8,6 +8,8 @@ import type {
 import type { CoordinationSignal } from "@getpaseo/protocol/coordination-signal";
 import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 
+import type { EpisodeReportPolicy } from "./agent-episode-report.js";
+
 /**
  * Generic host mechanics for a bounded, read-only "checkpoint" projection: given
  * already-fetched authoritative snapshots (caller/target assignment, pending
@@ -181,6 +183,8 @@ export interface CheckpointPolicy {
   id: string;
   version: string;
   project(sources: AgentCheckpointSources): AgentCheckpointResult;
+  /** Optional policy-owned interpretation for an explicit bounded episode report. */
+  episodeReport?: EpisodeReportPolicy;
 }
 
 /**

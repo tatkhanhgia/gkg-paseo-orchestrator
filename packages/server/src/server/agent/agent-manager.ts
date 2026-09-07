@@ -122,10 +122,13 @@ import {
   assertPersistedRoleAdmissionCurrent,
   assertPersistedRoleBindingMatches,
   policyOwnerForRoleBinding,
+  type PreparedRoleBinding,
   preflightWorkspaceProtocolAdmission,
   resolveProviderRoleBindingSupport,
   type PersistedRoleBinding,
 } from "./role-binding.js";
+import type { NotebookGrantResolver } from "../project/notebook-grant-resolver.js";
+import type { HarnessBindingResolver } from "../project/harness-binding-service.js";
 import {
   assertPersistedLaunchContractMatches,
   materializeLaunchContract,
@@ -138,7 +141,7 @@ import {
 } from "../policy/bundled/slp.js";
 import {
   createTrustedPolicyPackResolver,
-  materializeTrustedRoleBinding,
+  prepareTrustedRoleBinding,
   type TrustedPolicyPackResolver,
 } from "../policy/trusted-policy.js";
 import { LEGACY_CORE_OPERATIONAL_POLICY } from "./legacy-role-binding.js";
@@ -195,6 +198,8 @@ interface PreparedSessionConfig {
   paseoToolPolicy: ProviderPaseoToolsPolicy | undefined;
   roleBinding?: PersistedRoleBinding;
   launchContract?: PersistedLaunchContract;
+  commitDurableBinding(): Promise<void>;
+  rollbackDurableBinding(): Promise<void>;
 }
 
 interface NormalizeConfigOptions {
@@ -210,6 +215,21 @@ interface TimeoutOptions {
 
 function formatProviderList(providers: readonly string[]): string {
   return providers.length > 0 ? providers.join(", ") : "none";
+}
+
+function aggregateWithCause(
+  errors: readonly unknown[],
+  message: string,
+  cause: unknown,
+): AggregateError {
+  const aggregate = new AggregateError(errors, message);
+  Object.defineProperty(aggregate, "cause", {
+    configurable: true,
+    enumerable: false,
+    value: cause,
+    writable: true,
+  });
+  return aggregate;
 }
 
 function buildStoredAgentConfig(record: StoredAgentRecord): AgentSessionConfig {
@@ -437,6 +457,8 @@ export interface AgentManagerOptions {
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
   resolveRoleProfilePreferences?: (roleId: PaseoRoleId) => RoleProfilePreferences | undefined;
   verifyRoleResourceGrants?: RoleResourceGrantVerifier;
+  resolveNotebookGrant?: NotebookGrantResolver;
+  resolveHarnessBinding?: HarnessBindingResolver;
   bundledPolicyPacks?: BundledPolicyPackRegistry<SlpBundledPolicyContribution>;
   /** Trusted internal policy selection; never populated from untrusted workflow input. */
   trustedPolicyResolver?: TrustedPolicyPackResolver;
@@ -908,6 +930,8 @@ export class AgentManager {
     roleId: PaseoRoleId,
   ) => RoleProfilePreferences | undefined;
   private readonly verifyRoleResourceGrants?: RoleResourceGrantVerifier;
+  private readonly resolveNotebookGrant?: NotebookGrantResolver;
+  private readonly resolveHarnessBinding?: HarnessBindingResolver;
   private readonly bundledPolicyPacks: BundledPolicyPackRegistry<SlpBundledPolicyContribution>;
   private readonly trustedPolicyResolver: TrustedPolicyPackResolver;
   private readonly trustedSembleRuntime: TrustedSembleRuntime | null;
@@ -935,6 +959,8 @@ export class AgentManager {
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
     this.resolveRoleProfilePreferences = options.resolveRoleProfilePreferences ?? (() => undefined);
     this.verifyRoleResourceGrants = options.verifyRoleResourceGrants;
+    this.resolveNotebookGrant = options.resolveNotebookGrant;
+    this.resolveHarnessBinding = options.resolveHarnessBinding;
     this.bundledPolicyPacks = resolveBundledPolicyPacks(options);
     this.trustedPolicyResolver = resolveTrustedPolicyResolver(options, this.bundledPolicyPacks);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
@@ -1644,25 +1670,25 @@ export class AgentManager {
     this.assertAcceptingAgentRegistrations();
     assertRoleSessionInput(config, options);
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
-    const { storedConfig, launchConfig, paseoToolPolicy, roleBinding, launchContract } =
-      await this.prepareSessionConfig(config, resolvedAgentId, options?.env, {
-        roleId: options.roleId,
-        executionProfileId: options.executionProfileId,
-        assignment: options.assignment,
-        assignmentAssigner: options.assignmentAssigner,
-        workspaceId: options.workspaceId,
-        roleBinding: options.roleBinding,
-        launchContract: options.launchContract,
-      });
-    await this.verifyMutatingPeerResourceGrants(resolvedAgentId, roleBinding);
-    this.requireEnabledProvider(storedConfig.provider);
-    const client = await this.requireAvailableClient({
-      provider: storedConfig.provider,
+    const prepared = await this.prepareSessionConfig(config, resolvedAgentId, options?.env, {
+      roleId: options.roleId,
+      executionProfileId: options.executionProfileId,
+      assignment: options.assignment,
+      assignmentAssigner: options.assignmentAssigner,
+      workspaceId: options.workspaceId,
+      roleBinding: options.roleBinding,
+      launchContract: options.launchContract,
     });
-    await this.deleteAgentState(resolvedAgentId);
-    this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
-    if (roleBinding) this.roleBindingsAwaitingRegistration.set(resolvedAgentId, roleBinding);
+    const { storedConfig, launchConfig, paseoToolPolicy, roleBinding, launchContract } = prepared;
     try {
+      await this.verifyMutatingPeerResourceGrants(resolvedAgentId, roleBinding);
+      this.requireEnabledProvider(storedConfig.provider);
+      const client = await this.requireAvailableClient({
+        provider: storedConfig.provider,
+      });
+      await this.deleteAgentState(resolvedAgentId);
+      this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
+      if (roleBinding) this.roleBindingsAwaitingRegistration.set(resolvedAgentId, roleBinding);
       const launchContext = await this.buildLaunchContext(
         resolvedAgentId,
         client,
@@ -1673,6 +1699,7 @@ export class AgentManager {
       );
       const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
       const createOptions = this.buildCreateSessionOptions(options);
+      await prepared.commitDurableBinding();
       const session = await client.createSession(
         providerLaunchConfig,
         launchContext,
@@ -1689,6 +1716,17 @@ export class AgentManager {
         launchProfile: options.launchProfile,
         historyPrimed: true,
       });
+    } catch (error) {
+      try {
+        await prepared.rollbackDurableBinding();
+      } catch (rollbackError) {
+        throw aggregateWithCause(
+          [error, rollbackError],
+          "agent_create_failed_and_harness_rollback_failed",
+          rollbackError,
+        );
+      }
+      throw error;
     } finally {
       this.roleBindingsAwaitingRegistration.delete(resolvedAgentId);
     }
@@ -1770,22 +1808,22 @@ export class AgentManager {
       ...overrides,
       provider: handle.provider,
     } as AgentSessionConfig;
-    const { storedConfig, launchConfig, paseoToolPolicy, roleBinding, launchContract } =
-      await this.prepareSessionConfig(mergedConfig, resolvedAgentId, undefined, {
-        roleBinding: options?.roleBinding,
-        launchContract: options?.launchContract,
-      });
-
-    const client = this.requireClient(handle.provider);
-    const available = await client.isAvailable();
-    if (!available) {
-      throw new Error(
-        `Provider '${handle.provider}' is not available. Please ensure the CLI is installed.`,
-      );
-    }
-    this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
-    if (roleBinding) this.roleBindingsAwaitingRegistration.set(resolvedAgentId, roleBinding);
+    const prepared = await this.prepareSessionConfig(mergedConfig, resolvedAgentId, undefined, {
+      workspaceId: options?.workspaceId,
+      roleBinding: options?.roleBinding,
+      launchContract: options?.launchContract,
+    });
+    const { storedConfig, launchConfig, paseoToolPolicy, roleBinding, launchContract } = prepared;
     try {
+      const client = this.requireClient(handle.provider);
+      const available = await client.isAvailable();
+      if (!available) {
+        throw new Error(
+          `Provider '${handle.provider}' is not available. Please ensure the CLI is installed.`,
+        );
+      }
+      this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
+      if (roleBinding) this.roleBindingsAwaitingRegistration.set(resolvedAgentId, roleBinding);
       const launchContext = await this.buildLaunchContext(
         resolvedAgentId,
         client,
@@ -1795,6 +1833,7 @@ export class AgentManager {
         launchContract,
       );
       const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+      await prepared.commitDurableBinding();
       const session = await client.resumeSession(
         handle,
         providerLaunchConfig,
@@ -1809,6 +1848,17 @@ export class AgentManager {
         launchContract,
         launchProfile: options?.launchProfile,
       });
+    } catch (error) {
+      try {
+        await prepared.rollbackDurableBinding();
+      } catch (rollbackError) {
+        throw aggregateWithCause(
+          [error, rollbackError],
+          "agent_resume_failed_and_harness_rollback_failed",
+          rollbackError,
+        );
+      }
+      throw error;
     } finally {
       this.roleBindingsAwaitingRegistration.delete(resolvedAgentId);
     }
@@ -5745,6 +5795,48 @@ export class AgentManager {
     }
   }
 
+  private resolveHarnessBindingLifecycleResolver(): HarnessBindingResolver | undefined {
+    if (this.resolveHarnessBinding) return this.resolveHarnessBinding;
+    const lifecycleNotebookResolver = this.resolveNotebookGrant as
+      | (NotebookGrantResolver & Partial<HarnessBindingResolver>)
+      | undefined;
+    if (
+      !lifecycleNotebookResolver ||
+      typeof lifecycleNotebookResolver.prepare !== "function" ||
+      typeof lifecycleNotebookResolver.assertCurrent !== "function" ||
+      typeof lifecycleNotebookResolver.release !== "function" ||
+      typeof lifecycleNotebookResolver.rebind !== "function"
+    ) {
+      return undefined;
+    }
+    return lifecycleNotebookResolver as HarnessBindingResolver;
+  }
+
+  private assertRoleLaunchContractIfPresent(
+    roleBinding: PersistedRoleBinding | undefined,
+    launchContract: PersistedLaunchContract | undefined,
+    storedConfig: AgentSessionConfig,
+  ): void {
+    if (!roleBinding || !launchContract) return;
+    assertPersistedRoleBindingMatches(roleBinding, storedConfig.provider);
+    assertPersistedLaunchContractMatches(launchContract, storedConfig);
+  }
+
+  private async assertRoleAdmissionIfBound(input: {
+    roleBinding: PersistedRoleBinding | undefined;
+    provider: AgentProvider;
+    cwd: string;
+    skipHarnessRevalidation: boolean;
+  }): Promise<void> {
+    if (!input.roleBinding) return;
+    await this.assertCurrentRoleAdmission(
+      input.roleBinding,
+      input.provider,
+      input.cwd,
+      input.skipHarnessRevalidation,
+    );
+  }
+
   private async prepareSessionConfig(
     config: AgentSessionConfig,
     agentId: string,
@@ -5761,79 +5853,106 @@ export class AgentManager {
     const providerBaseId = this.providerBaseIds.get(storedConfig.provider) ?? null;
     let launchContract = role?.launchContract;
     let roleBinding = launchContract?.roleBinding ?? role?.roleBinding;
+    let preparedRoleBinding: PreparedRoleBinding | undefined;
     if (roleBinding && !launchContract) {
       throw new Error(
         "Persisted role binding has no immutable launch contract; respawn the agent through the role-first flow",
       );
     }
-    if (!roleBinding && role?.roleId) {
-      const generation = this.getTrustedPolicyResolver().resolveActiveRolePolicy();
-      roleBinding = await materializeTrustedRoleBinding(generation, {
-        roleId: role.roleId,
-        executionProfileId: role.executionProfileId,
+    try {
+      if (!roleBinding && role?.roleId) {
+        const generation = this.getTrustedPolicyResolver().resolveActiveRolePolicy();
+        const harnessResolver = this.resolveHarnessBindingLifecycleResolver();
+        preparedRoleBinding = await prepareTrustedRoleBinding(generation, {
+          roleId: role.roleId,
+          executionProfileId: role.executionProfileId,
+          provider: storedConfig.provider,
+          providerBaseId,
+          providerSupport: this.providerRoleBindingSupport.get(storedConfig.provider),
+          cwd: storedConfig.cwd,
+          workspaceId: role.workspaceId ?? "",
+          assignment: role.assignment,
+          assignmentAssigner: role.assignmentAssigner ?? {
+            kind: "human-session",
+          },
+          roleProfilePreferences: this.resolveRoleProfilePreferences(role.roleId),
+          agentId,
+          resolveNotebookGrant: this.resolveNotebookGrant,
+          resolveHarnessBinding: harnessResolver,
+        });
+        roleBinding = preparedRoleBinding.binding;
+        const providerBinding = await this.materializeProviderLaunchBinding({
+          config: storedConfig,
+          providerBaseId,
+          requestedModel,
+        });
+        launchContract = materializeLaunchContract(roleBinding, providerBinding);
+      }
+      storedConfig = enforceRoleAssignmentCapability(storedConfig, roleBinding);
+      this.assertRoleLaunchContractIfPresent(roleBinding, launchContract, storedConfig);
+      await this.assertRoleAdmissionIfBound({
+        roleBinding,
         provider: storedConfig.provider,
-        providerBaseId,
-        providerSupport: this.providerRoleBindingSupport.get(storedConfig.provider),
         cwd: storedConfig.cwd,
-        workspaceId: role.workspaceId ?? "",
-        assignment: role.assignment,
-        assignmentAssigner: role.assignmentAssigner ?? {
-          kind: "human-session",
-        },
-        roleProfilePreferences: this.resolveRoleProfilePreferences(role.roleId),
+        skipHarnessRevalidation: preparedRoleBinding !== undefined,
       });
-      const providerBinding = await this.materializeProviderLaunchBinding({
+      const paseoToolPolicy = this.resolveEffectivePaseoToolPolicy(
+        storedConfig.provider,
+        roleBinding,
+        client,
+      );
+      const supportsExactMcpPreapproval =
+        this.providerDefinitions.get(storedConfig.provider)?.supportsExactMcpPreapproval === true;
+      const withPaseoMcp = withRuntimePaseoMcpServer({
         config: storedConfig,
-        providerBaseId,
-        requestedModel,
-      });
-      launchContract = materializeLaunchContract(roleBinding, providerBinding);
-    }
-    storedConfig = enforceRoleAssignmentCapability(storedConfig, roleBinding);
-    if (roleBinding && launchContract) {
-      assertPersistedRoleBindingMatches(roleBinding, storedConfig.provider);
-      assertPersistedLaunchContractMatches(launchContract, storedConfig);
-    }
-    if (roleBinding) {
-      this.assertCurrentRoleAdmission(roleBinding, storedConfig.provider, storedConfig.cwd);
-    }
-    const paseoToolPolicy = this.resolveEffectivePaseoToolPolicy(
-      storedConfig.provider,
-      roleBinding,
-      client,
-    );
-    const supportsExactMcpPreapproval =
-      this.providerDefinitions.get(storedConfig.provider)?.supportsExactMcpPreapproval === true;
-    const withPaseoMcp = withRuntimePaseoMcpServer({
-      config: storedConfig,
-      agentId,
-      mcpBaseUrl: isPaseoToolPolicyEnabled(paseoToolPolicy) ? this.mcpBaseUrl : null,
-      mcpAuthToken: this.mcpAuthToken,
-      mcpRuntimeId: this.mcpRuntimeId,
-      preapprovedTools: resolveRuntimePaseoPreapprovedTools({
-        roleBound: roleBinding !== undefined,
-        supportsNativePaseoTools: client.capabilities.supportsNativePaseoTools === true,
-        supportsExactMcpPreapproval,
-        allowedTools: paseoToolPolicy?.allowedTools,
-      }),
-    });
-    const launchConfig = this.applyDaemonAppendSystemPrompt(
-      withRuntimeTrustedSembleMcpServer({
-        config: withPaseoMcp,
         agentId,
-        runtime: this.trustedSembleRuntime,
-        roleBound: roleBinding !== undefined,
-        supportsMcpServers: client.capabilities.supportsMcpServers === true,
-        supportsExactMcpPreapproval,
-      }),
-    );
-    return {
-      storedConfig,
-      launchConfig,
-      paseoToolPolicy,
-      roleBinding,
-      launchContract,
-    };
+        mcpBaseUrl: isPaseoToolPolicyEnabled(paseoToolPolicy) ? this.mcpBaseUrl : null,
+        mcpAuthToken: this.mcpAuthToken,
+        mcpRuntimeId: this.mcpRuntimeId,
+        preapprovedTools: resolveRuntimePaseoPreapprovedTools({
+          roleBound: roleBinding !== undefined,
+          supportsNativePaseoTools: client.capabilities.supportsNativePaseoTools === true,
+          supportsExactMcpPreapproval,
+          allowedTools: paseoToolPolicy?.allowedTools,
+        }),
+      });
+      const launchConfig = this.applyDaemonAppendSystemPrompt(
+        withRuntimeTrustedSembleMcpServer({
+          config: withPaseoMcp,
+          agentId,
+          runtime: this.trustedSembleRuntime,
+          roleBound: roleBinding !== undefined,
+          supportsMcpServers: client.capabilities.supportsMcpServers === true,
+          supportsExactMcpPreapproval,
+        }),
+      );
+      return {
+        storedConfig,
+        launchConfig,
+        paseoToolPolicy,
+        roleBinding,
+        launchContract,
+        commitDurableBinding: async () => {
+          if (preparedRoleBinding) await preparedRoleBinding.commit();
+        },
+        rollbackDurableBinding: async () => {
+          if (preparedRoleBinding) await preparedRoleBinding.rollback();
+        },
+      };
+    } catch (error) {
+      if (preparedRoleBinding) {
+        try {
+          await preparedRoleBinding.rollback();
+        } catch (rollbackError) {
+          throw aggregateWithCause(
+            [error, rollbackError],
+            "session_config_prepare_failed_and_harness_rollback_failed",
+            rollbackError,
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   private resolveEffectivePaseoToolPolicy(
@@ -5856,14 +5975,36 @@ export class AgentManager {
     );
   }
 
-  private assertCurrentRoleAdmission(
+  private async assertCurrentRoleAdmission(
     roleBinding: PersistedRoleBinding,
     provider: AgentProvider,
     cwd: string,
-  ): void {
+    skipHarnessRevalidation = false,
+  ): Promise<void> {
     const policyOwner = policyOwnerForRoleBinding(roleBinding);
+    let pinnedGeneration: ReturnType<TrustedPolicyPackResolver["resolvePinned"]> | undefined;
     if (policyOwner.kind === "plugin") {
-      this.getTrustedPolicyResolver().resolvePinned(policyOwner);
+      pinnedGeneration = this.getTrustedPolicyResolver().resolvePinned(policyOwner);
+      const harnessPolicy = pinnedGeneration.contribution.roleBindingPolicy;
+      if (harnessPolicy.materializeHarnessBinding && !skipHarnessRevalidation) {
+        const harnessBinding = roleBinding.harnessBinding;
+        if (!harnessBinding || !harnessPolicy.assertHarnessBindingCurrent) {
+          throw new Error(
+            "harness_binding_receipt_required: persisted policy-owned role binding has no revalidatable Project Harness receipt",
+          );
+        }
+        harnessPolicy.assertHarnessBindingCurrent(harnessBinding);
+        const harnessResolver = this.resolveHarnessBindingLifecycleResolver();
+        if (!harnessResolver) {
+          throw new Error(
+            "harness_binding_resolver_required: persisted Project Harness binding cannot be revalidated",
+          );
+        }
+        await harnessResolver.assertCurrent({ binding: harnessBinding });
+        if (harnessBinding.cwd !== cwd) {
+          throw new Error("harness_binding_cwd_stale");
+        }
+      }
     }
     const currentSupport = this.providerRoleBindingSupport.get(provider);
     if (
