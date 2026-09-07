@@ -629,6 +629,17 @@ export type ProviderLaunchBinding =
       authMethod: "provider-native";
     });
 
+/**
+ * Exact current Project Harness mandatory-resource receipt projected into a provider launch.
+ * The manager derives this from a revalidated daemon-owned role binding; providers
+ * must never infer a broader filesystem grant from it.
+ */
+export interface AgentMandatoryResourceRead {
+  key: string;
+  path: string;
+  digest: string;
+}
+
 export interface AgentLaunchContext {
   agentId?: string;
   env?: Record<string, string>;
@@ -646,6 +657,8 @@ export interface AgentLaunchContext {
     allowedSkills?: string[];
     /** Daemon-owned assignment capability. Provider adapters must enforce this technically. */
     noWrite?: boolean;
+    /** Exact current mandatory resources that a no-write provider may read without prompting. */
+    mandatoryResourceReads?: readonly AgentMandatoryResourceRead[];
   };
   /** Exact daemon-owned provider route paired with the role for this session. */
   providerLaunchBinding?: ProviderLaunchBinding;

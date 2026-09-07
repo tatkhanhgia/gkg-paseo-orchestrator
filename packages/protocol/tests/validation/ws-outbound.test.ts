@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { describe, expect, it } from "vitest";
 import { WSOutboundMessageSchema as GeneratedWSOutboundMessageSchema } from "../../src/generated/validation/ws-outbound.aot.js";
+import { WSOutboundMessageSchema as AuthoringWSOutboundMessageSchema } from "../../src/messages.js";
 
 interface GeneratedSchema {
   safeParse(input: unknown): { success: boolean; data?: unknown };
@@ -136,6 +137,29 @@ const SourceSchema = z.object({
     expect(GeneratedWSOutboundMessageSchema.safeParse({ type: "not_a_message" }).success).toBe(
       false,
     );
+  });
+
+  it.each([
+    "foundation.projectHarness.inspect.response",
+    "foundation.projectHarness.preview.response",
+    "foundation.projectHarness.apply.response",
+    "foundation.projectHarness.update.response",
+    "foundation.projectHarness.notebook.release.response",
+  ] as const)("keeps boolean ok errors aligned for %s", (type) => {
+    const envelope = {
+      type: "session" as const,
+      message: {
+        type,
+        payload: {
+          requestId: "project-harness-aot-parity",
+          ok: false as const,
+          error: { code: "probe", message: "probe" },
+        },
+      },
+    };
+
+    expect(AuthoringWSOutboundMessageSchema.safeParse(envelope).success).toBe(true);
+    expect(GeneratedWSOutboundMessageSchema.safeParse(envelope).success).toBe(true);
   });
 
   it("accepts project config responses with and without setup commit status", () => {

@@ -6091,6 +6091,7 @@ export class AgentManager {
     launchContract?: PersistedLaunchContract,
   ): Promise<AgentLaunchContext> {
     const roleBinding = launchContract?.roleBinding;
+    const mandatoryResourceReads = roleBinding?.harnessBinding?.resources;
     const context: AgentLaunchContext = {
       agentId,
       env: {
@@ -6110,6 +6111,15 @@ export class AgentManager {
                 ? { allowedSkills: roleBinding.roleProfile.allowedSkills }
                 : {}),
               noWrite: roleBinding.assignment?.mutationBoundary.mode === "no-write",
+              ...(mandatoryResourceReads?.length
+                ? {
+                    mandatoryResourceReads: mandatoryResourceReads.map((resource) => ({
+                      key: resource.key,
+                      path: resource.path,
+                      digest: resource.digest,
+                    })),
+                  }
+                : {}),
             },
           }
         : {}),

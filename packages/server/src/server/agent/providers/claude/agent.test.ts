@@ -734,6 +734,7 @@ describe("ClaudeAgentSession features", () => {
 
   test("technically restricts a no-write role assignment to Claude read tools", async () => {
     const { queryFactory, launches } = createQueryMock();
+    const entryMapPath = "/installed/paseo/harness/README.md";
     const client = new ClaudeAgentClient({
       logger,
       queryFactory,
@@ -757,6 +758,13 @@ describe("ClaudeAgentSession features", () => {
           roleId: "peer",
           instructions: "PASEO ROLE PEER",
           noWrite: true,
+          mandatoryResourceReads: [
+            {
+              key: "entryMap",
+              path: entryMapPath,
+              digest: "a".repeat(64),
+            },
+          ],
         },
       },
     );
@@ -809,6 +817,92 @@ describe("ClaudeAgentSession features", () => {
       ).resolves.toEqual({
         behavior: "allow",
         updatedInput: { roomId: "room-1" },
+      });
+      if (!canUseTool) throw new Error("Expected canUseTool callback");
+      await expect(
+        canUseTool("Read", { file_path: entryMapPath }, { toolUseID: "entry-map-read" }),
+      ).resolves.toEqual({
+        behavior: "allow",
+        updatedInput: { file_path: entryMapPath },
+      });
+
+      const otherPathRead = canUseTool(
+        "Read",
+        { file_path: `${entryMapPath}.changed` },
+        { toolUseID: "other-path-read" },
+      );
+      expect(session.getPendingPermissions()).toHaveLength(1);
+      const otherPathRequest = session.getPendingPermissions()[0];
+      if (!otherPathRequest) throw new Error("Expected a permission request for a different path");
+      await session.respondToPermission(otherPathRequest.id, {
+        behavior: "deny",
+        message: "only the pinned entry map is preapproved",
+      });
+      await expect(otherPathRead).resolves.toMatchObject({
+        behavior: "deny",
+        message: "only the pinned entry map is preapproved",
+      });
+
+      const otherToolRead = canUseTool(
+        "Glob",
+        { pattern: entryMapPath },
+        { toolUseID: "other-tool-read" },
+      );
+      expect(session.getPendingPermissions()).toHaveLength(1);
+      const otherToolRequest = session.getPendingPermissions()[0];
+      if (!otherToolRequest) throw new Error("Expected a permission request for another tool");
+      await session.respondToPermission(otherToolRequest.id, {
+        behavior: "deny",
+        message: "only native Read of the pinned entry map is preapproved",
+      });
+      await expect(otherToolRead).resolves.toMatchObject({
+        behavior: "deny",
+        message: "only native Read of the pinned entry map is preapproved",
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("does not preapprove the mandatory entry map without a bound no-write role", async () => {
+    const { queryFactory, launches } = createQueryMock();
+    const entryMapPath = "/installed/paseo/harness/README.md";
+    const client = new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.createSession({
+      provider: "claude",
+      cwd: process.cwd(),
+      modeId: "default",
+    });
+
+    try {
+      await session.startTurn("inspect without a role binding");
+      const canUseTool = launches[0]?.options.canUseTool as
+        | ((
+            toolName: string,
+            input: Record<string, unknown>,
+            options: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>)
+        | undefined;
+      if (!canUseTool) throw new Error("Expected canUseTool callback");
+      const permission = canUseTool(
+        "Read",
+        { file_path: entryMapPath },
+        { toolUseID: "unbound-entry-map-read" },
+      );
+      expect(session.getPendingPermissions()).toHaveLength(1);
+      const request = session.getPendingPermissions()[0];
+      if (!request) throw new Error("Expected a permission request without a role binding");
+      await session.respondToPermission(request.id, {
+        behavior: "deny",
+        message: "mandatory read authority requires the current role binding",
+      });
+      await expect(permission).resolves.toMatchObject({
+        behavior: "deny",
+        message: "mandatory read authority requires the current role binding",
       });
     } finally {
       await session.close();

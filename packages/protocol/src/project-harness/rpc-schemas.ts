@@ -292,7 +292,9 @@ export type ProjectHarnessRpcError = z.infer<typeof ProjectHarnessRpcErrorSchema
 
 export const ProjectHarnessInspectResponseSchema = z.object({
   type: z.literal("foundation.projectHarness.inspect.response"),
-  payload: z.discriminatedUnion("ok", [
+  // zod-aot stringifies boolean discriminator values in generated switches.
+  // Keep these result unions sequential so public validators preserve JSON booleans.
+  payload: z.union([
     z.object({
       requestId: z.string(),
       ok: z.literal(true),
@@ -304,7 +306,7 @@ export const ProjectHarnessInspectResponseSchema = z.object({
 
 export const ProjectHarnessPreviewResponseSchema = z.object({
   type: z.literal("foundation.projectHarness.preview.response"),
-  payload: z.discriminatedUnion("ok", [
+  payload: z.union([
     z.object({
       requestId: z.string(),
       ok: z.literal(true),
@@ -328,7 +330,7 @@ export type ProjectHarnessMutationResult = z.infer<typeof ProjectHarnessMutation
 
 export const ProjectHarnessApplyResponseSchema = z.object({
   type: z.literal("foundation.projectHarness.apply.response"),
-  payload: z.discriminatedUnion("ok", [
+  payload: z.union([
     z.object({
       requestId: z.string(),
       ok: z.literal(true),
@@ -340,7 +342,7 @@ export const ProjectHarnessApplyResponseSchema = z.object({
 
 export const ProjectHarnessUpdateResponseSchema = z.object({
   type: z.literal("foundation.projectHarness.update.response"),
-  payload: z.discriminatedUnion("ok", [
+  payload: z.union([
     z.object({
       requestId: z.string(),
       ok: z.literal(true),
@@ -365,7 +367,7 @@ export type ProjectHarnessNotebookReleaseResult = z.infer<
 
 export const ProjectHarnessNotebookReleaseResponseSchema = z.object({
   type: z.literal("foundation.projectHarness.notebook.release.response"),
-  payload: z.discriminatedUnion("ok", [
+  payload: z.union([
     z.object({
       requestId: z.string(),
       ok: z.literal(true),

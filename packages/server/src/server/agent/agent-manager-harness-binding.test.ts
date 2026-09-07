@@ -113,6 +113,24 @@ function supervisorReadOnlyAssignment() {
   };
 }
 
+function roleReadOnlyAssignment(roleId: "lead" | "peer" | "supervisor") {
+  const dispositions = {
+    lead: "lead-direct",
+    peer: "peer-execution",
+    supervisor: "supervision",
+  } as const;
+  return {
+    version: 1 as const,
+    disposition: dispositions[roleId],
+    objective: `Exercise ${roleId} mandatory entry-map read context.`,
+    effectClass: "read-only" as const,
+    mutationBoundary: { mode: "no-write" as const },
+    externalEffectBoundary: { mode: "denied" as const },
+    evidence: "Return the exact projected mandatory entry-map receipt.",
+    handbackAndStop: "Stop after the bounded launch-context proof.",
+  };
+}
+
 const capabilities = {
   supportsStreaming: false,
   supportsSessionPersistence: true,
@@ -168,7 +186,11 @@ function makeSession(config: AgentSessionConfig): AgentSession {
   return session as unknown as AgentSession;
 }
 
-function makeClient(input: { failCreate?: boolean; failResume?: boolean }): AgentClient {
+function makeClient(input: {
+  failCreate?: boolean;
+  failResume?: boolean;
+  captureLaunchContext?: (launchContext: AgentLaunchContext | undefined) => void;
+}): AgentClient {
   const client = {
     provider: "codex" as const,
     capabilities,
@@ -186,16 +208,18 @@ function makeClient(input: { failCreate?: boolean; failResume?: boolean }): Agen
         authMethod: "codex-native" as const,
       };
     },
-    async createSession(config: AgentSessionConfig) {
+    async createSession(config: AgentSessionConfig, launchContext?: AgentLaunchContext) {
       if (input.failCreate) throw new Error("provider_create_failed");
+      input.captureLaunchContext?.(launchContext);
       return makeSession(config);
     },
     async resumeSession(
       _handle: { provider: string; sessionId: string },
       config?: Partial<AgentSessionConfig>,
-      _launchContext?: AgentLaunchContext,
+      launchContext?: AgentLaunchContext,
     ) {
       if (input.failResume) throw new Error("provider_resume_failed");
+      input.captureLaunchContext?.(launchContext);
       return makeSession({
         provider: "codex",
         cwd: config?.cwd ?? process.cwd(),
@@ -669,6 +693,8 @@ describe("AgentManager durable Project Harness lifecycle", () => {
     if (!stored?.persistence || !stored.roleBinding || !stored.launchContract) {
       throw new Error("test setup did not persist the role launch contract");
     }
+    const harnessBinding = stored.launchContract.roleBinding.harnessBinding;
+    if (!harnessBinding) throw new Error("test setup did not persist the harness binding");
     const restarted = new AgentManager({
       clients: { codex: makeClient({}) },
       bundledPolicyPacks: createDefaultSlpBundledPolicyRegistry(),
@@ -692,7 +718,7 @@ describe("AgentManager durable Project Harness lifecycle", () => {
       roleBinding: {
         ...stored.launchContract.roleBinding,
         harnessBinding: {
-          ...stored.launchContract.roleBinding.harnessBinding,
+          ...harnessBinding,
           artifactDigest: "0".repeat(64),
         },
       },
@@ -712,6 +738,36 @@ describe("AgentManager durable Project Harness lifecycle", () => {
         { workspaceId: "workspace-1", launchContract: driftedLaunchContract },
       ),
     ).rejects.toThrow(/harness_binding_stale/u);
+
+    const staleResourceLaunchContract = {
+      ...stored.launchContract,
+      roleBinding: {
+        ...stored.launchContract.roleBinding,
+        harnessBinding: {
+          ...harnessBinding,
+          resources: harnessBinding.resources.map((resource) =>
+            resource.key === "entryMap"
+              ? { key: resource.key, path: resource.path, digest: "0".repeat(64) }
+              : resource,
+          ),
+        },
+      },
+    } as typeof stored.launchContract;
+    const staleResourceManager = new AgentManager({
+      clients: { codex: makeClient({}) },
+      bundledPolicyPacks: createDefaultSlpBundledPolicyRegistry(),
+      registry: storage,
+      resolveHarnessBinding: resolver,
+      logger,
+    });
+    await expect(
+      staleResourceManager.resumeAgentFromPersistence(
+        stored.persistence,
+        { model: "gpt-5.4" },
+        created.id,
+        { workspaceId: "workspace-1", launchContract: staleResourceLaunchContract },
+      ),
+    ).rejects.toThrow(/harness_binding_stale: resource entryMap/u);
   });
 
   test("persists a Supervisor notebook identity even without a write grant", async () => {
@@ -753,6 +809,100 @@ describe("AgentManager durable Project Harness lifecycle", () => {
     expect(
       inspectHarnessProjectMetadata(projectRoot, DEFAULT_HARNESS_PROJECT_METADATA_PATH).status,
     ).toBe("missing");
+  });
+
+  test("projects the exact mandatory resources through fresh and resumed SLP launches", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "agent-manager-harness-resource-read-"));
+    tempDirs.push(projectRoot);
+    writeFileSync(
+      join(projectRoot, "WORKSPACE_PROTOCOL.md"),
+      buildWorkspaceProtocolTemplate(projectRoot),
+      "utf8",
+    );
+    const storage = new AgentStorage(join(projectRoot, "agents"), logger);
+    const registries = makeRegistries(projectRoot);
+    const resolver = createProjectHarnessBindingService(registries);
+    const launchContexts = new Map<string, AgentLaunchContext[]>();
+    const managers: AgentManager[] = [];
+    const makeHarnessManager = () => {
+      const manager = new AgentManager({
+        clients: {
+          codex: makeClient({
+            captureLaunchContext: (launchContext) => {
+              if (!launchContext?.agentId) throw new Error("launch context agent identity missing");
+              const contexts = launchContexts.get(launchContext.agentId) ?? [];
+              contexts.push(launchContext);
+              launchContexts.set(launchContext.agentId, contexts);
+            },
+          }),
+        },
+        bundledPolicyPacks: createDefaultSlpBundledPolicyRegistry(),
+        registry: storage,
+        resolveHarnessBinding: resolver,
+        logger,
+      });
+      managers.push(manager);
+      return manager;
+    };
+
+    for (const [roleId, agentId] of [
+      ["lead", "00000000-0000-4000-8000-000000000520"],
+      ["peer", "00000000-0000-4000-8000-000000000521"],
+      ["supervisor", "00000000-0000-4000-8000-000000000522"],
+    ] as const) {
+      const manager = makeHarnessManager();
+      const created = await manager.createAgent(
+        { provider: "codex", cwd: projectRoot, model: "gpt-5.4" },
+        agentId,
+        {
+          workspaceId: "workspace-1",
+          roleId,
+          assignment: roleReadOnlyAssignment(roleId),
+        },
+      );
+      const stored = await storage.get(created.id);
+      if (!stored?.persistence || !stored.launchContract) {
+        throw new Error(`${roleId} launch contract was not persisted`);
+      }
+
+      const freshContext = launchContexts.get(agentId)?.[0];
+      expect(freshContext).toMatchObject({
+        roleBinding: {
+          noWrite: true,
+          mandatoryResourceReads: [
+            {
+              key: "entryMap",
+              path: expect.any(String),
+              digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+            },
+          ],
+        },
+      });
+      expect(freshContext?.roleBinding).not.toHaveProperty("harnessBinding");
+
+      const resumedManager = makeHarnessManager();
+      await resumedManager.resumeAgentFromPersistence(
+        stored.persistence,
+        { model: "gpt-5.4" },
+        created.id,
+        {
+          workspaceId: "workspace-1",
+          launchContract: stored.launchContract,
+        },
+      );
+
+      const contexts = launchContexts.get(agentId);
+      expect(contexts).toHaveLength(2);
+      expect(contexts?.[1]?.roleBinding?.mandatoryResourceReads).toEqual(
+        freshContext?.roleBinding?.mandatoryResourceReads,
+      );
+    }
+
+    for (const manager of managers) {
+      manager.prepareForShutdown();
+      await Promise.all(manager.listAgents().map((agent) => manager.closeAgent(agent.id)));
+      await manager.flushForShutdown();
+    }
   });
 
   test("role-bound readers and a successor writer retain one custom notebook identity after release", async () => {
