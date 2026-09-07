@@ -1,9 +1,11 @@
 # H5 — Bàn giao Product local release và continuity native
 
 Ngày 2026-09-08. Đây là handoff H5 cho candidate Product local .58. Phần version/lock/package và
-tài liệu trong boundary đã được chuẩn bị; chưa stage, chưa commit, chưa cài đặt và chưa kích hoạt
-daemon. Lead giữ engineering verdict/closure; Caller ngoài Paseo giữ activation, installed
-qualification, native provider qualification và cả năm migration thật.
+tài liệu trong boundary đã được ghi vào source release commit
+`dd020bdf1bf5257f8865bff8e1d085d23596b6c5`; doc receipt commit của chính handoff này được ghi ở
+bước kế tiếp. Candidate chưa cài đặt và chưa kích hoạt daemon. Lead giữ engineering verdict/closure;
+Caller ngoài Paseo giữ activation, installed qualification, native provider qualification và cả năm
+migration thật.
 
 ## 1. Boundary, grant và trạng thái
 
@@ -18,8 +20,15 @@ qualification, native provider qualification và cả năm migration thật.
   packages/client/src/daemon-client.ts; readback hiện tại SHA-256
   1095a78cc5d1ea3d0607d3b82fad8493fdd473d57f2ce40c31d16485fd2d401a. Hash hai dòng comment trước đó
   là 3fca31a3f991340ea66962081b95d01e4af1022f6d6f9e2236d541d547bbe786; runtime gate không đổi.
-- Không stage/commit trong handoff này. Không push, publish, restart daemon, activation, migration,
-  installer, smoke script, auth/provider canary hoặc remote effect.
+- Source release commit `dd020bdf1bf5257f8865bff8e1d085d23596b6c5` đã được tạo từ starting HEAD
+  `4783ed06cd938bb1b15cfeca323171eb520e60ee` với message chính xác:
+
+  ```text
+  chore(release): prepare paseo.58 Project Harness integration
+  ```
+
+  Doc receipt commit còn lại chỉ ghi nhận receipt này. Không push, publish, restart daemon, activation,
+  migration, installer, smoke script, auth/provider canary hoặc remote effect.
 
 ## 2. Verdict và attribution
 
@@ -45,10 +54,167 @@ manifest đều 0.7.0-paseo.57; target local chính xác là 0.7.0-paseo.58, kh�
 efd401fa1bb3a3c5ea117f0798f6c51a43c5a84dd15d30100cc6585635e57f44. Sau khi thêm đúng 14 metadata
 path, candidate hiện có 150 path, SHA-256 path list cuối fc7165efaf2387dd9ece0dfbb216eea3710315a2ba3a0a855f8df17fe05358b0.
 
-Candidate source được pin riêng: HEAD trên cộng accepted source overlays của R1/R2/C1/E1 và Foundation
-import dev25. Metadata/docs là release envelope, không phải source receipt; không có commit/ref mới.
-Final proposed path manifest là 136 baseline + 14 metadata path = 150 path; không stage theo git status mù.
+Candidate source được pin riêng: source release commit `dd020bdf1bf5257f8865bff8e1d085d23596b6c5` có
+parent `4783ed06cd938bb1b15cfeca323171eb520e60ee`, cộng accepted source overlays của R1/R2/C1/E1 và
+Foundation import dev25. Metadata/docs là release envelope của local commit, không phải remote release.
+Final committed path manifest là 136 baseline + 14 metadata path = 150 path; path-list SHA-256
+fc7165efaf2387dd9ece0dfbb216eea3710315a2ba3a0a855f8df17fe05358b0. Không stage theo git status mù.
 Historical source manifests được giữ nguyên, không rewrite chỉ vì shared file đổi.
+
+Exact committed path manifest (sorted, 150 entries; source entries are pinned separately from the 14 metadata paths):
+
+```text
+docs/README.md
+docs/research/2026-09-07-project-harness-c1-client-handoff.md
+docs/research/2026-09-07-project-harness-e1-evidence-handoff.md
+docs/research/2026-09-07-project-harness-r1-runtime-handoff.md
+docs/research/2026-09-07-project-harness-r2-bootstrap-handoff.md
+docs/research/2026-09-07-slp-project-harness-implementation-handoff.md
+foundation/dist/AGENTS.md
+foundation/dist/docs/ROLE_CONTRACTS.md
+foundation/dist/docs/SUPERVISOR_NOTEBOOK.md
+foundation/dist/profiles/antigravity/agents/paseo-lead/agent.md
+foundation/dist/profiles/antigravity/agents/paseo-peer/agent.md
+foundation/dist/profiles/antigravity/agents/paseo-supervisor/agent.md
+foundation/dist/profiles/claude-plugins/paseo-lead/.claude-plugin/plugin.json
+foundation/dist/profiles/claude-plugins/paseo-lead/agents/paseo-lead.md
+foundation/dist/profiles/claude-plugins/paseo-peer/.claude-plugin/plugin.json
+foundation/dist/profiles/claude-plugins/paseo-peer/agents/paseo-peer.md
+foundation/dist/profiles/claude-plugins/paseo-supervisor/.claude-plugin/plugin.json
+foundation/dist/profiles/claude-plugins/paseo-supervisor/agents/paseo-supervisor.md
+foundation/dist/profiles/claude-plugins/paseo-supervisor/skills/paseo-supervisor/SKILL.md
+foundation/dist/profiles/claude/paseo-lead.md
+foundation/dist/profiles/claude/paseo-peer.md
+foundation/dist/profiles/claude/paseo-supervisor.md
+foundation/dist/profiles/codex/lead.config.toml
+foundation/dist/profiles/codex/peer.config.toml
+foundation/dist/profiles/codex/supervisor.config.toml
+foundation/dist/profiles/cursor/paseo-lead/rules/paseo-lead.mdc
+foundation/dist/profiles/cursor/paseo-peer/rules/paseo-peer.mdc
+foundation/dist/profiles/cursor/paseo-supervisor/rules/paseo-supervisor.mdc
+foundation/dist/profiles/cursor/paseo-supervisor/skills/paseo-supervisor/SKILL.md
+foundation/dist/profiles/native/role-definitions.json
+foundation/dist/profiles/omp/paseo-lead.md
+foundation/dist/profiles/omp/paseo-peer.md
+foundation/dist/profiles/omp/paseo-supervisor.md
+foundation/dist/profiles/opencode-role-roots/supervisor/skills/paseo-supervisor/SKILL.md
+foundation/dist/profiles/opencode/lead.config.json
+foundation/dist/profiles/opencode/peer.config.json
+foundation/dist/profiles/opencode/supervisor.config.json
+foundation/dist/skills/paseo-supervisor/SKILL.md
+foundation/dist/templates/harness/README.md
+foundation/dist/templates/harness/SUPERVISOR_NOTEBOOK.EMPTY.md
+foundation/dist/templates/harness/entrypoint-block.md
+foundation/dist/templates/harness/harness-package.json
+foundation/manifest.json
+foundation/sources.lock.json
+package-lock.json
+package.json
+packages/app/package.json
+packages/app/src/components/project-harness-settings-model.test.ts
+packages/app/src/components/project-harness-settings-model.ts
+packages/app/src/components/project-harness-settings.tsx
+packages/app/src/components/workspace-setup-dialog.tsx
+packages/app/src/composer/draft/workspace-tab.tsx
+packages/app/src/i18n/resources/ar.ts
+packages/app/src/i18n/resources/en.ts
+packages/app/src/i18n/resources/es.ts
+packages/app/src/i18n/resources/fr.ts
+packages/app/src/i18n/resources/ja.ts
+packages/app/src/i18n/resources/ko.ts
+packages/app/src/i18n/resources/pt-BR.ts
+packages/app/src/i18n/resources/ru.ts
+packages/app/src/i18n/resources/zh-CN.ts
+packages/app/src/screens/project-settings-screen.tsx
+packages/app/src/workspace-protocol/create-admission.test.ts
+packages/app/src/workspace-protocol/create-admission.ts
+packages/cli/package.json
+packages/cli/src/commands/agent/inspect.test.ts
+packages/cli/src/commands/agent/inspect.ts
+packages/cli/src/commands/agent/run.test.ts
+packages/cli/src/commands/agent/run.ts
+packages/cli/src/commands/project/harness.test.ts
+packages/cli/src/commands/project/harness.ts
+packages/cli/src/commands/project/index.ts
+packages/cli/src/commands/project/project.test.ts
+packages/client/package.json
+packages/client/src/daemon-client.ts
+packages/client/src/index.ts
+packages/desktop/package.json
+packages/expo-two-way-audio/package.json
+packages/foundation-cli/package.json
+packages/highlight/package.json
+packages/plugin/package.json
+packages/protocol/package.json
+packages/protocol/src/assignment-contract.test.ts
+packages/protocol/src/assignment-contract.ts
+packages/protocol/src/harness-binding.ts
+packages/protocol/src/messages.ts
+packages/protocol/src/notebook-record.test.ts
+packages/protocol/src/notebook-record.ts
+packages/protocol/src/project-harness/rpc-schemas.test.ts
+packages/protocol/src/project-harness/rpc-schemas.ts
+packages/protocol/src/role-binding.ts
+packages/relay/package.json
+packages/server/package.json
+packages/server/scripts/write-build-provenance.mjs
+packages/server/scripts/write-build-provenance.test.mjs
+packages/server/src/server/agent/agent-checkpoint.ts
+packages/server/src/server/agent/agent-episode-report.test.ts
+packages/server/src/server/agent/agent-episode-report.ts
+packages/server/src/server/agent/agent-manager-harness-binding.test.ts
+packages/server/src/server/agent/agent-manager.test.ts
+packages/server/src/server/agent/agent-manager.ts
+packages/server/src/server/agent/create-agent/create.test.ts
+packages/server/src/server/agent/create-agent/create.ts
+packages/server/src/server/agent/legacy-role-binding.ts
+packages/server/src/server/agent/role-binding.test.ts
+packages/server/src/server/agent/role-binding.ts
+packages/server/src/server/agent/role-profiles.test.ts
+packages/server/src/server/agent/tools/paseo-tools-checkpoint.test.ts
+packages/server/src/server/agent/tools/paseo-tools.ts
+packages/server/src/server/authorization/operation-permissions.ts
+packages/server/src/server/bootstrap.ts
+packages/server/src/server/policy/bundled/slp.ts
+packages/server/src/server/policy/bundled/slp/assignment-policy.ts
+packages/server/src/server/policy/bundled/slp/checkpoint-policy.ts
+packages/server/src/server/policy/bundled/slp/harness-admission.test.ts
+packages/server/src/server/policy/bundled/slp/harness-package-policy.test.ts
+packages/server/src/server/policy/bundled/slp/harness-package-policy.ts
+packages/server/src/server/policy/bundled/slp/role-binding-policy.ts
+packages/server/src/server/policy/bundled/slp/role-profiles.ts
+packages/server/src/server/policy/role-binding-policy.ts
+packages/server/src/server/policy/trusted-policy.ts
+packages/server/src/server/project/harness-binding-scope.test.ts
+packages/server/src/server/project/harness-binding-scope.ts
+packages/server/src/server/project/harness-binding-service.test.ts
+packages/server/src/server/project/harness-binding-service.ts
+packages/server/src/server/project/harness-bootstrap-defaults.ts
+packages/server/src/server/project/harness-project-metadata-file.ts
+packages/server/src/server/project/notebook-grant-integration.test.ts
+packages/server/src/server/project/notebook-grant-resolver.test.ts
+packages/server/src/server/project/notebook-grant-resolver.ts
+packages/server/src/server/project/project-harness-service.test.ts
+packages/server/src/server/project/project-harness-service.ts
+packages/server/src/server/project/project-notebook-tools.test.ts
+packages/server/src/server/project/project-notebook-tools.ts
+packages/server/src/server/session.test.ts
+packages/server/src/server/session.ts
+packages/server/src/server/session/project-harness/project-harness-session.test.ts
+packages/server/src/server/session/project-harness/project-harness-session.ts
+packages/server/src/server/session/workspace-provisioning/workspace-provisioning-service.test.ts
+packages/server/src/server/session/workspace-provisioning/workspace-provisioning-service.ts
+packages/server/src/server/websocket-server.ts
+packages/server/src/utils/harness-entrypoint-inspect.test.ts
+packages/server/src/utils/harness-entrypoint-inspect.ts
+packages/server/src/utils/harness-template-render.test.ts
+packages/server/src/utils/harness-template-render.ts
+packages/server/src/utils/project-harness-file-transaction.test.ts
+packages/server/src/utils/project-harness-file-transaction.ts
+packages/server/src/utils/project-notebook-file.test.ts
+packages/server/src/utils/project-notebook-file.ts
+packages/website/package.json
+```
 
 Mười bốn metadata path chính xác:
 
@@ -177,6 +343,8 @@ bootstrap/update → operator review → Apply/Update → fresh Inspect cho từ
 Native inspect là nguồn bounded duy nhất cho foreignOwnership.entries, local delta/missing/unreadable,
 instruction coverage và unknown. Securecore có foreign owner .harness-core 0.1.7, 19 paths; foreign
 manifest content hash chính xác b11809698ccc7ddf4735f1ed94539bc8bda2dfc002cb994e54c6f3d94ea6024b.
+Hash `b11809698...` này là SHA của Caller artifact `securecore-foreign-owner-baseline.json`, không
+phải SHA của actual `.harness-core/manifest.json`; foreign file không bị sửa.
 Foreign owner gồm AGENTS.md, docs/WORKFLOW.md, docs/README.md và các path của nó; WP/CLAUDE không thuộc
 foreign manifest.
 
@@ -432,24 +600,54 @@ artifact vẫn package paseo-project-harness generation 1 với digest/paths đ�
 
 ## 10. Ledger và handback
 
-| Owner/receipt                                       | Scope                                         | Trạng thái                               |
-| --------------------------------------------------- | --------------------------------------------- | ---------------------------------------- |
-| R1 fj2/36h                                          | runtime source/test                           | ACCEPT, RELEASED                         |
-| R2 af1c8c72                                         | native bootstrap/N1/C3 và one-file comment    | ACCEPT, RELEASED, no material finding    |
-| C1 8ccfe339                                         | client/app consumer                           | ACCEPT, RELEASED                         |
-| E1 ef5b3542                                         | bounded episode evidence                      | ACCEPT, RELEASED                         |
-| Reviewer 9d3ae9f8 / activity 5513                   | independent review                            | C1/E1 ACCEPT; không là write owner       |
-| H5 paseo-agent-a407a138-be0f-4f38-85fa-e7abb9dca3eb | package/doc candidate, issue psd02596e8eb-aop | handback pending exact Lead commit grant |
+| Owner/receipt                                       | Scope                                         | Trạng thái                                         |
+| --------------------------------------------------- | --------------------------------------------- | -------------------------------------------------- |
+| R1 fj2/36h                                          | runtime source/test                           | ACCEPT, RELEASED                                   |
+| R2 af1c8c72                                         | native bootstrap/N1/C3 và one-file comment    | ACCEPT, RELEASED, no material finding              |
+| C1 8ccfe339                                         | client/app consumer                           | ACCEPT, RELEASED                                   |
+| E1 ef5b3542                                         | bounded episode evidence                      | ACCEPT, RELEASED                                   |
+| Reviewer 9d3ae9f8 / activity 5513                   | independent review                            | C1/E1 ACCEPT; không là write owner                 |
+| H5 paseo-agent-a407a138-be0f-4f38-85fa-e7abb9dca3eb | package/doc candidate, issue psd02596e8eb-aop | source commit complete; doc receipt commit pending |
 
 Không suy ownership/authority từ issue ID lịch sử. H5 release lease một lần sau receipt cuối và Beads
 evidence update; không tự close hoặc self-disposition.
 
-Proposed local commit message, chưa thực hiện:
+Source release commit receipt:
 
 ```text
 chore(release): prepare paseo.58 Project Harness integration
 ```
 
-Exact staged path list, commit scope và commit receipt chờ Lead readback/grant. Sau handback, H5 dừng
-và giữ issue psd02596e8eb-aop in_progress; Caller/Lead quyết định activation, installed qualification,
-native canaries, migrations và acceptance. Không lặp hash/readback ngoài final receipt cần thiết.
+Commit `dd020bdf1bf5257f8865bff8e1d085d23596b6c5` ghi đúng 150 path, diffstat `150 files changed,
+21286 insertions(+), 1007 deletions(-)`, với path-list SHA-256 đã pin ở §3. Staged set đã được kiểm
+tra bằng explicit pathspec; không có staged ngoài manifest, artifact, `.paseo` hay root instruction
+write. `git diff --cached --check` sạch trước commit. Pre-commit hook tự chạy lint/format/typecheck
+và đều PASS; các kết quả build/artifact trước commit vẫn được giữ attribution ở §9, không chạy lại
+build hoặc test vì doc receipt.
+
+Artifact `.58` là local dirty-precommit build validation từ base `4783ed06…` (`gitDirty=true`,
+sourceDirty=true), không phải installed fingerprint hay installed receipt. Caller sau này mới được
+thực hiện hai lệnh `PASEO_FOUNDATION_ROOT=<frozen Foundation clone> ./scripts/local-stack.sh --apply`
+và no-flag `./scripts/local-stack.sh` sau authoritative zero-agent/zero-workspace-script idle
+readback; khi đó phải đọc lại installed version, source fingerprint, health, WebUI và Beads. Hiện
+installed/live vẫn `.57`; activation, qualification, năm migration và rollback rehearsal vẫn pending.
+
+Assignment owner ledger đầy đủ (released scopes/historical IDs, không phải fresh global-idle proof):
+
+| Owner                                                                         | Scope/status                                          |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Lead `5b87c2bd-c63f-47f8-b057-7429499f4ce6`                                   | engineering verdict/closure; RELEASED                 |
+| predecessor `9dee87a6-0639-47ff-ae1c-92d082bc422e`                            | prior continuity; historical                          |
+| R1 Engineer `3c5c0d5e-592d-4ab8-83e8-ef4556423483`                            | runtime source/test; RELEASED                         |
+| R1 Reviewer `79cdb70d-6c2d-4b33-b70b-b1ddfd5c17f7`                            | R1 review; RELEASED                                   |
+| R2 `af1c8c72-4e24-44f1-8e77-efa5c61e6118`                                     | native bootstrap/N1/C3 and approved comment; RELEASED |
+| C1 `8ccfe339-d083-4ac0-bd19-f01b27d8eb8c`                                     | client/app consumer; RELEASED                         |
+| E1 `ef5b3542-48d0-49ab-a8d7-4bd11a2ec2e5`                                     | bounded episode evidence; RELEASED                    |
+| integration reviewer `9d3ae9f8-cbdc-4cec-ab94-d325e51832f9`                   | independent C1/E1 review; RELEASED                    |
+| Caller (activation/all-idle/continuity owner; external, no agent ID supplied) | activation and native continuity; pending             |
+| H5 `a407a138-be0f-4f38-85fa-e7abb9dca3eb`                                     | package/doc owner; receipt handback                   |
+
+Fresh Lead after Caller activation needs a new bounded Human lease and role-first continuity; preserve
+unrelated old sessions. H5 releases the package/doc lease after the doc receipt commit and Beads
+evidence update; it does not close the issue or self-disposition. The exact second doc commit message
+is `docs: record paseo.58 Project Harness release handoff`.
