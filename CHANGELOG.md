@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0-paseo.59 - 2026-09-08
+
+Bản sửa transport và admission đã được Lead chấp nhận ở source/test; qualification
+installed/runtime và activation vẫn do Caller thực hiện.
+
+### Đã sửa
+
+- Sửa public Project Harness WebSocket responses để boolean payload.ok đi qua generated
+  validator và giữ correlation cho inspect, preview, apply, update và notebook.release.
+  Bằng chứng chi tiết: [handoff transport izq](docs/research/2026-09-08-project-harness-native-transport-handoff.md).
+- Cho phép Claude no-write đọc đúng pinned harness resource sau admission path/digest
+  validation; path khác, write và resource stale vẫn fail closed. Bằng chứng:
+  [handoff resource Claude](docs/research/2026-09-08-slp-mandatory-resource-read-handoff.md).
+
+### Giới hạn qualification
+
+- Live native .59 Claude Read canary và installed/runtime qualification còn chờ Caller.
+- Client WebUI .58 đã cache cần reload hoặc mở new tab sau activation để nạp validator
+  mới; update daemon một mình không thay đổi client đã load.
+- Không có qualification rollback/resume .57; backup archive được Caller authorize và
+  giữ bền vững theo receipt, còn .57 downgrade vẫn BLOCKED.
+
 ## 0.7.0-paseo.57 - 2026-09-06
 
 Bản phát hành ứng viên cục bộ cho tranche G1–G5. Mục này chỉ mô tả source candidate; chưa khẳng định
