@@ -201,9 +201,29 @@ Generated output chỉ được tạo bằng generator được hỗ trợ và k
     642a025f40b5d70b7b3b72935d6155758597f5db4bc07cd8da275186db7b6dba  packages/protocol/src/generated/validation/ws-outbound.aot.ts
 
 Bộ path của fix commit là đúng 11 path đã được chấp nhận và ghi trong Beads final
-receipt. Release commit .59 tách riêng và chỉ chứa các path metadata version cùng
-CHANGELOG được Lead cấp phép. Commit ID và parent sẽ được ghi trong izq final handback
-receipt; không cần tạo commit tài liệu thứ ba.
+receipt. Fix commit thực tế là
+6458769ce4c005931fd4189a085a0fd1cd188687 (parent
+535df5b1fc04a925075d331afdcbedc667237a0b). Release commit .59 thực tế là
+791f2c0b0546952cf85a21310e8014f0558aacdb (parent
+6458769ce4c005931fd4189a085a0fd1cd188687), chỉ chứa 16 path metadata/CHANGELOG đã
+được Lead cấp phép.
+
+## Receipt tích hợp release và provenance
+
+Candidate artifact .59 có SHA-256
+47a598889fd14750342b4fd15657ecc259b5e0d4d4233138bf84a323d2cb2830. Top manifest
+chỉ ghi gitCommit 535df5b1fc04a925075d331afdcbedc667237a0b và gitDirty true; file
+provenance được đọc trực tiếp trong archive tại
+
+    paseo-web-cli-0.7.0-paseo.59-macos-arm64/app/node_modules/@getpaseo/server/dist/server/build-provenance.json
+
+ghi sourceCommit 535df5b1fc04a925075d331afdcbedc667237a0b, sourceDirty true,
+sourceFingerprint c47dea2a123220d000141e6c281607bb186a2cdf5f6e59c13da0aab0515a66ca,
+builtAt 2026-09-07T19:49:48.513Z, cùng harnessArtifact
+e4dd814cd1bcfd780c014cf5d49fed1204051e4f6ef7f0a621f02ff34bca6ad1 và entryMap
+adb98be153f76fc0fd1c3ca7d72dda861d6ac45822294abec546746a236ab17e. Đây vẫn là
+validation artifact dirty-precommit, chưa install và không phải provenance của clean
+HEAD/runtime; Caller sẽ build/apply từ clean HEAD.
 
 ## Kiểm tra tĩnh, ranh giới và bàn giao
 
