@@ -1,3 +1,13 @@
+<!-- PASEO_HARNESS:BEGIN -->
+
+Đọc [Project Harness entry map](docs/harness/README.md) để tìm repository authority, validation và
+hướng dẫn theo role. Với Paseo SLP, dùng role/assignment binding do daemon cung cấp. Lead đọc
+[Workspace Protocol](WORKSPACE_PROTOCOL.md) trước orchestration; Peer chỉ nhận relevant
+constraints trong assignment; Supervisor đọc protocol khi có governance mandate. Notebook location và
+Beads project lấy từ binding, không tự suy từ cwd hoặc tên thư mục.
+
+<!-- PASEO_HARNESS:END -->
+
 # CLAUDE.md
 
 Paseo is a mobile app for monitoring and controlling your local AI coding agents from anywhere. Your dev environment, in your pocket. Connects directly to your actual development environment — your code stays on your machine.

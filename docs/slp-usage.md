@@ -178,7 +178,9 @@ production dependency.
 
 Automatic attention hiện là source candidate trong bundled SLP policy path và mặc định bật. SLP sở hữu
 threshold, routing, semantic-friction classifier, custom-event meaning và policy version; kernel chỉ giữ
-generic subscription, versioned state, persistence, safe-boundary delivery, coalescing và isolation.
+generic declared subscriptions, versioned state, persistence, safe-boundary delivery, coalescing và
+isolation. Lifecycle policy nhận closure event có owner/run receipt được capture trước khi agent bị xóa;
+closed snapshot vẫn giữ active-turn fields là `null`, và close/cancel thường không tự tạo lost-run claim.
 Emergency rollback đặt `PASEO_DISABLE_SLP_ATTENTION_POLICY=1`. Missing telemetry hoặc missing/ambiguous
 role target fail closed.
 
@@ -194,6 +196,19 @@ signal/orchestration authority. Agent-scoped caller/target phải cùng exact wo
 hình hoặc wording command/acceptance/ownership/handoff/write/recovery bị reject. Attention đã
 resolve/defer/decline/complete có thể re-arm ở episode/fingerprint mới, trong khi pending duplicate cùng
 rule/fingerprint merge occurrence evidence thay vì phát prompt mới.
+
+## Bounded checkpoint
+
+Role-bound caller có thể dùng `get_agent_checkpoint` để đọc một projection bounded cho đúng target.
+Host kiểm tra relationship, persisted assignment, pinned policy owner và exact tool ceiling trước khi
+giao nguồn cho policy. Council chỉ dùng canonical seat/report/disposition records; case phase cao nhất
+không phải collection barrier. Beads evidence chỉ đọc qua exact issue grant/target binding sau current
+`beads_status` checkpoint; assignee hoặc dependency count thiếu binding không trở thành disposition.
+
+Idle không phải bằng chứng hoàn thành. Thiếu lifecycle, Council, Beads hoặc disposition evidence trả
+`UNKNOWN`, không tạo quyền accept, restart, replace hoặc taskgraph action. Những semantics này là source
+candidate của `.57`; installed/live qualification và Lead engineering acceptance vẫn theo
+[implementation handoff](research/2026-09-06-maestro-slp-implementation-handoff.md).
 
 ## Manual stop conditions
 

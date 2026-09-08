@@ -16,7 +16,7 @@ import type {
 } from "../../../agent/event-policy-runtime.js";
 
 export const SLP_ATTENTION_POLICY_ID = "slp.attention";
-export const SLP_ATTENTION_POLICY_VERSION = "5";
+export const SLP_ATTENTION_POLICY_VERSION = "6";
 export const SLP_ATTENTION_STATE_VERSION = 5;
 export const SLP_ATTENTION_DISABLE_FLAG = "PASEO_DISABLE_SLP_ATTENTION_POLICY";
 
@@ -66,7 +66,7 @@ const SLP_ATTENTION_STATE: EventPolicyStateSpec<SlpAttentionState> = {
   parseState: parseSlpAttentionState,
 };
 
-function findUniqueRoleAgent(
+export function findUniqueRoleAgent(
   dependencies: EventPolicyRuntimeDependencies,
   workspaceId: string | undefined,
   roleId: "lead" | "supervisor",
@@ -83,9 +83,14 @@ function findUniqueRoleAgent(
   return matches.length === 1 ? matches[0] : null;
 }
 
-function findLeadForPeer(
+export type AttentionRouteAgent = Pick<
+  ManagedAgent,
+  "roleBinding" | "labels" | "workspaceId" | "lifecycle"
+>;
+
+export function findLeadForPeer(
   dependencies: EventPolicyRuntimeDependencies,
-  peer: ManagedAgent,
+  peer: AttentionRouteAgent,
 ): ManagedAgent | null {
   const parentId = getParentAgentIdFromLabels(peer.labels);
   if (parentId) {
@@ -97,14 +102,46 @@ function findLeadForPeer(
     ) {
       return parent;
     }
+    // An explicit parent relationship is authoritative. Do not fall back to an arbitrary
+    // workspace Lead after the parent disappears from the live manager during closure.
+    return null;
   }
   return findUniqueRoleAgent(dependencies, peer.workspaceId, "lead");
 }
 
-interface FailureRoute {
+export interface AttentionEscalationRoute {
   target: ManagedAgent | null;
   recipientRole: "lead" | "supervisor";
   severity: "warning" | "critical";
+}
+
+/**
+ * Shared Peer-to-Lead / Lead-to-Supervisor escalation routing, reused by every bundled SLP
+ * lifecycle-attention rule so a rule never invents its own recipient logic. Callers supply
+ * their own rule-specific `reason`/`ruleId`; this only resolves who receives the signal.
+ */
+export function resolveAttentionEscalationRoute(
+  dependencies: EventPolicyRuntimeDependencies,
+  agent: AttentionRouteAgent,
+): AttentionEscalationRoute | null {
+  if (agent.roleBinding?.roleId === "peer") {
+    return {
+      target: findLeadForPeer(dependencies, agent),
+      recipientRole: "lead",
+      severity: "warning",
+    };
+  }
+  if (agent.roleBinding?.roleId === "lead") {
+    return {
+      target: findUniqueRoleAgent(dependencies, agent.workspaceId, "supervisor"),
+      recipientRole: "supervisor",
+      severity: "critical",
+    };
+  }
+  return null;
+}
+
+interface FailureRoute extends AttentionEscalationRoute {
   ruleId: "peer_repeated_failure" | "lead_repeated_failure";
   reason: string;
 }
@@ -113,27 +150,21 @@ function resolveFailureRoute(
   dependencies: EventPolicyRuntimeDependencies,
   agent: ManagedAgent,
 ): FailureRoute | null {
-  if (agent.roleBinding?.roleId === "peer") {
-    return {
-      target: findLeadForPeer(dependencies, agent),
-      recipientRole: "lead",
-      severity: "warning",
-      ruleId: "peer_repeated_failure",
-      reason:
-        "A Peer reached the repeated runtime-failure threshold; Lead retains routing authority.",
-    };
-  }
-  if (agent.roleBinding?.roleId === "lead") {
-    return {
-      target: findUniqueRoleAgent(dependencies, agent.workspaceId, "supervisor"),
-      recipientRole: "supervisor",
-      severity: "critical",
-      ruleId: "lead_repeated_failure",
-      reason:
-        "Lead reached the repeated runtime-failure threshold and may be unable to self-recover.",
-    };
-  }
-  return null;
+  const route = resolveAttentionEscalationRoute(dependencies, agent);
+  if (!route) return null;
+  return route.recipientRole === "lead"
+    ? {
+        ...route,
+        ruleId: "peer_repeated_failure",
+        reason:
+          "A Peer reached the repeated runtime-failure threshold; Lead retains routing authority.",
+      }
+    : {
+        ...route,
+        ruleId: "lead_repeated_failure",
+        reason:
+          "Lead reached the repeated runtime-failure threshold and may be unable to self-recover.",
+      };
 }
 
 function contextRatio(usage: AgentUsage): number | null {
@@ -163,6 +194,12 @@ export interface SemanticFrictionMatch {
   fingerprint: string;
 }
 
+// Unicode-aware word boundaries: plain `\b` does not anchor reliably around Vietnamese
+// diacritic letters, so the bilingual rules below use explicit letter/number lookarounds
+// instead (matching the same technique documented in coordination-policy.ts).
+const UWB_START = "(?<![\\p{L}\\p{N}_])";
+const UWB_END = "(?![\\p{L}\\p{N}_])";
+
 const SEMANTIC_FRICTION_RULES: Array<{
   ruleId: SemanticFrictionMatch["ruleId"];
   pattern: RegExp;
@@ -172,9 +209,20 @@ const SEMANTIC_FRICTION_RULES: Array<{
     pattern: /\b(?:hold on|wait (?:a second|a moment)|on second thought|I need to revisit)\b/iu,
   },
   {
+    ruleId: "explicit_reconsideration",
+    pattern: new RegExp(`${UWB_START}(?:khoan đã|để tôi xem lại)${UWB_END}`, "iu"),
+  },
+  {
     ruleId: "admitted_mistake",
     pattern:
       /\b(?:I (?:was wrong|made a mistake|missed|overlooked)|we (?:were wrong|made a mistake|missed|overlooked))\b/iu,
+  },
+  {
+    ruleId: "admitted_mistake",
+    pattern: new RegExp(
+      `${UWB_START}(?:tôi đã sai|tôi đã nhầm|tôi đã bỏ sót|chúng tôi đã sai|chúng tôi đã bỏ sót)${UWB_END}`,
+      "iu",
+    ),
   },
   {
     ruleId: "contract_conflict",
@@ -182,30 +230,97 @@ const SEMANTIC_FRICTION_RULES: Array<{
       /\b(?:conflicts? with|contradicts?|violates?)\b.{0,100}\b(?:authority|contract|doctrine|ownership|requirement|scope)\b/iu,
   },
   {
+    ruleId: "contract_conflict",
+    pattern: new RegExp(
+      `${UWB_START}(?:mâu thuẫn với|vi phạm)${UWB_END}.{0,100}${UWB_START}(?:thẩm quyền|hợp đồng|học thuyết|quyền sở hữu|phạm vi)${UWB_END}`,
+      "iu",
+    ),
+  },
+  {
     ruleId: "blocked_uncertainty",
     pattern:
       /\b(?:I(?:'m| am) blocked|cannot proceed|need clarification|ambiguous target|unclear ownership)\b/iu,
   },
+  {
+    ruleId: "blocked_uncertainty",
+    pattern: new RegExp(
+      `${UWB_START}(?:tôi đang bị chặn|không thể tiếp tục|cần làm rõ|mục tiêu không rõ ràng)${UWB_END}`,
+      "iu",
+    ),
+  },
 ];
+
+// A trigger phrase that is merely being *mentioned* — quoted or reported speech, a citation of
+// test/fixture data, a code reference — is not the model's own live admission and must not
+// trigger. There is no reliable syntactic "is this inside quotes" signal alone (the exact
+// regression fixture `The fixture contains the string "I was wrong" as test data.` has no
+// enclosing punctuation the classifier can special-case), so this looks instead for a nearby
+// citation/report lead-in immediately before the match: genuine unquoted first-person
+// self-admission never has one of these phrases right before it, while every known
+// quoted/reported/test-data false positive does.
+const CITATION_LEAD_IN_TERMS = [
+  "contains the string",
+  "contains the phrase",
+  "as test data",
+  "as sample data",
+  "test fixture",
+  "the fixture",
+  "for example",
+  "such as",
+  "e\\.g\\.",
+  "asserts that",
+  "wrote",
+  "\\bsaid\\b",
+  "reads",
+  "\\breports\\b",
+  "logged",
+  "quoting",
+  "chứa chuỗi",
+  "chứa cụm từ",
+  "làm dữ liệu mẫu",
+  "làm dữ liệu kiểm thử",
+  "tài liệu kiểm thử",
+  "ghi rằng",
+  "viết rằng",
+];
+const CITATION_LEAD_IN = new RegExp(`(?:${CITATION_LEAD_IN_TERMS.join("|")})`, "iu");
+const CITATION_LEAD_IN_WINDOW = 80;
+
+function isCitedNotLive(text: string, matchIndex: number): boolean {
+  const precedingText = text.slice(0, matchIndex);
+  const lastSentenceBoundary = Math.max(
+    precedingText.lastIndexOf("."),
+    precedingText.lastIndexOf("!"),
+    precedingText.lastIndexOf("?"),
+    precedingText.lastIndexOf("\n"),
+  );
+  const windowStart = Math.max(lastSentenceBoundary + 1, matchIndex - CITATION_LEAD_IN_WINDOW);
+  return CITATION_LEAD_IN.test(text.slice(windowStart, matchIndex));
+}
 
 /** Deterministic classifier over model-visible assistant output only. */
 export function classifySemanticFriction(text: string): SemanticFrictionMatch | null {
   let latest: (SemanticFrictionMatch & { index: number }) | null = null;
   for (const rule of SEMANTIC_FRICTION_RULES) {
-    const match = rule.pattern.exec(text);
-    if (!match || match.index === undefined) continue;
-    const start = Math.max(0, match.index - 80);
-    const end = Math.min(text.length, match.index + match[0].length + 120);
-    const normalizedMatch = match[0].trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
-    const candidate = {
-      ruleId: rule.ruleId,
-      excerpt: text.slice(start, end).trim(),
-      fingerprint: createHash("sha256")
-        .update(`${rule.ruleId}\u0000${normalizedMatch}`)
-        .digest("hex"),
-      index: match.index,
-    };
-    if (!latest || candidate.index > latest.index) latest = candidate;
+    const pattern = new RegExp(
+      rule.pattern.source,
+      rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+    );
+    for (const match of text.matchAll(pattern)) {
+      if (match.index === undefined || isCitedNotLive(text, match.index)) continue;
+      const start = Math.max(0, match.index - 80);
+      const end = Math.min(text.length, match.index + match[0].length + 120);
+      const normalizedMatch = match[0].trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
+      const candidate = {
+        ruleId: rule.ruleId,
+        excerpt: text.slice(start, end).trim(),
+        fingerprint: createHash("sha256")
+          .update(`${rule.ruleId}\u0000${normalizedMatch}`)
+          .digest("hex"),
+        index: match.index,
+      };
+      if (!latest || candidate.index > latest.index) latest = candidate;
+    }
   }
   if (!latest) return null;
   const { index: _index, ...match } = latest;

@@ -8,7 +8,10 @@ Repository `webplode/paseo-doctrine-downstream` không publish các package dư�
 `scripts/downstream-publish-guard.test.mjs` giữ boundary này fail-closed. Release downstream dùng
 version dạng `X.Y.Z-paseo.N` và tag khớp chính xác `paseo-vX.Y.Z-paseo.N`.
 
-Quy trình downstream:
+Luồng mặc định là [phát hành macOS ARM64 local](#phát-hành-macos-arm64-local).
+Phần dưới mô tả workflow cloud legacy đa nền tảng, chỉ dùng khi chủ động chọn phát hành đủ bốn target.
+
+Quy trình cloud legacy:
 
 1. Commit code/docs của feature hoặc fix riêng; không trộn version bump vào code commit.
 2. Push `main`, đọc CI của exact commit theo owning surface; failure trong source được bundle vào
@@ -94,8 +97,8 @@ GitHub request.
 
 Release chỉ được discover sau khi job cuối upload `paseo-update-manifest.json`. Khi rerun cùng tag,
 workflow xóa manifest cũ trước khi thay platform assets; vì vậy client không bao giờ coi matrix đang
-upload dở là qualified. Manifest khóa đủ bốn archive/checksum macOS `arm64`/`x64`, Linux `x64` và
-Windows `x64`.
+upload dở là qualified. Manifest khóa archive/checksum của các target đã validate: chỉ `macos-arm64`
+cho release local hiện tại; đủ bốn target cho workflow cloud legacy.
 
 Người dùng portable có thể apply từ WebUI callout hoặc CLI:
 
@@ -113,6 +116,38 @@ release updater-enabled giữ installer của chính nó để `rollback` không
 `0.5.0-paseo.41` là bootstrap boundary: release cũ hơn chưa có protocol updater nên cần chạy portable
 installer downstream một lần. Từ release này trở đi WebUI/CLI dùng update flow ở trên. Electron updater
 upstream bị ẩn tới khi downstream publish đủ Electron metadata riêng.
+
+## Phát hành macOS ARM64 local
+
+Luồng mặc định hiện tại là build WebUI + CLI trên máy Mac ARM64, validate artifact local rồi
+upload GitHub Release. Không dispatch workflow release đa nền tảng khi dùng luồng này. Các
+entrypoint downstream trên cloud chỉ chạy bằng `workflow_dispatch`, không chạy khi push tag
+`paseo-v*`. Giữ các release cũ của nền tảng khác; release mới chỉ công bố `macos-arm64`.
+
+CI thường ngày không chạy bốn Playwright shards hoặc hai desktop test jobs. Anh em chạy các lệnh
+E2E/desktop local theo phạm vi thay đổi; các test và npm scripts vẫn được giữ. Portable artifact
+smoke dưới đây vẫn bắt buộc trước publish, khác với Electron packaged smoke đã bỏ khỏi CI.
+
+1. Chọn source, chốt thay đổi và synchronized version/changelog trong các commit riêng. Dùng clean
+   checkout của exact release commit; không gom thay đổi local ngoài phạm vi vào release.
+2. Trên macOS ARM64, chạy focused tests, lint, typecheck và format theo repository contract, rồi
+   `npm run build:web-cli-artifact` và `npm run test:web-cli-artifact`.
+3. Gom đúng archive/checksum của version vừa validate vào thư mục riêng. Tạo manifest một target:
+
+   ```bash
+   node scripts/create-paseo-update-manifest.mjs --target macos-arm64 --artifacts /path/to/validated-assets --output /path/to/paseo-update-manifest.json
+   ```
+
+   Không truyền `--target` vẫn yêu cầu đủ bốn nền tảng cho workflow legacy đa nền tảng.
+
+4. Push commit và annotated tag `paseo-v<version>`. Tạo GitHub Release dạng draft, upload archive,
+   `.sha256` và manifest của exact commit, đọc lại danh sách assets rồi mới publish draft. Không dùng
+   upstream `v*` tags hoặc npm publish. Không thay assets của release đã phát hành trong luồng này.
+5. Khi cài vào máy đang dùng, giữ fresh idle gate và `./scripts/local-stack.sh --apply`; hoàn tất
+   readback daemon, health và WebUI theo local activation contract trước handback.
+
+Manifest một target không chứng minh đã validate Windows, Linux hoặc macOS Intel. Chỉ phát hành
+artifact tương ứng khi đã có môi trường build và smoke riêng cho target đó.
 
 ## Two steps
 

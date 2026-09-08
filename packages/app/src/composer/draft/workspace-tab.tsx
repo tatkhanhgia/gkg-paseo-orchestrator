@@ -634,7 +634,21 @@ export function WorkspaceDraftAgentTab({
       }),
     createRequest: async ({ attempt, text, images, attachments, cwd }) => {
       try {
-        const { roleId } = resolveDraftRoleIntent(autoSubmitConfig, composerState);
+        const roleIntent = resolveDraftRoleIntent(autoSubmitConfig, composerState);
+        const roleCwd = draftWorkingDirectory ?? cwd;
+        const assignment = roleIntent.roleId
+          ? buildAssignmentEnvelope({
+              roleId: roleIntent.roleId,
+              effectClass: roleIntent.assignmentEffect,
+              objective: text,
+              cwd: roleCwd,
+              beadsIssueIds: roleIntent.beadsIssueIds,
+            })
+          : {
+              mutationBoundary: { mode: "no-write" as const },
+              externalEffectBoundary: { mode: "denied" as const },
+            };
+        const { roleId } = roleIntent;
         if (roleId) {
           invariant(client, "Connected daemon client is required for role admission");
           invariant(workspaceFields?.projectId, "Project id is required for role admission");
@@ -642,8 +656,9 @@ export function WorkspaceDraftAgentTab({
             client,
             serverId,
             projectId: workspaceFields.projectId,
-            repoRoot: draftWorkingDirectory ?? cwd,
+            repoRoot: roleCwd,
             roleId,
+            assignment,
             supported: supportsWorkspaceProtocol,
           });
         }

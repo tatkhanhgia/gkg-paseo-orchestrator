@@ -660,6 +660,48 @@ test("mcp create stamps the new worktree's workspaceId, not the parent's", async
   }
 });
 
+test("mcp child creation keeps the parent workspace while pinning the requested child cwd", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "create-agent-child-cwd-test-"));
+  const childCwd = join(workdir, "child");
+  mkdirSync(childCwd, { recursive: true });
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const agentManager = createRealAgentManager(storage);
+  const providerSnapshotManager = createProviderSnapshotManagerStub().manager;
+
+  try {
+    const { snapshot: parent } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "session",
+        config: { provider: "codex", cwd: workdir },
+        workspaceId: "ws-parent",
+        labels: {},
+        provisionalTitle: null,
+        firstAgentContext: { attachments: [] },
+        buildSessionConfig: async (config) => ({ sessionConfig: config }),
+      },
+    );
+
+    const { snapshot: child } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "mcp",
+        provider: "codex/gpt-5.4",
+        title: "child cwd",
+        background: true,
+        notifyOnFinish: false,
+        callerAgentId: parent.id,
+        cwd: "child",
+      },
+    );
+
+    expect(child.cwd).toBe(childCwd);
+    expect((await storage.get(child.id))?.workspaceId).toBe("ws-parent");
+  } finally {
+    await removeRealAgentManagerWorkdir({ agentManager, storage, workdir });
+  }
+});
+
 test("mcp create exposes the created worktree before dispatching the initial prompt", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "create-agent-worktree-callback-test-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
@@ -796,6 +838,95 @@ test("session create keeps an explicit title after the initial prompt settles", 
 
     const settled = await storage.get(snapshot.id);
     expect(settled?.title).toBe(title);
+  } finally {
+    await removeRealAgentManagerWorkdir({ agentManager, storage, workdir });
+  }
+});
+
+test("mcp create registers a durable finish-notification watch before the initial prompt dispatches", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "create-agent-finish-watch-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const agentManager = createRealAgentManager(storage);
+  const providerSnapshotManager = createProviderSnapshotManagerStub().manager;
+
+  try {
+    const { snapshot: parent } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "session",
+        config: { provider: "codex", cwd: workdir },
+        workspaceId: "ws-parent",
+        labels: {},
+        provisionalTitle: null,
+        firstAgentContext: { attachments: [] },
+        buildSessionConfig: async (config) => ({ sessionConfig: config }),
+      },
+    );
+
+    const { snapshot: child } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "mcp",
+        provider: "codex/gpt-5.4",
+        title: "watched child",
+        cwd: workdir,
+        initialPrompt: "do the thing",
+        background: true,
+        notifyOnFinish: true,
+        callerAgentId: parent.id,
+      },
+    );
+
+    // Registered before the prompt was even sent — this is the durable evidence
+    // a daemon restart between dispatch and attach would recover against.
+    const storedChild = await storage.get(child.id);
+    expect(storedChild?.finishNotificationWatches).toEqual([
+      expect.objectContaining({ callerAgentId: parent.id, requireParentOwnership: true }),
+    ]);
+  } finally {
+    await removeRealAgentManagerWorkdir({ agentManager, storage, workdir });
+  }
+});
+
+test("mcp create cancels the finish-notification watch when the initial prompt never starts", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "create-agent-finish-watch-cancel-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const agentManager = createRealAgentManager(storage);
+  const providerSnapshotManager = createProviderSnapshotManagerStub().manager;
+
+  try {
+    const { snapshot: parent } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "session",
+        config: { provider: "codex", cwd: workdir },
+        workspaceId: "ws-parent",
+        labels: {},
+        provisionalTitle: null,
+        firstAgentContext: { attachments: [] },
+        buildSessionConfig: async (config) => ({ sessionConfig: config }),
+      },
+    );
+
+    // No initialPrompt: sendInitialPrompt never runs, so the watch this create
+    // registered must not linger "active" forever for restart resume to find.
+    const { snapshot: child } = await createAgentCommand(
+      { agentManager, agentStorage: storage, logger, providerSnapshotManager },
+      {
+        kind: "mcp",
+        provider: "codex/gpt-5.4",
+        title: "unwatched child",
+        cwd: workdir,
+        background: true,
+        notifyOnFinish: true,
+        callerAgentId: parent.id,
+      },
+    );
+
+    const storedChild = await storage.get(child.id);
+    expect(storedChild?.finishNotificationWatches).toEqual([
+      expect.objectContaining({ callerAgentId: parent.id, status: "stopped" }),
+    ]);
   } finally {
     await removeRealAgentManagerWorkdir({ agentManager, storage, workdir });
   }

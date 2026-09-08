@@ -83,7 +83,7 @@ describe("fetchAggregatedSchedules load state", () => {
     expect(result).toEqual({ status: "loaded", data: [], hostErrors: [] });
   });
 
-  it("does not report loaded empty while another known host is still connecting", async () => {
+  it("settles to loaded empty once a reachable host answers, even while another host is still connecting", async () => {
     const result = await fetchAggregatedSchedules({
       hosts: [
         { serverId: "host-a", serverName: "Host A" },
@@ -100,7 +100,85 @@ describe("fetchAggregatedSchedules load state", () => {
       }),
     });
 
-    expect(result).toEqual({ status: "connecting" });
+    expect(result).toEqual({ status: "loaded", data: [], hostErrors: [] });
+  });
+
+  it("settles to loaded empty once a reachable host answers, even while another saved host is offline", async () => {
+    const result = await fetchAggregatedSchedules({
+      hosts: [
+        { serverId: "host-a", serverName: "Host A" },
+        { serverId: "host-b", serverName: "Host B" },
+      ],
+      runtime: makeRuntime({
+        snapshots: {
+          "host-a": { connectionStatus: "online" },
+          "host-b": { connectionStatus: "offline" },
+        },
+        schedules: {
+          "host-a": [],
+        },
+      }),
+    });
+
+    expect(result).toEqual({ status: "loaded", data: [], hostErrors: [] });
+  });
+
+  it("surfaces a partial host error instead of connecting while a third host is still settling", async () => {
+    const failingClient = {
+      scheduleList: async () => {
+        throw new Error("boom");
+      },
+    };
+    const result = await fetchAggregatedSchedules({
+      hosts: [
+        { serverId: "host-a", serverName: "Host A" },
+        { serverId: "host-b", serverName: "Host B" },
+        { serverId: "host-c", serverName: "Host C" },
+      ],
+      runtime: {
+        getSnapshot: (serverId) => {
+          if (serverId === "host-c") return { connectionStatus: "idle" };
+          return { connectionStatus: "online" };
+        },
+        getClient: (serverId) => {
+          if (serverId === "host-a")
+            return {
+              scheduleList: async () => ({ requestId: "test-request", schedules: [], error: null }),
+            };
+          if (serverId === "host-b") return failingClient;
+          return null;
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      status: "loaded",
+      data: [],
+      hostErrors: [{ serverId: "host-b", serverName: "Host B", message: "boom" }],
+    });
+  });
+
+  it("throws when every reachable host fails, regardless of a still-settling saved host", async () => {
+    const client = {
+      scheduleList: async () => {
+        throw new Error("boom");
+      },
+    };
+    await expect(
+      fetchAggregatedSchedules({
+        hosts: [
+          { serverId: "host-a", serverName: "Host A" },
+          { serverId: "host-b", serverName: "Host B" },
+        ],
+        runtime: {
+          getSnapshot: (serverId) =>
+            serverId === "host-a"
+              ? { connectionStatus: "online" }
+              : { connectionStatus: "connecting" },
+          getClient: (serverId) => (serverId === "host-a" ? client : null),
+        },
+      }),
+    ).rejects.toThrow("No connected hosts could load schedules");
   });
 
   it("loads reachable host data when another known host is still connecting", async () => {

@@ -1,10 +1,38 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  AssignmentContractReceiptSchema,
+  AssignmentEnvelopeSchema,
+  AssignmentResourceGrantsSchema,
   assignmentExternalEffectBoundaryFor,
   isAssignmentEffectAllowedForRole,
   PASEO_BEADS_EXTERNAL_EFFECT_SCOPE,
 } from "./assignment-contract.js";
+
+const BASE_ENVELOPE = {
+  version: 1 as const,
+  disposition: "peer-execution" as const,
+  objective: "test objective",
+  effectClass: "mutating" as const,
+  mutationBoundary: { mode: "no-write" as const },
+  externalEffectBoundary: { mode: "denied" as const },
+  evidence: "test evidence",
+  handbackAndStop: "test handback",
+};
+
+const BASE_RECEIPT = {
+  version: 1 as const,
+  assignmentDigest: "a".repeat(64),
+  roleId: "peer" as const,
+  disposition: "peer-execution" as const,
+  assigner: { kind: "human-session" as const },
+  workspaceId: "workspace-1",
+  cwd: "/repo",
+  effectClass: "mutating" as const,
+  mutationBoundary: { mode: "no-write" as const },
+  externalEffectBoundary: { mode: "denied" as const },
+  createdAt: "2026-09-07T00:00:00.000Z",
+};
 
 describe("assignment external-effect defaults", () => {
   test("leases only the mandatory Beads graph to mutating Lead and Peer work", () => {
@@ -32,5 +60,59 @@ describe("assignment external-effect defaults", () => {
       mode: "denied",
     });
     expect(isAssignmentEffectAllowedForRole("supervisor", "delegation")).toBe(true);
+  });
+});
+
+describe("notebookGrant compatibility shape", () => {
+  test("an envelope with no notebookGrant still parses (old-client-shaped payload)", () => {
+    expect(AssignmentEnvelopeSchema.parse(BASE_ENVELOPE).notebookGrant).toBeUndefined();
+  });
+
+  test("an envelope requesting a notebookGrant parses with only scope/expiresAt, as a top-level field", () => {
+    const parsed = AssignmentEnvelopeSchema.parse({
+      ...BASE_ENVELOPE,
+      notebookGrant: { scope: "coordination notes", expiresAt: "2026-12-31T00:00:00.000Z" },
+    });
+    expect(parsed.notebookGrant).toEqual({
+      scope: "coordination notes",
+      expiresAt: "2026-12-31T00:00:00.000Z",
+    });
+  });
+
+  test("a receipt with no notebookGrant still parses (old-client-shaped payload)", () => {
+    expect(AssignmentContractReceiptSchema.parse(BASE_RECEIPT).notebookGrant).toBeUndefined();
+  });
+
+  test("a receipt's notebookGrant carries daemon-resolved identity fields, not just the caller's request shape", () => {
+    const parsed = AssignmentContractReceiptSchema.parse({
+      ...BASE_RECEIPT,
+      notebookGrant: {
+        effect: "notebook-write",
+        notebookId: "nb_abc123",
+        location: "docs/harness/SUPERVISOR_NOTEBOOK.md",
+        projectId: "prj_abc123",
+        scope: "coordination notes",
+        designatedWriterId: "agent-1",
+        expiresAt: "2026-12-31T00:00:00.000Z",
+      },
+    });
+    expect(parsed.notebookGrant?.effect).toBe("notebook-write");
+    expect(parsed.notebookGrant?.designatedWriterId).toBe("agent-1");
+  });
+
+  test("notebookGrant is never accepted inside the strict resourceGrants object", () => {
+    expect(() =>
+      AssignmentResourceGrantsSchema.parse({
+        notebookGrant: { scope: "x", expiresAt: "2026-12-31T00:00:00.000Z" },
+      }),
+    ).toThrow();
+  });
+
+  test("an unrecognized extra top-level field on the envelope does not break parsing (additive-forward-compat proxy)", () => {
+    const parsed = AssignmentEnvelopeSchema.parse({
+      ...BASE_ENVELOPE,
+      someFutureField: "daemon added this later",
+    });
+    expect(parsed.objective).toBe("test objective");
   });
 });

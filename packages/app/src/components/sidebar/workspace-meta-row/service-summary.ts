@@ -44,6 +44,6 @@ export function selectWorkspaceServiceSummary(
  */
 export function workspaceServiceLabelKey(summary: WorkspaceServiceSummary): string {
   return summary.health === "unhealthy"
-    ? "workspace.status.serviceUnhealthy"
-    : "workspace.status.serviceRunning";
+    ? "sidebar.workspace.status.serviceUnhealthy"
+    : "sidebar.workspace.status.serviceRunning";
 }

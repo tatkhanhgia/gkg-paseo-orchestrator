@@ -10,6 +10,7 @@ import {
   detectLegacyProviderRole,
   LEGACY_PROVIDER_ROLE_DETECTION_EXPIRES_AT,
   policyOwnerForRoleBinding,
+  preflightWorkspaceProtocolAdmission,
   resolveProviderRoleBindingSupport,
   toRoleBindingReceipt,
   WORKSPACE_PROTOCOL_ADMISSION_ERROR,
@@ -329,6 +330,64 @@ describe("native Foundation role materialization", () => {
     ).rejects.toThrow(`${WORKSPACE_PROTOCOL_ADMISSION_ERROR}: missing`);
   });
 
+  test("treats a notebook grant as material work in preflight and role admission", async () => {
+    const cwd = await createWorkspace();
+    const assignment = {
+      ...assignmentFor("supervisor", "delegation"),
+      notebookGrant: {
+        scope: "bounded Supervisor notebook authority",
+        expiresAt: "2027-01-01T00:00:00.000Z",
+      },
+    };
+
+    expect(() =>
+      preflightWorkspaceProtocolAdmission({
+        cwd,
+        readership: "full",
+        assignment,
+      }),
+    ).toThrow(`${WORKSPACE_PROTOCOL_ADMISSION_ERROR}: missing`);
+    await expect(
+      materializeRoleBinding({
+        roleId: "supervisor",
+        provider: "codex",
+        cwd,
+        ...assignmentBinding("supervisor", cwd),
+        assignment,
+      }),
+    ).rejects.toThrow(`${WORKSPACE_PROTOCOL_ADMISSION_ERROR}: missing`);
+  });
+
+  test("treats a persisted notebook grant as material during late admission", async () => {
+    const cwd = await createWorkspace();
+    const binding = await materializeRoleBinding({
+      roleId: "supervisor",
+      provider: "codex",
+      cwd,
+      ...assignmentBinding("supervisor", cwd),
+      assignment: assignmentFor("supervisor", "read-only"),
+    });
+    const withNotebookGrant = {
+      ...binding,
+      assignment: {
+        ...binding.assignment,
+        notebookGrant: {
+          effect: "notebook-write" as const,
+          notebookId: "nb_late-admission",
+          location: "docs/harness/SUPERVISOR_NOTEBOOK.md",
+          projectId: "project-1",
+          scope: "late admission",
+          designatedWriterId: "supervisor-1",
+          expiresAt: "2027-01-01T00:00:00.000Z",
+        },
+      },
+    };
+
+    expect(() => assertPersistedRoleAdmissionCurrent(withNotebookGrant, cwd)).toThrow(
+      `${WORKSPACE_PROTOCOL_ADMISSION_ERROR}: missing_protocol_blocks_material_assignment`,
+    );
+  });
+
   test("allows a Human-bound read-only exception for a missing protocol", async () => {
     const cwd = await createWorkspace();
     const binding = await materializeRoleBinding({
@@ -471,6 +530,14 @@ describe("native Foundation role materialization", () => {
     ).toThrow(
       `${ASSIGNMENT_CONTRACT_EXPIRED_ERROR}: protocolExceptionExpiresAt=${exceptionExpiresAt}`,
     );
+
+    const malformedAssignment = {
+      ...expiringAssignment,
+      assignment: { ...expiringAssignment.assignment, expiresAt: "not-a-date" },
+    };
+    expect(() =>
+      assertPersistedRoleAdmissionCurrent(malformedAssignment, assignmentWorkspace),
+    ).toThrow(`${ASSIGNMENT_CONTRACT_EXPIRED_ERROR}: expiresAt=not-a-date`);
   });
   test("fails closed for a provider without a native durable role channel", async () => {
     const cwd = await createWorkspace();
@@ -664,7 +731,45 @@ describe("native Foundation role materialization", () => {
         "record_council_seat",
       ]),
     });
-    expect(leadPolicy?.allowedTools).toHaveLength(34);
+    expect(leadPolicy?.allowedTools).toEqual([
+      "list_workspaces",
+      "list_workspace_scripts",
+      "list_profiles",
+      "create_agent",
+      "send_agent_prompt",
+      "resolve_agent_signal",
+      "get_agent_status",
+      "get_agent_checkpoint",
+      "list_agents",
+      "cancel_agent",
+      "archive_agent",
+      "get_agent_activity",
+      "create_room",
+      "start_council",
+      "record_council_seat",
+      "read_room",
+      "post_room",
+      "beads_status",
+      "beads_ready",
+      "beads_list",
+      "beads_get",
+      "beads_create",
+      "beads_claim",
+      "beads_update",
+      "beads_close",
+      "beads_add_dependency",
+      "beads_prime",
+      "read_project_notebook",
+      "list_providers",
+      "list_models",
+      "inspect_provider",
+      "browser_list_tabs",
+      "browser_snapshot",
+      "browser_wait",
+      "browser_screenshot",
+      "browser_logs",
+    ]);
+    expect(leadPolicy?.allowedTools).toHaveLength(36);
     expect(leadPolicy?.allowedTools).toEqual(
       expect.not.arrayContaining([
         "signal_agent",

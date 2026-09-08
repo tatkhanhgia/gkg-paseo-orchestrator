@@ -28,6 +28,7 @@ export function buildDraftAgentControls(input: {
   roleOptions?: DraftAgentControlsProps["roleOptions"];
   selectedRole?: PaseoRoleId | null;
   onSelectRole?: (roleId: PaseoRoleId) => void;
+  modeLockReason?: string;
 }): DraftAgentControlsProps {
   const {
     formState,
@@ -38,6 +39,7 @@ export function buildDraftAgentControls(input: {
     roleOptions,
     selectedRole,
     onSelectRole,
+    modeLockReason,
   } = input;
   return {
     providerDefinitions: formState.providerDefinitions,
@@ -45,6 +47,7 @@ export function buildDraftAgentControls(input: {
     modeOptions: formState.modeOptions,
     selectedMode: formState.selectedMode,
     onSelectMode: formState.setModeFromUser,
+    modeLockReason,
     models: formState.availableModels,
     selectedModel: formState.selectedModel,
     onSelectModel: formState.setModelFromUser,

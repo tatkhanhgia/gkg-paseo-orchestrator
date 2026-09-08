@@ -8,8 +8,12 @@ import {
   BUNDLED_POLICY_PACK_UNAVAILABLE_ERROR,
   BundledPolicyPackRegistry,
 } from "./bundled-policy-pack.js";
-import { createDefaultSlpBundledPolicyRegistry } from "./bundled/slp.js";
+import {
+  createDefaultSlpBundledPolicyRegistry,
+  SLP_BUNDLED_POLICY_VERSION,
+} from "./bundled/slp.js";
 import { AgentManager } from "../agent/agent-manager.js";
+import { createTrustedPolicyPackResolver } from "./trusted-policy.js";
 
 const REMOVED_HISTORICAL_OWNER = {
   kind: "plugin" as const,
@@ -18,8 +22,8 @@ const REMOVED_HISTORICAL_OWNER = {
   generationDigest: "569c7f4633b7ffacb2e63c0ee3dda1ea882bc050bc456fdc8ac0c466f4f483f0",
 };
 
-function manifest(policyVersion: string) {
-  return { id: "slp" as const, abiVersion: 1 as const, policyVersion };
+function manifest(policyVersion: string, id = "slp") {
+  return { id, abiVersion: 1 as const, policyVersion };
 }
 
 describe("bundled policy pack registry", () => {
@@ -28,14 +32,19 @@ describe("bundled policy pack registry", () => {
     const second = createDefaultSlpBundledPolicyRegistry().resolveActive("slp");
 
     expect(first.owner).toEqual(second.owner);
-    expect(first.owner).toEqual({
-      kind: "plugin",
-      pluginId: "slp",
-      policyVersion: "1.2.0",
-      generationDigest: "9206c3cb32cf9978d8f5499fcc0a77af5fcccf019a2ce771d8f3cec40592b590",
-    });
-    expect(first.contribution.eventPolicies).toHaveLength(1);
+    expect(first.owner.kind).toBe("plugin");
+    expect(first.owner.policyVersion).toBe(SLP_BUNDLED_POLICY_VERSION);
+    expect(first.owner.generationDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(first.owner.generationDigest).toBe(
+      "c678356acbce903191473e46d4f9a7fe575d84ebb50c72008548c0d20a5ca826",
+    );
+    expect(first.owner.generationDigest).not.toBe(
+      "c30881a6772f1dec72f8869da6da72465fc7fa4367735052dc0f0b5f88d1b117",
+    );
+    expect(first.owner).toEqual(second.owner);
+    expect(first.contribution.eventPolicies).toHaveLength(2);
     expect(first.contribution.eventPolicies[0]?.id).toBe("slp.attention");
+    expect(first.contribution.eventPolicies[1]?.id).toBe("slp.lifecycle-attention");
     expect(first.contribution.eventPolicies[0]?.enabled({})).toBe(true);
     expect(
       first.contribution.eventPolicies[0]?.enabled({ PASEO_DISABLE_SLP_ATTENTION_POLICY: "1" }),
@@ -45,7 +54,7 @@ describe("bundled policy pack registry", () => {
   test("fails closed for a removed historical generation with no compatibility fallback", () => {
     const registry = createDefaultSlpBundledPolicyRegistry();
 
-    expect(registry.resolveActive("slp").owner.policyVersion).toBe("1.2.0");
+    expect(registry.resolveActive("slp").owner.policyVersion).toBe(SLP_BUNDLED_POLICY_VERSION);
     expect(() => registry.resolvePinned(REMOVED_HISTORICAL_OWNER)).toThrow(
       BUNDLED_POLICY_PACK_MISSING_ERROR,
     );
@@ -61,6 +70,8 @@ describe("bundled policy pack registry", () => {
     const fakeManager = {
       bundledPolicyPacks: registry,
       getAgent: (agentId: string) => agents.get(agentId) ?? null,
+      getTrustedPolicyResolver: () =>
+        createTrustedPolicyPackResolver({ registry, activePluginId: "slp" }),
     } as unknown as AgentManager;
     const resolve = AgentManager.prototype.resolveBundledEventPoliciesForAgent;
 
@@ -73,12 +84,20 @@ describe("bundled policy pack registry", () => {
         stateNamespace: `slp@${registry.resolveActive("slp").owner.generationDigest}`,
         policy: expect.objectContaining({ id: "slp.attention" }),
       }),
+      expect.objectContaining({
+        stateNamespace: `slp@${registry.resolveActive("slp").owner.generationDigest}`,
+        policy: expect.objectContaining({ id: "slp.lifecycle-attention" }),
+      }),
     ]);
   });
 
   test("reports unavailable historical role policy generations without weakening resume admission", () => {
     const registry = createDefaultSlpBundledPolicyRegistry();
-    const fakeManager = { bundledPolicyPacks: registry } as unknown as AgentManager;
+    const fakeManager = {
+      bundledPolicyPacks: registry,
+      getTrustedPolicyResolver: () =>
+        createTrustedPolicyPackResolver({ registry, activePluginId: "slp" }),
+    } as unknown as AgentManager;
     const isAvailable =
       AgentManager.prototype.isStoredAgentPolicyGenerationAvailable.bind(fakeManager);
     const record = (policyOwner?: unknown) =>
@@ -152,6 +171,24 @@ describe("bundled policy pack registry", () => {
       generationDigest: createHash("sha256").update("exact bundled SLP bytes").digest("hex"),
       policyVersion: "1.0.0",
     });
+  });
+
+  test("accepts a trusted non-SLP generation without changing the pinned owner shape", () => {
+    const registry = new BundledPolicyPackRegistry<{ marker: string }>();
+    const generation = registry.registerGeneration({
+      manifest: manifest("0.1.0", "fixture-policy"),
+      artifactBytes: "exact non-SLP fixture bytes",
+      contribution: { marker: "fixture" },
+    });
+    registry.activate(generation.owner);
+
+    expect(registry.resolveActive("fixture-policy")).toEqual(generation);
+    expect(generation.owner).toMatchObject({
+      kind: "plugin",
+      pluginId: "fixture-policy",
+      policyVersion: "0.1.0",
+    });
+    expect(() => registry.resolveActive("slp")).toThrow(BUNDLED_POLICY_PACK_MISSING_ERROR);
   });
 
   test("pins old agents while a newer generation becomes active", async () => {

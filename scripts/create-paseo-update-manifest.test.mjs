@@ -87,3 +87,43 @@ test("fails closed when any platform artifact is missing", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("single-target release qualifies only ARM64 and rejects corrupt bytes or unknown targets", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "paseo-arm64-manifest-"));
+  try {
+    const version = JSON.parse(readFileSync(new URL("package.json", repoRoot), "utf8")).version;
+    const name = `paseo-web-cli-${version}-macos-arm64.tar.gz`;
+    const archive = path.join(root, name);
+    const bytes = "qualified ARM64 fixture";
+    writeFileSync(archive, bytes);
+    writeFileSync(
+      `${archive}.sha256`,
+      `${createHash("sha256").update(bytes).digest("hex")}  ${name}\n`,
+    );
+    const output = path.join(root, "manifest.json");
+    const run = (target) =>
+      execFileSync(
+        process.execPath,
+        [
+          new URL("scripts/create-paseo-update-manifest.mjs", repoRoot).pathname,
+          "--target",
+          target,
+          "--artifacts",
+          root,
+          "--output",
+          output,
+        ],
+        { cwd: new URL(".", repoRoot).pathname, stdio: "pipe" },
+      );
+    run("macos-arm64");
+    const manifest = JSON.parse(readFileSync(output, "utf8"));
+    assert.deepEqual(Object.keys(manifest.assets), ["macos-arm64"]);
+    assert.equal(manifest.assets["macos-arm64"].name, name);
+    assert.throws(() => run("linux-x64"));
+    assert.throws(() => run("unknown"));
+    writeFileSync(archive, "corrupt");
+    assert.throws(() => run("macos-arm64"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -1,6 +1,8 @@
 import type { Command } from "commander";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
+import type { HarnessBindingReceipt } from "@getpaseo/protocol/harness-binding";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
+import type { PolicyOwner } from "@getpaseo/protocol/policy-owner";
 import { connectToDaemon, getDaemonHost } from "../../utils/client.js";
 import type { CommandOptions, ListResult, OutputSchema, CommandError } from "../../output/index.js";
 
@@ -11,12 +13,61 @@ export function addInspectOptions(cmd: Command): Command {
 }
 
 /** Agent inspect data for display (matches CLI spec format) */
+interface InspectPolicyOwner {
+  Kind: PolicyOwner["kind"];
+  PluginId: string | null;
+  GenerationDigest: string | null;
+  PolicyVersion: string | null;
+}
+
+interface InspectSupervisorNotebook {
+  NotebookId: string;
+  Location: string;
+  ProjectScope: string;
+  ReportingTarget: string;
+  DesignatedWriterId: string | null;
+  ExpiresAt: string | null;
+}
+
+interface InspectHarnessResource {
+  Key: string;
+  Path: string;
+  Digest: string;
+}
+
+interface InspectHarnessBinding {
+  SchemaVersion: number;
+  Package: string;
+  Generation: number;
+  ArtifactDigest: string;
+  DescriptorPath: string;
+  DescriptorDigest: string;
+  Resources: InspectHarnessResource[];
+  ProjectId: string;
+  WorkspaceId: string;
+  WorkspaceRoot: string | null;
+  ProjectRoot: string;
+  Cwd: string;
+  SupervisorNotebook: InspectSupervisorNotebook | null;
+}
+
+interface InspectNotebookGrant {
+  Effect: "notebook-write";
+  NotebookId: string;
+  Location: string;
+  ProjectId: string;
+  Scope: string;
+  DesignatedWriterId: string;
+  ExpiresAt: string;
+}
+
 interface AgentInspect {
   Id: string;
   Name: string;
   Provider: string;
   Role: string | null;
   RoleBinding: {
+    PolicyOwner: InspectPolicyOwner | null;
     DefinitionVersion: string;
     DefinitionDigest: string;
     BindingDigest: string;
@@ -24,6 +75,7 @@ interface AgentInspect {
     Qualification: string;
     ProtocolStatus: string;
     ProtocolDigest: string | null;
+    HarnessBinding: InspectHarnessBinding | null;
   } | null;
   Assignment: {
     Version: number;
@@ -40,6 +92,7 @@ interface AgentInspect {
     ProtocolExceptionExpiresAt: string | null;
     CreatedAt: string;
     ExpiresAt: string | null;
+    NotebookGrant: InspectNotebookGrant | null;
   } | null;
   LaunchContract: {
     Version: number;
@@ -180,9 +233,81 @@ function buildCapabilities(snapshot: AgentSnapshotPayload): AgentInspect["Capabi
   };
 }
 
+function buildPolicyOwner(owner: PolicyOwner | undefined): InspectPolicyOwner | null {
+  if (!owner) return null;
+  if (owner.kind === "legacy-core") {
+    return {
+      Kind: owner.kind,
+      PluginId: null,
+      GenerationDigest: null,
+      PolicyVersion: null,
+    };
+  }
+  return {
+    Kind: owner.kind,
+    PluginId: owner.pluginId,
+    GenerationDigest: owner.generationDigest,
+    PolicyVersion: owner.policyVersion,
+  };
+}
+
+function buildSupervisorNotebook(
+  notebook: NonNullable<HarnessBindingReceipt["notebook"]> | undefined,
+): InspectSupervisorNotebook | null {
+  if (!notebook) return null;
+  return {
+    NotebookId: notebook.notebookId,
+    Location: notebook.location,
+    ProjectScope: notebook.projectScope,
+    ReportingTarget: notebook.reportingTarget,
+    DesignatedWriterId: notebook.designatedWriterId,
+    ExpiresAt: notebook.expiresAt,
+  };
+}
+
+function buildHarnessBinding(
+  binding: HarnessBindingReceipt | undefined,
+): InspectHarnessBinding | null {
+  if (!binding) return null;
+  return {
+    SchemaVersion: binding.schemaVersion,
+    Package: binding.package,
+    Generation: binding.generation,
+    ArtifactDigest: binding.artifactDigest,
+    DescriptorPath: binding.descriptorPath,
+    DescriptorDigest: binding.descriptorDigest,
+    Resources: binding.resources.map((resource) => ({
+      Key: resource.key,
+      Path: resource.path,
+      Digest: resource.digest,
+    })),
+    ProjectId: binding.projectId,
+    WorkspaceId: binding.workspaceId,
+    WorkspaceRoot: binding.workspaceRoot ?? null,
+    ProjectRoot: binding.projectRoot,
+    Cwd: binding.cwd,
+    SupervisorNotebook: buildSupervisorNotebook(binding.notebook),
+  };
+}
+
+function buildNotebookGrant(snapshot: AgentSnapshotPayload): InspectNotebookGrant | null {
+  const grant = snapshot.roleBinding?.assignment?.notebookGrant;
+  if (!grant) return null;
+  return {
+    Effect: grant.effect,
+    NotebookId: grant.notebookId,
+    Location: grant.location,
+    ProjectId: grant.projectId,
+    Scope: grant.scope,
+    DesignatedWriterId: grant.designatedWriterId,
+    ExpiresAt: grant.expiresAt,
+  };
+}
+
 function buildRoleBinding(snapshot: AgentSnapshotPayload): AgentInspect["RoleBinding"] {
   if (!snapshot.roleBinding) return null;
   return {
+    PolicyOwner: buildPolicyOwner(snapshot.roleBinding.policyOwner),
     DefinitionVersion: snapshot.roleBinding.definitionVersion,
     DefinitionDigest: snapshot.roleBinding.definitionDigest,
     BindingDigest: snapshot.roleBinding.bindingDigest,
@@ -190,6 +315,7 @@ function buildRoleBinding(snapshot: AgentSnapshotPayload): AgentInspect["RoleBin
     Qualification: snapshot.roleBinding.qualification,
     ProtocolStatus: snapshot.roleBinding.workspaceProtocol.status,
     ProtocolDigest: snapshot.roleBinding.workspaceProtocol.digest ?? null,
+    HarnessBinding: buildHarnessBinding(snapshot.roleBinding.harnessBinding),
   };
 }
 
@@ -220,6 +346,7 @@ function buildAssignment(snapshot: AgentSnapshotPayload): AgentInspect["Assignme
     ProtocolExceptionExpiresAt: assignment.protocolExceptionExpiresAt ?? null,
     CreatedAt: assignment.createdAt,
     ExpiresAt: assignment.expiresAt ?? null,
+    NotebookGrant: buildNotebookGrant(snapshot),
   };
 }
 
@@ -315,6 +442,30 @@ function appendLaunchProfileRow(
   });
 }
 
+function formatPolicyOwner(owner: InspectPolicyOwner | null): string {
+  if (!owner) return "null";
+  if (owner.Kind === "legacy-core") return owner.Kind;
+  return `plugin:${owner.PluginId}@sha256:${owner.GenerationDigest} · ${owner.PolicyVersion}`;
+}
+
+function formatSupervisorNotebook(notebook: InspectSupervisorNotebook | null): string {
+  if (!notebook) return "null";
+  return `NotebookId: ${notebook.NotebookId}, Location: ${notebook.Location}, ProjectScope: ${notebook.ProjectScope}, ReportingTarget: ${notebook.ReportingTarget}, DesignatedWriterId: ${notebook.DesignatedWriterId ?? "null"}, ExpiresAt: ${notebook.ExpiresAt ?? "null"}`;
+}
+
+function formatHarnessBinding(binding: InspectHarnessBinding | null): string {
+  if (!binding) return "null";
+  const resources = binding.Resources.map(
+    (resource) => `${resource.Key}=${resource.Path}@sha256:${resource.Digest}`,
+  ).join("; ");
+  return `SchemaVersion: ${binding.SchemaVersion}, Package: ${binding.Package}, Generation: ${binding.Generation}, ArtifactDigest: ${binding.ArtifactDigest}, DescriptorPath: ${binding.DescriptorPath}, DescriptorDigest: ${binding.DescriptorDigest}, Resources: ${resources || "none"}, ProjectId: ${binding.ProjectId}, WorkspaceId: ${binding.WorkspaceId}, WorkspaceRoot: ${binding.WorkspaceRoot ?? "null"}, ProjectRoot: ${binding.ProjectRoot}, Cwd: ${binding.Cwd}, SupervisorNotebook: ${formatSupervisorNotebook(binding.SupervisorNotebook)}`;
+}
+
+function formatNotebookGrant(grant: InspectNotebookGrant | null): string {
+  if (!grant) return "null";
+  return `Effect: ${grant.Effect}, NotebookId: ${grant.NotebookId}, Location: ${grant.Location}, ProjectId: ${grant.ProjectId}, Scope: ${grant.Scope}, DesignatedWriterId: ${grant.DesignatedWriterId}, ExpiresAt: ${grant.ExpiresAt}`;
+}
+
 /** Convert agent to key-value rows for table display */
 function toInspectRows(agent: AgentInspect): InspectRow[] {
   const rows: InspectRow[] = [
@@ -339,15 +490,23 @@ function toInspectRows(agent: AgentInspect): InspectRow[] {
 
   if (agent.RoleBinding) {
     rows.push({
+      key: "PolicyOwner",
+      value: formatPolicyOwner(agent.RoleBinding.PolicyOwner),
+    });
+    rows.push({
       key: "RoleBinding",
       value: `Version: ${agent.RoleBinding.DefinitionVersion}, Definition: ${agent.RoleBinding.DefinitionDigest}, Binding: ${agent.RoleBinding.BindingDigest}, Injection: ${agent.RoleBinding.InjectionMethod}, Qualification: ${agent.RoleBinding.Qualification}, Protocol: ${agent.RoleBinding.ProtocolStatus}${agent.RoleBinding.ProtocolDigest ? ` (${agent.RoleBinding.ProtocolDigest})` : ""}`,
+    });
+    rows.push({
+      key: "HarnessBinding",
+      value: formatHarnessBinding(agent.RoleBinding.HarnessBinding),
     });
   }
 
   if (agent.Assignment) {
     rows.push({
       key: "Assignment",
-      value: `Version: ${agent.Assignment.Version}, Digest: ${agent.Assignment.Digest}, Role: ${agent.Assignment.Role}, Disposition: ${agent.Assignment.Disposition}, Assigner: ${agent.Assignment.Assigner}, WorkspaceId: ${agent.Assignment.WorkspaceId}, Cwd: ${agent.Assignment.Cwd}, Effect: ${agent.Assignment.EffectClass}, Mutation: ${agent.Assignment.MutationBoundary}, External: ${agent.Assignment.ExternalEffectBoundary}, BeadsIssueGrants: ${agent.Assignment.BeadsIssueGrants.join(", ") || "none"}, ProtocolExceptionExpiresAt: ${agent.Assignment.ProtocolExceptionExpiresAt ?? "null"}, CreatedAt: ${agent.Assignment.CreatedAt}, ExpiresAt: ${agent.Assignment.ExpiresAt ?? "null"}`,
+      value: `Version: ${agent.Assignment.Version}, Digest: ${agent.Assignment.Digest}, Role: ${agent.Assignment.Role}, Disposition: ${agent.Assignment.Disposition}, Assigner: ${agent.Assignment.Assigner}, WorkspaceId: ${agent.Assignment.WorkspaceId}, Cwd: ${agent.Assignment.Cwd}, Effect: ${agent.Assignment.EffectClass}, Mutation: ${agent.Assignment.MutationBoundary}, External: ${agent.Assignment.ExternalEffectBoundary}, BeadsIssueGrants: ${agent.Assignment.BeadsIssueGrants.join(", ") || "none"}, ProtocolExceptionExpiresAt: ${agent.Assignment.ProtocolExceptionExpiresAt ?? "null"}, CreatedAt: ${agent.Assignment.CreatedAt}, ExpiresAt: ${agent.Assignment.ExpiresAt ?? "null"}, NotebookGrant: ${formatNotebookGrant(agent.Assignment.NotebookGrant)}`,
     });
   }
 

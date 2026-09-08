@@ -62,6 +62,29 @@ import {
   SLP_BUNDLED_POLICY_VERSION,
   type SlpBundledPolicyContribution,
 } from "../policy/bundled/slp.js";
+import { startEventPolicyRuntime } from "./event-policy-runtime.js";
+import {
+  NON_SLP_FIXTURE_EVENT_POLICY,
+  NON_SLP_FIXTURE_PLUGIN_ID,
+  NON_SLP_FIXTURE_POLICY_VERSION,
+  createNonSlpFixtureRegistry,
+} from "../policy/non-slp-fixture-policy.js";
+import { createTrustedPolicyPackResolver } from "../policy/trusted-policy.js";
+import { createProjectHarnessBindingService } from "../project/harness-binding-service.js";
+
+function testHarnessResolver(projectRoot: string) {
+  return createProjectHarnessBindingService({
+    workspaceRegistry: {
+      get: async (workspaceId) =>
+        ({ workspaceId, projectId: "project-test", cwd: projectRoot, archivedAt: null }) as never,
+    },
+    projectRegistry: {
+      get: async (projectId) => ({ projectId, rootPath: projectRoot, archivedAt: null }) as never,
+      list: async () =>
+        [{ projectId: "project-test", rootPath: projectRoot, archivedAt: null }] as never,
+    },
+  });
+}
 
 function leadAssignment(
   effectClass: AssignmentEnvelope["effectClass"] = "read-only",
@@ -678,6 +701,7 @@ async function startAndSteerThroughManager(
     activeTurnBehavior: behavior,
     runOptions: { clientMessageId: "replacement-client" },
   });
+  await manager.waitForAgentRunStart(agent.id);
   return { manager, agentId: agent.id, workdir };
 }
 
@@ -11680,6 +11704,7 @@ test("role-bound create persists immutable binding and passes only launch instru
     clients: { codex: client },
     bundledPolicyPacks,
     registry: storage,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
     idFactory: () => "00000000-0000-4000-8000-000000000116",
     mcpBaseUrl: "http://127.0.0.1:6767/mcp/agents",
@@ -11949,6 +11974,7 @@ test("daemon-style reload preserves the pinned SLP owner and exact native instru
     clients: { codex: firstClient },
     registry: storage,
     bundledPolicyPacks: firstBundledPolicyPacks,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
   });
 
@@ -11972,6 +11998,7 @@ test("daemon-style reload preserves the pinned SLP owner and exact native instru
       clients: { codex: restartedClient },
       registry: storage,
       bundledPolicyPacks: restartedBundledPolicyPacks,
+      resolveHarnessBinding: testHarnessResolver(workdir),
       logger,
     });
     const restored = await ensureAgentLoaded(created.id, {
@@ -12048,6 +12075,7 @@ test("mutating Peer grant verification rejects before provider launch and state 
     .mockRejectedValue(new Error("beads_issue_grant_verification_failed: missing issue"));
   const manager = new AgentManager({
     clients: { codex: client },
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
     verifyRoleResourceGrants,
   });
@@ -12134,6 +12162,7 @@ test("Council specialization persists exact bytes through create and resume", as
   const manager = new AgentManager({
     clients: { codex: client },
     registry: storage,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
   });
 
@@ -12228,6 +12257,7 @@ test("preapproves the exact Paseo role-tool ceiling and trusted Semble tools", a
       codex: { enabled: true, supportsExactMcpPreapproval: true },
     },
     registry: storage,
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
     idFactory: () => "00000000-0000-4000-8000-000000000118",
     mcpBaseUrl: "http://127.0.0.1:6767/mcp/agents",
@@ -12423,6 +12453,7 @@ test("Antigravity Peer fails before launch when its bridge cannot carry mandator
         },
       },
     },
+    resolveHarnessBinding: testHarnessResolver(workdir),
     logger,
   });
 
@@ -12503,6 +12534,95 @@ test("buffers attention until the callback is registered with a bounded one-time
     manager.notifyAgentAttention(agent.id, "error", "coordination");
     expect(replacementCalls).toHaveBeenCalledTimes(1);
   } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("runs a trusted non-SLP contribution through shared admission, tools, state, and events", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-non-slp-policy-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const registry = createNonSlpFixtureRegistry();
+  class LaunchCapableFixtureClient extends TestAgentClient {
+    override async materializeProviderLaunchBinding(input: { config: AgentSessionConfig }) {
+      return {
+        providerId: input.config.provider,
+        providerFamily: "codex",
+        model: input.config.model ?? "gpt-5.4",
+        credentialConfigured: true as const,
+        routeKind: "codex-subscription" as const,
+        modelProviderId: "openai",
+        authMethod: "codex-native" as const,
+      };
+    }
+  }
+  const manager = new AgentManager({
+    clients: { codex: new LaunchCapableFixtureClient() },
+    registry: storage,
+    logger,
+    trustedPolicyResolver: createTrustedPolicyPackResolver({
+      registry,
+      activePluginId: NON_SLP_FIXTURE_PLUGIN_ID,
+    }),
+    idFactory: () => "00000000-0000-4000-8000-000000000142",
+  });
+  const runtime = startEventPolicyRuntime({
+    dependencies: {
+      agentManager: manager,
+      agentStorage: storage,
+      sendAtSafeBoundary: async () => {},
+      logger,
+    },
+    advertisedPolicies: [NON_SLP_FIXTURE_EVENT_POLICY],
+    resolvePolicies: (agentId, event) =>
+      manager.resolveBundledEventPoliciesForAgent(
+        agentId,
+        event.type === "agent_closure" ? event : undefined,
+      ),
+  });
+
+  try {
+    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: "workspace-non-slp",
+      roleId: "peer",
+      assignment: peerReviewAssignment(),
+    });
+
+    expect(created.roleBinding?.policyOwner).toMatchObject({
+      kind: "plugin",
+      pluginId: NON_SLP_FIXTURE_PLUGIN_ID,
+      policyVersion: NON_SLP_FIXTURE_POLICY_VERSION,
+    });
+    expect(created.roleBinding?.instructions).toContain("not SLP doctrine");
+    expect(created.roleBinding?.roleProfile?.allowedTools).toEqual([
+      "beads_status",
+      "beads_get",
+      "beads_prime",
+    ]);
+    expect(() => manager.resolveSlpPolicyForRoleBinding(created.roleBinding!)).toThrow(
+      "slp_policy_generation_unsupported",
+    );
+    expect(manager.resolveBundledEventPoliciesForAgent(created.id)).toEqual([
+      expect.objectContaining({
+        stateNamespace: expect.stringContaining(`${NON_SLP_FIXTURE_PLUGIN_ID}@`),
+        policy: expect.objectContaining({ id: NON_SLP_FIXTURE_EVENT_POLICY.id }),
+      }),
+    ]);
+
+    await manager.appendTimelineItem(created.id, {
+      type: "assistant_message",
+      text: "Fixture event through the shared host.",
+    });
+    const owner = created.roleBinding?.policyOwner;
+    if (!owner || owner.kind !== "plugin") throw new Error("missing fixture policy owner");
+    const stateKey = `${owner.pluginId}@${owner.generationDigest}/${NON_SLP_FIXTURE_EVENT_POLICY.id}`;
+    await vi.waitFor(async () => {
+      const record = await storage.get(created.id);
+      expect(record?.eventPolicyStates?.[stateKey]).toMatchObject({
+        state: { streamEvents: 1 },
+      });
+    });
+  } finally {
+    runtime.stop();
     rmSync(workdir, { recursive: true, force: true });
   }
 });

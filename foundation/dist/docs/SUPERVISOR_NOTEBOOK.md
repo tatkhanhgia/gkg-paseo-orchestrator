@@ -65,6 +65,27 @@ Supervisor được observe, hỏi, ghi learning record và propose. Notebook kh
 
 Foundation không hard-code historical path `/root/.config/room-workflow/SUPERVISOR_NOTEBOOK.md`. Mỗi Supervisor binding phải chỉ ra một durable notebook location, scope và reporting target; không tạo per-session copy. File này là canonical contract/template, không phải database hoặc live cross-project ledger engine.
 
+## Grant và write semantics
+
+Ghi vào notebook chỉ hợp lệ khi binding hiện tại cấp một **explicit grant** (`scope` + `expiry`); grant đó
+là một bounded capability do runtime cấp có kiểm soát, không phải provider filesystem write — Supervisor
+filesystem vẫn no-write kể cả khi có grant. Thiếu grant nghĩa là `observe + propose only`: Supervisor ghi
+đề xuất record vào handback text cho Lead/Human thay vì tự ghi vào notebook. Ghi phải revision-safe
+(expected-revision write) và không tạo notebook mới chỉ vì đổi worktree trong cùng project;
+`notebookId`/`location`/`projectScope`/`reportingTarget`/`designatedWriter` do project binding gắn khi tạo
+notebook, không tự suy từ cwd hoặc tên thư mục.
+
+## Rule promotion — owner/authority/review-removal trigger
+
+Một `Recommendation/protocol candidate` chỉ được đề xuất promote thành `WORKSPACE_PROTOCOL.md` hoặc
+standing role profile khi record nêu đủ: reproduced failure (không phải một lần suy đoán), owning layer
+đúng, lý do vì sao convention/deletion đơn giản chưa đủ, đúng owner có authority approve, và một
+**review/removal trigger** cụ thể (điều kiện hoặc evidence sẽ khiến rule này bị revisit/gỡ bỏ). Chỉ một
+comparable later episode mới hỗ trợ claim "cải thiện"; nếu chưa có, giữ `Unobserved`/hypothesis. Khi
+evidence mới bác một hypothesis cũ, preserve correction/disproof trong record — không rewrite như thể
+hypothesis cũ chưa từng tồn tại. Supervisor không tự apply promotion; chỉ đúng authority (Human/Lead theo
+binding) mới approve.
+
 ## Material records
 
 ### `P-001` — Protocol admission và mechanism hardening trước later-effect proof

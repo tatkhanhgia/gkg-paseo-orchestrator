@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { PolicyOwnerSchema, type PolicyOwner } from "@getpaseo/protocol/policy-owner";
+import {
+  PolicyOwnerSchema,
+  PolicyPluginIdSchema,
+  type PolicyOwner,
+} from "@getpaseo/protocol/policy-owner";
 import { z } from "zod";
 
 export const BUNDLED_POLICY_PACK_ABI_VERSION = 1 as const;
@@ -9,7 +13,11 @@ const RESERVED_BUNDLED_POLICY_PLUGIN_IDS = new Set<string>([SLP_BUNDLED_POLICY_P
 
 export const BundledPolicyPackManifestSchema = z
   .object({
-    id: z.literal(SLP_BUNDLED_POLICY_PLUGIN_ID),
+    // Bundled packs are trusted server contributions. Keep the plugin-id wire
+    // shape aligned with PolicyOwner so a generation can be pinned without a
+    // second, narrower SLP-only ABI. Public/local plugin admission still
+    // reserves the SLP id below.
+    id: PolicyPluginIdSchema,
     abiVersion: z.literal(BUNDLED_POLICY_PACK_ABI_VERSION),
     policyVersion: z.string().trim().min(1),
   })
@@ -43,6 +51,10 @@ function generationKey(owner: Extract<PolicyOwner, { kind: "plugin" }>): string 
 
 export function isBundledPolicyPluginId(pluginId: string): boolean {
   return RESERVED_BUNDLED_POLICY_PLUGIN_IDS.has(pluginId);
+}
+
+export function isValidBundledPolicyPluginId(pluginId: string): boolean {
+  return PolicyPluginIdSchema.safeParse(pluginId).success;
 }
 
 export function assertLocalPluginIdAvailable(pluginId: string): void {

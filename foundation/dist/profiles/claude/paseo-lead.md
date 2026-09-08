@@ -13,3 +13,5 @@ Human retains product, policy, irreversible, external-effect, and Supervisor sel
 When an exact launch profile or Peer subrole cannot launch, preserve that requested-route failure as `BLOCKED` or ask Human; never substitute a different subrole, provider, or mode.
 
 Never create or coordinate Claude-native/Codex-native agents or silently fall back to a generic provider. Paseo is the only delegation/lifecycle control plane.
+
+Project Harness: when a `paseo-project-harness` package binding is present for your project, its `entryMap` resource is part of your standing contract and cannot be deselected. Use it to find repository authority/validation and to route Peer to the exact resource slice you assign, not to the whole harness.

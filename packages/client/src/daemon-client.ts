@@ -104,6 +104,9 @@ import type {
   PaseoConfigRaw,
   PaseoConfigRevision,
   WorkspaceProtocolRevision,
+  ProjectHarnessOperation,
+  ProjectHarnessPlan,
+  ProjectHarnessFileRevision,
   WorkspaceCreateRequest,
   WorkspaceRecoveryState,
   PluginListItem,
@@ -485,6 +488,26 @@ type WorkspaceProtocolWritePayload = Extract<
   SessionOutboundMessage,
   { type: "foundation.workspaceProtocol.write.response" }
 >["payload"];
+type ProjectHarnessInspectPayload = Extract<
+  SessionOutboundMessage,
+  { type: "foundation.projectHarness.inspect.response" }
+>["payload"];
+type ProjectHarnessPreviewPayload = Extract<
+  SessionOutboundMessage,
+  { type: "foundation.projectHarness.preview.response" }
+>["payload"];
+type ProjectHarnessApplyPayload = Extract<
+  SessionOutboundMessage,
+  { type: "foundation.projectHarness.apply.response" }
+>["payload"];
+type ProjectHarnessUpdatePayload = Extract<
+  SessionOutboundMessage,
+  { type: "foundation.projectHarness.update.response" }
+>["payload"];
+type ProjectHarnessNotebookReleasePayload = Extract<
+  SessionOutboundMessage,
+  { type: "foundation.projectHarness.notebook.release.response" }
+>["payload"];
 
 type ListCommandsPayload = ListCommandsResponse["payload"];
 type ListCommandsDraftConfig = Pick<
@@ -502,6 +525,24 @@ export interface WriteWorkspaceProtocolInput {
   content: string;
   expectedRevision: WorkspaceProtocolRevision | null;
   requestId?: string;
+}
+export interface ProjectHarnessTargetInput {
+  projectId: string;
+  workspaceId: string;
+  cwd?: string;
+  requestId?: string;
+}
+export interface ProjectHarnessPreviewInput extends ProjectHarnessTargetInput {
+  operation: ProjectHarnessOperation;
+}
+export interface ProjectHarnessMutationInput extends ProjectHarnessTargetInput {
+  plan: ProjectHarnessPlan;
+}
+export interface ProjectHarnessNotebookReleaseInput extends ProjectHarnessTargetInput {
+  notebookId: string;
+  location: string;
+  designatedWriterId: string;
+  expectedRevision: ProjectHarnessFileRevision;
 }
 interface ListCommandsOptions {
   agentId: string;
@@ -5207,6 +5248,88 @@ export class DaemonClient {
     });
   }
 
+  async inspectProjectHarness(
+    input: ProjectHarnessTargetInput,
+  ): Promise<ProjectHarnessInspectPayload> {
+    this.requireProjectHarnessSupport();
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "foundation.projectHarness.inspect.request",
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        cwd: input.cwd,
+      },
+    });
+  }
+
+  async previewProjectHarness(
+    input: ProjectHarnessPreviewInput,
+  ): Promise<ProjectHarnessPreviewPayload> {
+    this.requireProjectHarnessSupport();
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "foundation.projectHarness.preview.request",
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        cwd: input.cwd,
+        operation: input.operation,
+      },
+    });
+  }
+
+  async applyProjectHarness(
+    input: ProjectHarnessMutationInput,
+  ): Promise<ProjectHarnessApplyPayload> {
+    this.requireProjectHarnessSupport();
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "foundation.projectHarness.apply.request",
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        cwd: input.cwd,
+        plan: input.plan,
+      },
+    });
+  }
+
+  async updateProjectHarness(
+    input: ProjectHarnessMutationInput,
+  ): Promise<ProjectHarnessUpdatePayload> {
+    this.requireProjectHarnessSupport();
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "foundation.projectHarness.update.request",
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        cwd: input.cwd,
+        plan: input.plan,
+      },
+    });
+  }
+
+  async releaseProjectHarnessNotebook(
+    input: ProjectHarnessNotebookReleaseInput,
+  ): Promise<ProjectHarnessNotebookReleasePayload> {
+    this.requireProjectHarnessSupport();
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "foundation.projectHarness.notebook.release.request",
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        cwd: input.cwd,
+        notebookId: input.notebookId,
+        location: input.location,
+        designatedWriterId: input.designatedWriterId,
+        expectedRevision: input.expectedRevision,
+      },
+    });
+  }
+
   async refreshProvidersSnapshot(options?: {
     cwd?: string;
     providers?: AgentProvider[];
@@ -6181,6 +6304,14 @@ export class DaemonClient {
     // COMPAT(distributionUpdate): added in v0.5.0-paseo.41, remove gate after 2027-08-25.
     if (this.lastServerInfoMessage?.features?.distributionUpdate !== true) {
       throw new Error("Update the host once manually to enable downstream distribution updates.");
+    }
+  }
+
+  private requireProjectHarnessSupport(): void {
+    // COMPAT(projectHarness): added in v0.7.0-paseo.58; remove after 2027-03-08
+    // once minimum supported daemon >= v0.7.0-paseo.58.
+    if (this.lastServerInfoMessage?.features?.projectHarness !== true) {
+      throw new Error("Update the host to use Project Harness transactions.");
     }
   }
 

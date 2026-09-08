@@ -20,6 +20,7 @@ describe("Foundation role profiles", () => {
     expect(catalog.profiles.find((profile) => profile.roleId === "peer")?.toolCeiling).toEqual([
       "post_room",
       "resolve_agent_signal",
+      "get_agent_checkpoint",
       "beads_status",
       "beads_ready",
       "beads_list",
@@ -29,6 +30,7 @@ describe("Foundation role profiles", () => {
       "beads_update",
       "beads_add_dependency",
       "beads_prime",
+      "read_project_notebook",
       "browser_list_tabs",
       "browser_snapshot",
       "browser_wait",

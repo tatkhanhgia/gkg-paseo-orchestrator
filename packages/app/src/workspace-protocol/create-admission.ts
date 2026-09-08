@@ -1,4 +1,5 @@
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import type { AssignmentEnvelope } from "@getpaseo/protocol/assignment-contract";
 import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 import { buildProjectSettingsRoute } from "@/utils/host-routes";
 
@@ -41,15 +42,32 @@ export class WorkspaceProtocolCreateAdmissionError extends Error {
   }
 }
 
+export function requiresMaterialWorkspaceProtocol(
+  assignment: Pick<
+    AssignmentEnvelope,
+    "mutationBoundary" | "externalEffectBoundary" | "notebookGrant"
+  >,
+): boolean {
+  return (
+    assignment.mutationBoundary.mode !== "no-write" ||
+    assignment.externalEffectBoundary.mode !== "denied" ||
+    assignment.notebookGrant !== undefined
+  );
+}
+
 export async function requireWorkspaceProtocolForRole(input: {
   client: Pick<DaemonClient, "inspectWorkspaceProtocol">;
   serverId: string;
   projectId: string;
   repoRoot: string;
   roleId: PaseoRoleId | null | undefined;
+  assignment: Pick<
+    AssignmentEnvelope,
+    "mutationBoundary" | "externalEffectBoundary" | "notebookGrant"
+  >;
   supported: boolean;
 }): Promise<void> {
-  if (!input.roleId) return undefined;
+  if (!input.roleId || !requiresMaterialWorkspaceProtocol(input.assignment)) return undefined;
 
   if (!input.supported) {
     throw new WorkspaceProtocolCreateAdmissionError({

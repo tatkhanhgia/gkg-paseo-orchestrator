@@ -20,9 +20,11 @@ import {
   assignmentExternalEffectBoundaryFor,
   AssignmentEffectClassSchema,
   AssignmentResourceGrantsSchema,
+  NotebookGrantRequestSchema,
   PASEO_ASSIGNMENT_CONTRACT_VERSION,
   type AssignmentEffectClass,
   type AssignmentEnvelope,
+  type NotebookGrantRequest,
 } from "@getpaseo/protocol/assignment-contract";
 
 export { resolveProviderAndModel } from "../../utils/provider-model.js";
@@ -48,6 +50,14 @@ export function addRunOptions(cmd: Command): Command {
         "Grant an exact Beads Central issue to a Peer (can be used multiple times)",
         collectMultiple,
         [],
+      )
+      .option(
+        "--notebook-grant-scope <scope>",
+        "Request a fresh Supervisor project-notebook write grant with this scope",
+      )
+      .option(
+        "--notebook-grant-expires-at <timestamp>",
+        "Expiry for the fresh Supervisor notebook grant (ISO-8601 timestamp with offset)",
       )
       .addOption(new Option("--name <name>", "Hidden alias for --title").hideHelp())
       .option(
@@ -135,6 +145,8 @@ export interface AgentRunOptions extends CommandOptions {
   assignmentEffect?: string;
   writeScope?: string;
   beadsIssue?: string[];
+  notebookGrantScope?: string;
+  notebookGrantExpiresAt?: string;
   name?: string;
   provider?: string;
   model?: string;
@@ -398,7 +410,11 @@ function validateRunWorkspaceOptions(options: AgentRunOptions): void {
   }
 }
 
-function validateRunOptions(prompt: string, options: AgentRunOptions, outputSchema: unknown): void {
+function validateRunOptions(
+  prompt: string,
+  options: AgentRunOptions,
+  outputSchema: unknown,
+): NotebookGrantRequest | undefined {
   if (!prompt || prompt.trim().length === 0) {
     throw {
       code: "MISSING_PROMPT",
@@ -455,6 +471,12 @@ function validateRunOptions(prompt: string, options: AgentRunOptions, outputSche
     } satisfies CommandError;
   }
 
+  const notebookGrant = buildCliNotebookGrantRequest({
+    roleId,
+    scope: options.notebookGrantScope,
+    expiresAt: options.notebookGrantExpiresAt,
+  });
+
   if (outputSchema && runsInBackground(options)) {
     throw {
       code: "INVALID_OPTIONS",
@@ -462,6 +484,8 @@ function validateRunOptions(prompt: string, options: AgentRunOptions, outputSche
       details: "Structured output requires waiting for the agent to finish",
     } satisfies CommandError;
   }
+
+  return notebookGrant;
 }
 
 function parseRoleOption(role: string | undefined): PaseoRoleId | undefined {
@@ -514,6 +538,7 @@ export function buildCliAssignment(input: {
   cwd: string;
   writeScope?: string;
   beadsIssueIds?: readonly string[];
+  notebookGrant?: NotebookGrantRequest;
 }): AssignmentEnvelope {
   let disposition: AssignmentEnvelope["disposition"] = "supervision";
   if (input.roleId === "lead") disposition = "lead-direct";
@@ -532,6 +557,7 @@ export function buildCliAssignment(input: {
         : { mode: "no-write" },
     externalEffectBoundary: assignmentExternalEffectBoundaryFor(input.roleId, input.effectClass),
     ...(beadsIssueIds.length > 0 ? { resourceGrants: { beadsIssueIds } } : {}),
+    ...(input.notebookGrant ? { notebookGrant: input.notebookGrant } : {}),
     evidence: "Return exact changed or inspected scope and proportional verification.",
     handbackAndStop:
       "Stop at completion or a material blocker; hand back evidence, unknowns, residual risk, and lease state.",
@@ -545,6 +571,7 @@ function buildOptionalCliAssignment(input: {
   cwd: string;
   writeScope?: string;
   beadsIssueIds?: readonly string[];
+  notebookGrant?: NotebookGrantRequest;
 }): AssignmentEnvelope | undefined {
   if (!input.roleId || !input.effectClass) return undefined;
   return buildCliAssignment({
@@ -554,7 +581,59 @@ function buildOptionalCliAssignment(input: {
     cwd: input.cwd,
     writeScope: input.writeScope,
     beadsIssueIds: input.beadsIssueIds,
+    notebookGrant: input.notebookGrant,
   });
+}
+
+export function buildCliNotebookGrantRequest(input: {
+  roleId: PaseoRoleId | undefined;
+  scope?: string;
+  expiresAt?: string;
+  now?: Date;
+}): NotebookGrantRequest | undefined {
+  const hasScope = input.scope !== undefined;
+  const hasExpiry = input.expiresAt !== undefined;
+  if (!hasScope && !hasExpiry) return undefined;
+
+  if (input.roleId !== "supervisor") {
+    throw {
+      code: "INVALID_OPTIONS",
+      message: "--notebook-grant-scope and --notebook-grant-expires-at require --role supervisor",
+      details: "The daemon derives notebook identity and location only for a Supervisor grant",
+    } satisfies CommandError;
+  }
+
+  if (!hasScope || !hasExpiry) {
+    throw {
+      code: "INVALID_OPTIONS",
+      message: "--notebook-grant-scope and --notebook-grant-expires-at must be provided together",
+      details: "A fresh notebook grant needs both a scope and an ISO-8601 expiry",
+    } satisfies CommandError;
+  }
+
+  const parsed = NotebookGrantRequestSchema.safeParse({
+    scope: input.scope,
+    expiresAt: input.expiresAt,
+  });
+  if (!parsed.success) {
+    throw {
+      code: "INVALID_OPTIONS",
+      message: "Invalid Supervisor notebook grant request",
+      details: parsed.error.issues.map((issue) => issue.message).join("; "),
+    } satisfies CommandError;
+  }
+
+  const expiresAtMs = Date.parse(parsed.data.expiresAt);
+  const nowMs = (input.now ?? new Date()).getTime();
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
+    throw {
+      code: "INVALID_OPTIONS",
+      message: "--notebook-grant-expires-at must be in the future",
+      details: "Use an ISO-8601 timestamp with an explicit offset after the current time",
+    } satisfies CommandError;
+  }
+
+  return parsed.data;
 }
 
 function runsInBackground(options: Pick<AgentRunOptions, "background" | "detach">): boolean {
@@ -753,7 +832,7 @@ export async function runRunCommand(
   const host = getDaemonHost({ host: options.host });
   const outputSchema = options.outputSchema ? loadOutputSchema(options.outputSchema) : undefined;
 
-  validateRunOptions(prompt, options, outputSchema);
+  const notebookGrant = validateRunOptions(prompt, options, outputSchema);
   const waitTimeoutMs = parseWaitTimeoutOption(options.waitTimeout);
 
   const resolvedProviderModel = resolveProviderAndModel(options);
@@ -794,6 +873,7 @@ export async function runRunCommand(
       cwd: runCwd,
       writeScope: options.writeScope,
       beadsIssueIds: options.beadsIssue,
+      notebookGrant,
     });
 
     if (outputSchema) {

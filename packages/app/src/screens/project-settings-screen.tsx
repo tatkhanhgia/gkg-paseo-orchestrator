@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MoreVertical, Pencil, Plus } from "lucide-react-native";
 import { ProjectIconView } from "@/components/project-icon-view";
 import { WorkspaceProtocolSettings } from "@/components/workspace-protocol-settings";
+import { ProjectHarnessSettings } from "@/components/project-harness-settings";
 import type {
   PaseoConfigRaw,
   PaseoConfigRevision,
@@ -37,6 +38,7 @@ import type { ProjectEditFormSnapshot } from "@/projects/edit-form";
 import { useProjectIcons } from "@/projects/icons";
 import { createProjectIconTarget } from "@/projects/icon-target";
 import { useHostRuntimeClient, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
+import { refreshWorkspaceScriptsAfterSave } from "@/screens/project-settings-refresh";
 import { useHostFeature } from "@/runtime/host-features";
 import { useToast } from "@/contexts/toast-context";
 import { confirmDialog } from "@/utils/confirm-dialog";
@@ -240,6 +242,7 @@ function ProjectSettingsBody({
     selectedHost.serverId,
     "workspaceProtocolEditing",
   );
+  const supportsProjectHarness = useHostFeature(selectedHost.serverId, "projectHarness");
   const customIconRevision = selectedHost.customIconRevision ?? null;
   const projectIconTargets = useMemo(() => {
     const target = createProjectIconTarget({
@@ -319,6 +322,14 @@ function ProjectSettingsBody({
         serverId={selectedHost.serverId}
         repoRoot={protocolRoot || selectedHost.repoRoot}
         supported={supportsWorkspaceProtocol}
+      />
+
+      <ProjectHarnessSettings
+        client={client}
+        serverId={selectedHost.serverId}
+        projectId={selectedHost.projectId}
+        workspaces={selectedHost.workspaces}
+        supported={supportsProjectHarness}
       />
 
       {renderContent({
@@ -409,6 +420,7 @@ function renderContent({
       revision={loadedRevision}
       hasUncommittedWorktreeSetupChanges={hasUncommittedWorktreeSetupChanges}
       repoRoot={selectedHost.repoRoot}
+      serverId={selectedHost.serverId}
       queryKey={queryKey}
       client={client}
       onReload={onReload}
@@ -490,6 +502,7 @@ interface ProjectConfigFormProps {
   revision: PaseoConfigRevision | null;
   hasUncommittedWorktreeSetupChanges: boolean;
   repoRoot: string;
+  serverId: string;
   queryKey: readonly [string, string, string];
   client: DaemonClient;
   onReload: () => void;
@@ -500,6 +513,7 @@ function ProjectConfigForm({
   revision,
   hasUncommittedWorktreeSetupChanges,
   repoRoot,
+  serverId,
   queryKey,
   client,
   onReload,
@@ -539,6 +553,7 @@ function ProjectConfigForm({
         });
         setWriteError(null);
         queryClient.invalidateQueries({ queryKey: ["projects"] });
+        refreshWorkspaceScriptsAfterSave(serverId);
         toast.show(t("settings.project.actions.saved"), { variant: "success" });
       } else {
         setWriteError(result.error);

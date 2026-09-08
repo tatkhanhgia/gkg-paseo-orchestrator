@@ -157,6 +157,10 @@ export interface DraftAgentControlsProps {
   modeOptions: AgentMode[];
   selectedMode: string;
   onSelectMode: (modeId: string) => void;
+  // Set when a no-write role binding pins the mode (UX-03), so the mode
+  // picker explains the lock even when the pinned mode happens to match an
+  // existing provider-declared option (not only the synthesized fallback).
+  modeLockReason?: string;
   models: AgentModelDefinition[];
   selectedModel: string;
   onSelectModel: (modelId: string) => void;
@@ -2092,6 +2096,7 @@ export function DraftAgentControls({
   modeOptions,
   selectedMode,
   onSelectMode,
+  modeLockReason,
   models,
   selectedModel,
   onSelectModel,
@@ -2167,9 +2172,18 @@ export function DraftAgentControls({
             selectedModeId: selectedMode,
             onSelectMode,
             disabled,
+            lockReason: modeLockReason,
           }
         : null,
-    [selectedProvider, providerDefinitions, modeOptions, selectedMode, onSelectMode, disabled],
+    [
+      selectedProvider,
+      providerDefinitions,
+      modeOptions,
+      selectedMode,
+      onSelectMode,
+      disabled,
+      modeLockReason,
+    ],
   );
 
   return (

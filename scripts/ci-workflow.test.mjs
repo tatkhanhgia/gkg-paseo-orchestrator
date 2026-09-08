@@ -31,14 +31,8 @@ const gatedCiJobs = new Map([
   ["typecheck", { name: "typecheck", contract: "quality" }],
   ["server-tests-ubuntu", { name: "server-tests (ubuntu-latest)", contracts: ["server", "hub"] }],
   ["server-tests-windows", { name: "server-tests (windows-latest)", contracts: ["server", "hub"] }],
-  ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
-  ["desktop-tests-windows", { name: "desktop-tests (windows-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
   ["sdk-tests", { name: "sdk-tests", contract: "sdk" }],
-  ["playwright-1", { name: "playwright (shard 1/4)", contract: "browser" }],
-  ["playwright-2", { name: "playwright (shard 2/4)", contract: "browser" }],
-  ["playwright-3", { name: "playwright (shard 3/4)", contract: "browser" }],
-  ["playwright-4", { name: "playwright (shard 4/4)", contract: "browser" }],
   ["relay-tests", { name: "relay-tests", contract: "relay" }],
   ["foundation-cli-macos", { name: "foundation-cli-macos", contract: "foundation_cli" }],
   [
@@ -131,7 +125,6 @@ test("focused contracts stay inside existing required checks", () => {
   const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
   const changes = jobs.get("changes")?.join("\n") ?? "";
   const server = jobs.get("server-tests-ubuntu")?.join("\n") ?? "";
-  const desktop = jobs.get("desktop-tests-ubuntu")?.join("\n") ?? "";
   const foundationCli = jobs.get("foundation-cli-macos")?.join("\n") ?? "";
   const releaseQualification = jobs.get("release-qualification")?.join("\n") ?? "";
 
@@ -143,16 +136,16 @@ test("focused contracts stay inside existing required checks", () => {
   assert.match(server, /npm run test --workspace=@getpaseo\/server/);
   assert.ok(!jobs.has("hub-cli-contract"));
 
-  assert.match(desktop, /test:e2e:renderer/);
-  assert.match(desktop, /test:e2e:browser-tabs/);
-  assert.match(desktop, /npm run test --workspace=@getpaseo\/desktop/);
-  assert.match(desktop, /actions\/setup-python@v5/);
-  assert.match(desktop, /python-version: "3\.13\.15"/);
-  assert.match(desktop, /actions\/setup-go@v5/);
-  assert.match(desktop, /go-version: "1\.26\.2"/);
-  assert.match(desktop, /beads-central\.lock\.json'\)\.uvVersion/);
-  assert.ok(!jobs.has("desktop-browser-bridge"));
-  assert.ok(!jobs.has("playwright-desktop"));
+  for (const jobId of [
+    "desktop-tests-ubuntu",
+    "desktop-tests-windows",
+    "playwright-1",
+    "playwright-2",
+    "playwright-3",
+    "playwright-4",
+  ]) {
+    assert.ok(!jobs.has(jobId), `${jobId} is validated locally`);
+  }
 
   assert.match(foundationCli, /runs-on: macos-14/);
   assert.match(foundationCli, /test --workspace=@getpaseo\/foundation-cli/);

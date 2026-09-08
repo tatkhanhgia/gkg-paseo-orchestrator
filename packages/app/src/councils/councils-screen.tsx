@@ -40,6 +40,7 @@ import {
   type CouncilPhase,
   type CouncilSeat,
 } from "./model";
+import { councilHeroSubtitle, councilSeatModelLabel } from "./council-presentation";
 import { useCouncilCasesQuery } from "./data";
 
 interface CouncilsScreenProps {
@@ -433,9 +434,7 @@ function CouncilHero({ council, compact }: { council: CouncilCase; compact: bool
           >
             {placement.text}
           </Text>
-          <Text style={styles.heroSubtitle}>
-            One accountable Lead. Architect + Reviewer. No vote.
-          </Text>
+          <Text style={styles.heroSubtitle}>{councilHeroSubtitle(council)}</Text>
         </View>
         <View style={[styles.reportMetric, compact && styles.reportMetricCompact]}>
           <Text style={styles.reportMetricValue}>
@@ -613,11 +612,6 @@ function isCouncilSeatFailed(seat: CouncilSeat): boolean {
   if (seat.integrity === "compromised") return true;
   if (!seat.agent) return false;
   return seat.agent.status === "error" || seat.agent.attentionReason === "error";
-}
-
-function councilSeatModelLabel(seat: CouncilSeat): string {
-  if (!seat.agent) return "Not launched";
-  return seat.agent.model?.trim() || seat.agent.provider;
 }
 
 function councilSeatStatusIcon(input: {

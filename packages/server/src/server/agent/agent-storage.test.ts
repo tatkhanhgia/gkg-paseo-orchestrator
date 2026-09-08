@@ -360,6 +360,34 @@ describe("AgentStorage", () => {
           state: { consecutiveTurnFailures: 2 },
         },
       },
+      finishNotificationWatches: [
+        {
+          watchId: "watch-1",
+          callerAgentId: "caller-1",
+          requireParentOwnership: true,
+          launchToken: "token-1",
+          registeredAt: "2026-08-08T00:00:00.000Z",
+          status: "active",
+        },
+      ],
+      finishNotificationDeliveries: [
+        {
+          deliveryId: "delivery-1",
+          watchId: "watch-1",
+          childAgentId: agentId,
+          callerAgentId: "caller-1",
+          runId: "turn-1",
+          reason: "finished",
+          requireParentOwnership: true,
+          childTitle: "Child Agent",
+          lastAssistantMessage: null,
+          permissionRequest: null,
+          detectedAt: "2026-08-08T00:00:00.000Z",
+          deliveredAt: null,
+          attempts: 0,
+          lastError: null,
+        },
+      ],
     });
 
     await storage.applySnapshot(
@@ -383,6 +411,15 @@ describe("AgentStorage", () => {
       version: "1.2.0",
       checkedAt: "2026-08-08T00:00:30.000Z",
     });
+    // Durable finish-notification ledgers must survive a live-state applySnapshot
+    // rebuild exactly like the other coordination fields above: without explicit
+    // preservation, every state flush would silently wipe them.
+    expect(afterSnapshot?.finishNotificationWatches).toEqual([
+      expect.objectContaining({ watchId: "watch-1", status: "active" }),
+    ]);
+    expect(afterSnapshot?.finishNotificationDeliveries).toEqual([
+      expect.objectContaining({ deliveryId: "delivery-1", deliveredAt: null }),
+    ]);
 
     const reloaded = new AgentStorage(storagePath, logger);
     expect((await reloaded.get(agentId))?.beadsStatusCheckpoint).toEqual(

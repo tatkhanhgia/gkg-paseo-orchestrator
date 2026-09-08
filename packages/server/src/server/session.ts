@@ -188,8 +188,23 @@ import { WorkspaceFilesSession } from "./session/files/workspace-files-session.j
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
 import { ProjectConfigSession } from "./session/project-config/project-config-session.js";
 import { WorkspaceProtocolSession } from "./session/workspace-protocol/workspace-protocol-session.js";
+import { ProjectHarnessSession } from "./session/project-harness/project-harness-session.js";
+import type { ProjectHarnessService } from "./project/project-harness-service.js";
+import type { HarnessBindingResolver } from "./project/harness-binding-service.js";
 import { BeadsSession, type BeadsSessionOptions } from "./session/beads/beads-session.js";
 import type { BeadsService } from "./beads/beads-service.js";
+
+function optionalProjectHarnessService(
+  service: ProjectHarnessService | null | undefined,
+): ProjectHarnessService | null {
+  return service ?? null;
+}
+
+function optionalHarnessBindingResolver(
+  resolver: HarnessBindingResolver | null | undefined,
+): HarnessBindingResolver | null {
+  return resolver ?? null;
+}
 import { CouncilSession } from "./session/council/council-session.js";
 import type { CouncilCaseStore } from "./council/council-case-store.js";
 import { DaemonSession, type DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
@@ -522,6 +537,8 @@ export interface SessionOptions {
   agentStorage: AgentStorage;
   projectRegistry: ProjectRegistry;
   workspaceRegistry: WorkspaceRegistry;
+  projectHarnessService?: ProjectHarnessService | null;
+  harnessBindingResolver?: HarnessBindingResolver | null;
   beadsService?: BeadsService;
   directorySync?: DirectorySyncService;
   workspaceLabelService?: WorkspaceLabelService;
@@ -809,6 +826,8 @@ export class Session {
   private readonly agentConfigSession: AgentConfigSession;
   private readonly projectConfigSession: ProjectConfigSession;
   private readonly workspaceProtocolSession: WorkspaceProtocolSession;
+  private readonly projectHarnessService: ProjectHarnessService | null;
+  private readonly projectHarnessSession: ProjectHarnessSession;
   private readonly beadsSession: BeadsSession | null;
   private readonly daemonSession: DaemonSession;
   private readonly hubExecutionController: HubExecutionController | null;
@@ -837,6 +856,8 @@ export class Session {
       agentStorage,
       projectRegistry,
       workspaceRegistry,
+      projectHarnessService,
+      harnessBindingResolver,
       beadsService,
       directorySync,
       workspaceLabelService,
@@ -1061,6 +1082,17 @@ export class Session {
       },
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
+      logger: this.sessionLogger,
+    });
+    this.projectHarnessService = optionalProjectHarnessService(projectHarnessService);
+    this.projectHarnessSession = new ProjectHarnessSession({
+      host: {
+        emit: (msg) => this.emit(msg),
+      },
+      workspaceProvisioning: this.workspaceProvisioning,
+      service: this.projectHarnessService,
+      bindingResolver: optionalHarnessBindingResolver(harnessBindingResolver),
+      agentManager,
       logger: this.sessionLogger,
     });
     this.beadsSession = createBeadsSession({
@@ -1827,6 +1859,13 @@ export class Session {
               },
             });
           }
+          return;
+        }
+
+        // Only agent_stream carries `.event`. Internal lifecycle receipts such
+        // as agent_closure are consumed by the policy/runtime boundary and
+        // must not fall through into stream or voice forwarding.
+        if (event.type !== "agent_stream") {
           return;
         }
 
@@ -2637,6 +2676,16 @@ export class Session {
         return this.workspaceProtocolSession.handleInspectRequest(msg);
       case "foundation.workspaceProtocol.write.request":
         return this.workspaceProtocolSession.handleWriteRequest(msg);
+      case "foundation.projectHarness.inspect.request":
+        return this.projectHarnessSession.handleInspectRequest(msg);
+      case "foundation.projectHarness.preview.request":
+        return this.projectHarnessSession.handlePreviewRequest(msg);
+      case "foundation.projectHarness.apply.request":
+        return this.projectHarnessSession.handleApplyRequest(msg);
+      case "foundation.projectHarness.update.request":
+        return this.projectHarnessSession.handleUpdateRequest(msg);
+      case "foundation.projectHarness.notebook.release.request":
+        return this.projectHarnessSession.handleNotebookReleaseRequest(msg);
       default:
         return undefined;
     }

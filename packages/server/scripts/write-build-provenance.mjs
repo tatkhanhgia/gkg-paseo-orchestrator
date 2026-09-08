@@ -35,6 +35,8 @@ const executionSpecializationOutputPath = resolve(
   packageRoot,
   "dist/server/server/policy/bundled/slp/execution-specializations.json",
 );
+const foundationHarnessSourceRoot = resolve(repositoryRoot, "foundation/dist/templates/harness");
+const harnessOutputRoot = resolve(packageRoot, "dist/server/server/policy/bundled/slp/harness");
 const foundationSkillsSourceRoot = resolve(repositoryRoot, "foundation/dist/skills");
 const foundationSkillAdmissionSourcePath = resolve(foundationSkillsSourceRoot, "role-bundles.json");
 const foundationSkillsOutputRoot = resolve(
@@ -190,6 +192,10 @@ function sourceFingerprint(sourceCommit, trackedDiff, untrackedPaths) {
   return fingerprint.digest("hex");
 }
 
+function sha256File(filePath) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
 function readSourceState() {
   if (existsSync(resolve(repositoryRoot, ".git"))) {
     const sourceCommit = git(["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -242,6 +248,62 @@ copyFileSync(executionSpecializationSourcePath, executionSpecializationOutputPat
 mkdirSync(dirname(workspaceProtocolContractOutputPath), { recursive: true });
 copyFileSync(workspaceProtocolContractSourcePath, workspaceProtocolContractOutputPath);
 copyFileSync(workspaceProtocolFixturesSourcePath, workspaceProtocolFixturesOutputPath);
+
+const harnessDescriptorSourcePath = resolve(foundationHarnessSourceRoot, "harness-package.json");
+let harnessDescriptor;
+try {
+  harnessDescriptor = JSON.parse(readFileSync(harnessDescriptorSourcePath, "utf8"));
+} catch (error) {
+  throw new Error(
+    `Cannot read imported Foundation Project Harness descriptor at ${harnessDescriptorSourcePath}`,
+    { cause: error },
+  );
+}
+if (
+  harnessDescriptor?.schemaVersion !== 1 ||
+  harnessDescriptor?.package !== "paseo-project-harness" ||
+  !Number.isInteger(harnessDescriptor?.generation) ||
+  !harnessDescriptor?.resources ||
+  typeof harnessDescriptor.resources !== "object"
+) {
+  throw new Error("Imported Foundation Project Harness descriptor is invalid");
+}
+for (const [key, relativePath] of Object.entries(harnessDescriptor.resources)) {
+  if (
+    typeof relativePath !== "string" ||
+    relativePath.length === 0 ||
+    relativePath.startsWith("/") ||
+    relativePath.split(/[\\/]/u).includes("..") ||
+    !existsSync(resolve(foundationHarnessSourceRoot, relativePath))
+  ) {
+    throw new Error(`Imported Foundation Project Harness resource '${key}' is invalid or missing`);
+  }
+}
+rmSync(harnessOutputRoot, { recursive: true, force: true });
+cpSync(foundationHarnessSourceRoot, harnessOutputRoot, { recursive: true });
+const harnessResources = Object.entries(harnessDescriptor.resources).map(([key, relativePath]) => ({
+  key,
+  path: relativePath,
+  digest: sha256File(resolve(harnessOutputRoot, relativePath)),
+}));
+const harnessDescriptorDigest = sha256File(resolve(harnessOutputRoot, "harness-package.json"));
+provenance.projectHarness = {
+  package: harnessDescriptor.package,
+  generation: harnessDescriptor.generation,
+  descriptorDigest: harnessDescriptorDigest,
+  artifactDigest: createHash("sha256")
+    .update(
+      JSON.stringify({
+        package: harnessDescriptor.package,
+        generation: harnessDescriptor.generation,
+        descriptorDigest: harnessDescriptorDigest,
+        resources: harnessResources,
+      }),
+    )
+    .digest("hex"),
+  resources: harnessResources,
+};
+writeFileSync(outputPath, `${JSON.stringify(provenance, null, 2)}\n`, "utf8");
 
 const foundationRoleSkillPackages = readFoundationSkillAdmission();
 rmSync(foundationSkillsOutputRoot, { recursive: true, force: true });

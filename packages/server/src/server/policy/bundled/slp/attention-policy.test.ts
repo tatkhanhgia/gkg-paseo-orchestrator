@@ -154,6 +154,73 @@ describe("bundled SLP attention policy", () => {
     ).toBeNull();
   });
 
+  test("classifies bilingual Vietnamese semantic friction and ignores ordinary Vietnamese output", () => {
+    expect(classifySemanticFriction("Khoan đã, ranh giới thẩm quyền chưa rõ ràng.")).toMatchObject({
+      ruleId: "explicit_reconsideration",
+    });
+    expect(classifySemanticFriction("Tôi đã sai về phạm vi của thay đổi này.")).toMatchObject({
+      ruleId: "admitted_mistake",
+    });
+    expect(
+      classifySemanticFriction("Việc này mâu thuẫn với thẩm quyền hiện tại của Lead."),
+    ).toMatchObject({
+      ruleId: "contract_conflict",
+    });
+    expect(classifySemanticFriction("Tôi đang bị chặn và cần làm rõ phạm vi.")).toMatchObject({
+      ruleId: "blocked_uncertainty",
+    });
+    expect(classifySemanticFriction("Các bài kiểm tra đã qua và ứng viên đã sẵn sàng.")).toBeNull();
+  });
+
+  test("does not classify a trigger phrase that is only quoted, reported, or cited as test data", () => {
+    // Exact regression fixture: a trigger phrase cited as test/fixture data is not the model's
+    // own live admission and must never trigger.
+    expect(
+      classifySemanticFriction('The fixture contains the string "I was wrong" as test data.'),
+    ).toBeNull();
+    expect(
+      classifySemanticFriction(
+        'The reviewer wrote: "Hold on, I made a mistake about the scope." before continuing.',
+      ),
+    ).toBeNull();
+    expect(
+      classifySemanticFriction(
+        'The test asserts that classifySemanticFriction reports "I overlooked the contract" as a match.',
+      ),
+    ).toBeNull();
+    expect(
+      classifySemanticFriction('Tài liệu kiểm thử chứa chuỗi "tôi đã sai" làm dữ liệu mẫu.'),
+    ).toBeNull();
+    expect(
+      classifySemanticFriction(
+        'Người review viết rằng: "tôi đã sai về phạm vi" trước khi tiếp tục.',
+      ),
+    ).toBeNull();
+  });
+
+  test("still classifies genuine unquoted first-person self-admission, English and Vietnamese", () => {
+    expect(
+      classifySemanticFriction("Hold on, I was wrong about the ownership boundary."),
+    ).toMatchObject({ ruleId: "admitted_mistake" });
+    expect(
+      classifySemanticFriction("Tôi đã sai về ranh giới thẩm quyền, cần xem lại ngay."),
+    ).toMatchObject({ ruleId: "admitted_mistake" });
+    // Quoting alone does not suppress a match: only a preceding citation/report lead-in does.
+    // Here the quote opens the sentence, so there is nothing before it to cite from.
+    const match = classifySemanticFriction('"I was wrong," I admitted, and moved on.');
+    expect(match).toMatchObject({ ruleId: "admitted_mistake" });
+  });
+
+  test("skips a cited fixture occurrence but retains a later live admission", () => {
+    const english =
+      'The fixture contains the string "I was wrong" as test data. The neutral sentence is deliberately long enough to separate the cited fixture from the live assistant statement by more than the citation window. I was wrong about the ownership boundary.';
+    const vietnamese =
+      'Tài liệu kiểm thử chứa chuỗi "tôi đã sai" làm dữ liệu mẫu. Câu trung tính này đủ dài để tách dữ liệu được trích dẫn khỏi lời tự nhận thật sự của trợ lý trong cùng một lượt. Tôi đã sai về ranh giới thẩm quyền.';
+
+    expect(classifySemanticFriction(english)).toMatchObject({ ruleId: "admitted_mistake" });
+    expect(classifySemanticFriction(vietnamese)).toMatchObject({ ruleId: "admitted_mistake" });
+  });
+
   test("re-arms context pressure after a below-threshold transition and resolution", async () => {
     const harness = createHarness();
     harness.addAgent({ id: "lead-1", roleId: "lead" });

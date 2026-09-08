@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { UserComposerAttachment } from "@/attachments/types";
 import type { TextReplacement } from "@/composer/types";
 import type { DraftAgentControlsProps } from "@/composer/agent-controls";
@@ -27,7 +28,6 @@ import { toDraftInputIfReady } from "@/stores/draft-store/state";
 import {
   isProviderRoleBindingSupportedForRole,
   type PaseoRoleId,
-  type ProviderRoleBindingSupport,
 } from "@getpaseo/protocol/role-binding";
 import {
   isAssignmentEffectAllowedForRole,
@@ -37,6 +37,11 @@ import type { AgentFeature, AgentProvider } from "@getpaseo/protocol/agent-types
 import { AfterPaintPublication } from "@/composer/after-paint-publication";
 import { isWeb } from "@/constants/platform";
 import {
+  isRoleSelectionAvailable,
+  resolvePinnedModeSelection,
+  resolveRequiredModeIdForRoleBinding,
+} from "@/composer/draft/effective-agent-modes";
+import {
   defaultAssignmentEffectForRole,
   ordinaryAssignmentAuthorityOptionsForRole,
 } from "@/workspace-protocol/assignment-authority";
@@ -44,22 +49,6 @@ import { resolveRoleOptions } from "@/workspace-protocol/legacy-role-options";
 
 const ASSIGNMENT_EFFECT_FEATURE_ID = "foundation_assignment_effect";
 const BEADS_ISSUE_GRANT_FEATURE_ID = "foundation_beads_issue_grant";
-
-function requiredReadOnlyMode(roleBinding: ProviderRoleBindingSupport | undefined): string | null {
-  if (roleBinding?.status !== "supported") return null;
-  switch (roleBinding.injectionMethod) {
-    case "codex-developer-instructions":
-    case "mock-launch-context":
-      return "read-only";
-    case "claude-system-prompt":
-    case "cursor-project-rule-capsule":
-    case "cursor-always-apply-plugin":
-    case "antigravity-custom-agent":
-      return "plan";
-    default:
-      return null;
-  }
-}
 
 export function resolveRolePinnedModeTransition(input: {
   selectedMode: string;
@@ -220,6 +209,7 @@ function useBeadsIssueGrantControl(
 }
 
 export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDraft {
+  const { t } = useTranslation();
   const composerOptions = input.composer ?? null;
   const initialRoleState = resolveInitialRoleState(composerOptions);
   const formState = useAgentFormState({
@@ -435,10 +425,10 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     }
     const selectedEntry = entries.find((entry) => entry.provider === selectedProvider);
     if (isProviderRoleBindingSupportedForRole(selectedEntry?.roleBinding, selectedRole)) {
-      const requiredModeId =
-        selectedAssignmentEffect === "read-only"
-          ? requiredReadOnlyMode(selectedEntry?.roleBinding)
-          : null;
+      const requiredModeId = resolveRequiredModeIdForRoleBinding(
+        selectedAssignmentEffect,
+        selectedEntry?.roleBinding,
+      );
       if (selectedProvider) {
         const transition = resolveRolePinnedModeTransition({
           selectedMode: formState.selectedMode,
@@ -476,10 +466,10 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
         isProviderRoleBindingSupportedForRole(entry.roleBinding, selectedRole),
     );
     if (compatible) {
-      const requiredModeId =
-        selectedAssignmentEffect === "read-only"
-          ? requiredReadOnlyMode(compatible.roleBinding)
-          : null;
+      const requiredModeId = resolveRequiredModeIdForRoleBinding(
+        selectedAssignmentEffect,
+        compatible.roleBinding,
+      );
       if (requiredModeId) {
         setProviderAndModelForRole(compatible.provider, "", requiredModeId);
       } else {
@@ -591,16 +581,47 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     ],
   );
 
+  // Hoisted above the composerState memo so the same lock state can both gate
+  // `setModeFromUser` (suppressing a contradictory selection outright) and shape
+  // the returned mode options/selection in the same render pass.
+  const roleOptions = useMemo(
+    () => resolveRoleOptions(roleProfiles.catalog, roleProfiles.supported),
+    [roleProfiles.catalog, roleProfiles.supported],
+  );
+  const roleSelectionAvailable = isRoleSelectionAvailable(
+    formState.allProviderEntries,
+    roleOptions.length,
+  );
+  const requiredNoWriteModeIdForSelection = useMemo(() => {
+    if (!roleSelectionAvailable || !selectedRole) return null;
+    const entry = formState.allProviderEntries?.find(
+      (candidate) => candidate.provider === formState.selectedProvider,
+    );
+    return resolveRequiredModeIdForRoleBinding(selectedAssignmentEffect, entry?.roleBinding);
+  }, [
+    roleSelectionAvailable,
+    selectedRole,
+    selectedAssignmentEffect,
+    formState.allProviderEntries,
+    formState.selectedProvider,
+  ]);
+  const guardedSetModeFromUser = useCallback(
+    (modeId: string) => {
+      // A locked assignment offers exactly one mode; reject anything else outright
+      // instead of forwarding a contradictory choice the daemon will overrule anyway.
+      if (requiredNoWriteModeIdForSelection && modeId !== requiredNoWriteModeIdForSelection) {
+        return;
+      }
+      setModeFromUser(modeId);
+    },
+    [requiredNoWriteModeIdForSelection, setModeFromUser],
+  );
+
   const composerState = useMemo<DraftComposerState | null>(() => {
     if (!composerOptions) {
       return null;
     }
 
-    const roleBindingAvailable = formState.allProviderEntries?.some(
-      (entry) => entry.roleBinding !== undefined,
-    );
-    const roleOptions = resolveRoleOptions(roleProfiles.catalog, roleProfiles.supported);
-    const roleSelectionAvailable = roleBindingAvailable && roleOptions.length > 0;
     const compatibleProviderIds = new Set(
       (formState.allProviderEntries ?? [])
         .filter((entry) => isProviderRoleBindingSupportedForRole(entry.roleBinding, selectedRole))
@@ -619,17 +640,38 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
           }
         : formState;
 
+    // Narrow the offered modes to what the daemon will actually allow once this
+    // no-write role binding launches, so the picker never shows a mode that is
+    // certain to be rejected (UX-03). When the provider's declared modes do not
+    // include the pinned id, show one explicit locked entry rather than falling
+    // back to the full (forbidden) list, and project the selection to match it
+    // immediately so modeOptions/selectedMode never disagree on this render.
+    const pinnedSelection = resolvePinnedModeSelection(
+      roleAwareFormState.modeOptions,
+      requiredNoWriteModeIdForSelection,
+      t,
+    );
+    const effectiveFormState = pinnedSelection
+      ? {
+          ...roleAwareFormState,
+          modeOptions: pinnedSelection.modeOptions,
+          selectedMode: pinnedSelection.selectedMode,
+          setModeFromUser: guardedSetModeFromUser,
+        }
+      : { ...roleAwareFormState, setModeFromUser: guardedSetModeFromUser };
+
     return {
-      ...roleAwareFormState,
+      ...effectiveFormState,
       workingDir,
       effectiveModelId,
       effectiveThinkingOptionId,
       featureValues: draftFeatureValues,
       agentControls: buildDraftAgentControls({
-        formState: roleAwareFormState,
+        formState: effectiveFormState,
         roleOptions: roleSelectionAvailable ? roleOptions : [],
         selectedRole: roleSelectionAvailable ? selectedRole : null,
         onSelectRole: setRoleAndNormalizeEffect,
+        modeLockReason: pinnedSelection?.lockReason,
         features:
           roleSelectionAvailable && (assignmentEffectFeature || beadsIssueGrant.feature)
             ? [
@@ -658,12 +700,15 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     draftFeatureValues,
     applyDraftAgentProfile,
     formState,
-    roleProfiles.catalog,
-    roleProfiles.supported,
+    guardedSetModeFromUser,
+    requiredNoWriteModeIdForSelection,
+    roleOptions,
+    roleSelectionAvailable,
     selectedRole,
     selectedAssignmentEffect,
     setAgentControlFeature,
     setRoleAndNormalizeEffect,
+    t,
     workingDir,
   ]);
 

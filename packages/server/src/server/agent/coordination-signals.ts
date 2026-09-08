@@ -12,6 +12,12 @@ import type {
 
 import type { AgentManager } from "./agent-manager.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent-storage.js";
+import {
+  createPendingDeliveryChannel,
+  createSerializedRecordUpdateQueue,
+  type PendingDeliveryDispatchResult,
+  type UpdateRecordFn,
+} from "./coordinated-delivery.js";
 
 type CoordinationAgentManager = Pick<
   AgentManager,
@@ -55,38 +61,64 @@ export interface EventPolicyStateOwner {
   stateNamespace: string;
 }
 
-const scheduledDeliveries = new Map<string, () => void>();
-const deliveryInFlight = new Set<string>();
-const recordUpdates = new Map<string, Promise<unknown>>();
+// Keyed by the agentStorage singleton, NOT by the `dependencies` wrapper
+// object. Call sites (see paseo-tools.ts) build a fresh `dependencies`
+// literal per call; if the queue/channel were cached per-literal, two
+// concurrent calls touching the same target agent would each get their own
+// uncoordinated delivery channel and could both drain (and double-send) the
+// same pending signal before either marked it delivered. Every call site
+// passes the same live AgentStorage instance, so keying on it gives one real
+// queue/channel per daemon process.
+const updateRecordByStorage = new WeakMap<object, UpdateRecordFn>();
+const deliveryChannelByStorage = new WeakMap<
+  object,
+  ReturnType<typeof createPendingDeliveryChannel<CoordinationSignal>>
+>();
 
-async function updateRecord<T>(
+function updateRecordFor(dependencies: CoordinationSignalDependencies): UpdateRecordFn {
+  let recordUpdater = updateRecordByStorage.get(dependencies.agentStorage);
+  if (!recordUpdater) {
+    recordUpdater = createSerializedRecordUpdateQueue(dependencies).updateRecord;
+    updateRecordByStorage.set(dependencies.agentStorage, recordUpdater);
+  }
+  return recordUpdater;
+}
+
+function deliveryChannelFor(
+  dependencies: CoordinationSignalDependencies,
+): ReturnType<typeof createPendingDeliveryChannel<CoordinationSignal>> {
+  // First writer wins: the channel closes over whichever `dependencies`
+  // (and therefore `sendAtSafeBoundary`/logger) reaches here first for this
+  // AgentStorage. Every current call site passes equivalent dependencies.
+  let channel = deliveryChannelByStorage.get(dependencies.agentStorage);
+  if (!channel) {
+    channel = createPendingDeliveryChannel(dependencies, updateRecordFor(dependencies), {
+      channelName: "coordination-signal",
+      getPending: (record) =>
+        record.internal || record.archivedAt
+          ? []
+          : (record.coordinationSignals ?? []).filter(
+              (signal) => signal.status === "pending" && signal.deliveredAt === null,
+            ),
+      itemId: (signal) => signal.id,
+      deliver: async (agentId, signals): Promise<PendingDeliveryDispatchResult> => {
+        await dependencies.sendAtSafeBoundary(agentId, formatDelivery(signals));
+        return { dispatchedIds: signals.map((signal) => signal.id) };
+      },
+      markDelivered: (recordUpdater, agentId, deliveredIds, deliveredAt) =>
+        markDelivered(recordUpdater, agentId, deliveredIds, deliveredAt),
+    });
+    deliveryChannelByStorage.set(dependencies.agentStorage, channel);
+  }
+  return channel;
+}
+
+async function updateCoordinationRecord<T>(
   dependencies: CoordinationSignalDependencies,
   agentId: string,
   update: (record: StoredAgentRecord) => { record: StoredAgentRecord; result: T },
 ): Promise<T> {
-  const previous = recordUpdates.get(agentId) ?? Promise.resolve();
-  const current = previous.then(async () => {
-    const record = await dependencies.agentStorage.get(agentId);
-    if (!record || record.internal || record.archivedAt) {
-      throw new Error(`Agent ${agentId} is not available for coordination signals`);
-    }
-    const next = update(record);
-    await dependencies.agentStorage.upsert(next.record);
-    dependencies.agentManager.notifyAgentState(agentId);
-    return next.result;
-  });
-  const settledTail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  recordUpdates.set(agentId, settledTail);
-  try {
-    return await current;
-  } finally {
-    if (recordUpdates.get(agentId) === settledTail) {
-      recordUpdates.delete(agentId);
-    }
-  }
+  return updateRecordFor(dependencies)(agentId, update);
 }
 
 function formatDelivery(signals: readonly CoordinationSignal[]): string {
@@ -225,12 +257,12 @@ function createCoordinationSignal(
 }
 
 async function markDelivered(
-  dependencies: CoordinationSignalDependencies,
+  recordUpdater: UpdateRecordFn,
   agentId: string,
   signalIds: ReadonlySet<string>,
+  deliveredAt: string,
 ): Promise<void> {
-  const deliveredAt = new Date().toISOString();
-  await updateRecord(dependencies, agentId, (record) => {
+  await recordUpdater(agentId, (record) => {
     const coordinationSignals = [];
     for (const signal of record.coordinationSignals ?? []) {
       const shouldMark =
@@ -244,52 +276,8 @@ async function markDelivered(
   });
 }
 
-async function tryDeliver(
-  dependencies: CoordinationSignalDependencies,
-  agentId: string,
-): Promise<void> {
-  if (deliveryInFlight.has(agentId) || dependencies.agentManager.hasInFlightRun(agentId)) {
-    return;
-  }
-  deliveryInFlight.add(agentId);
-  try {
-    const record = await dependencies.agentStorage.get(agentId);
-    const undelivered = (record?.coordinationSignals ?? []).filter(
-      (signal) => signal.status === "pending" && signal.deliveredAt === null,
-    );
-    if (undelivered.length === 0) {
-      scheduledDeliveries.get(agentId)?.();
-      scheduledDeliveries.delete(agentId);
-      return;
-    }
-    if (dependencies.agentManager.hasInFlightRun(agentId)) {
-      return;
-    }
-    await dependencies.sendAtSafeBoundary(agentId, formatDelivery(undelivered));
-    await markDelivered(dependencies, agentId, new Set(undelivered.map((signal) => signal.id)));
-  } catch (error) {
-    dependencies.logger.warn(
-      { err: error, agentId },
-      "Failed to deliver coordination signal at safe boundary",
-    );
-  } finally {
-    deliveryInFlight.delete(agentId);
-  }
-}
-
 function scheduleDelivery(dependencies: CoordinationSignalDependencies, agentId: string): void {
-  if (!scheduledDeliveries.has(agentId)) {
-    const unsubscribe = dependencies.agentManager.subscribe(
-      (event) => {
-        if (event.type === "agent_state" && event.agent.lifecycle === "idle") {
-          void tryDeliver(dependencies, agentId);
-        }
-      },
-      { agentId, replayState: false },
-    );
-    scheduledDeliveries.set(agentId, unsubscribe);
-  }
-  void tryDeliver(dependencies, agentId);
+  deliveryChannelFor(dependencies).scheduleDelivery(agentId);
 }
 
 export async function requestCoordinationSignal(
@@ -297,7 +285,7 @@ export async function requestCoordinationSignal(
   input: RequestCoordinationSignalInput,
 ): Promise<CoordinationSignal> {
   const source = sourceForInput(input);
-  const signal = await updateRecord(dependencies, input.targetAgentId, (record) => {
+  const signal = await updateCoordinationRecord(dependencies, input.targetAgentId, (record) => {
     const existing = (record.coordinationSignals ?? []).find((candidate) =>
       signalsCoalesce(candidate, input, source),
     );
@@ -333,7 +321,7 @@ export async function updateEventPolicyState<TState extends Record<string, unkno
     result: TResult;
   },
 ): Promise<TResult> {
-  return updateRecord(dependencies, agentId, (record) => {
+  return updateCoordinationRecord(dependencies, agentId, (record) => {
     const stateKey = `${owner.stateNamespace}/${spec.policyId}`;
     const persisted = record.eventPolicyStates?.[stateKey];
     const state =
@@ -360,26 +348,7 @@ export async function updateEventPolicyState<TState extends Record<string, unkno
 export async function resumePendingCoordinationSignalDeliveries(
   dependencies: CoordinationSignalDependencies,
 ): Promise<() => void> {
-  const scheduledAgentIds: string[] = [];
-  for (const record of await dependencies.agentStorage.list()) {
-    if (
-      record.internal ||
-      record.archivedAt ||
-      !record.coordinationSignals?.some(
-        (signal) => signal.status === "pending" && signal.deliveredAt === null,
-      )
-    ) {
-      continue;
-    }
-    scheduledAgentIds.push(record.id);
-    scheduleDelivery(dependencies, record.id);
-  }
-  return () => {
-    for (const agentId of scheduledAgentIds) {
-      scheduledDeliveries.get(agentId)?.();
-      scheduledDeliveries.delete(agentId);
-    }
-  };
+  return deliveryChannelFor(dependencies).resumePendingDeliveries();
 }
 
 export async function resolveCoordinationSignal(
@@ -391,7 +360,7 @@ export async function resolveCoordinationSignal(
     note?: string;
   },
 ): Promise<CoordinationSignal> {
-  return updateRecord(dependencies, input.targetAgentId, (record) => {
+  return updateCoordinationRecord(dependencies, input.targetAgentId, (record) => {
     const signals = record.coordinationSignals ?? [];
     const index = signals.findIndex((signal) => signal.id === input.signalId);
     if (index < 0) {

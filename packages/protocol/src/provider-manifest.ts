@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AgentMode } from "./agent-types.js";
+import type { RoleBindingInjectionMethod } from "./role-binding.js";
 
 export type AgentModeColorTier = "safe" | "moderate" | "dangerous" | "planning" | `#${string}`;
 // Open string by design: the client looks icons up in a registry and falls back
@@ -363,4 +364,25 @@ export function getModeVisuals(
   const mode = definition?.modes.find((m) => m.id === modeId);
   if (!mode) return undefined;
   return { icon: mode.icon, colorTier: mode.colorTier };
+}
+
+// Single source of truth for the provider mode a no-write role assignment is pinned
+// to. The daemon enforces this mapping server-side (assignment-capability-boundary.ts);
+// client-side draft/live mode UI projects the same mapping so the mode a role sees
+// offered never disagrees with the mode the daemon will actually allow.
+const NO_WRITE_MODE_BY_ROLE_BINDING_INJECTION_METHOD: Partial<
+  Record<RoleBindingInjectionMethod, string>
+> = {
+  "codex-developer-instructions": "read-only",
+  "claude-system-prompt": "default",
+  "cursor-project-rule-capsule": "plan",
+  "cursor-always-apply-plugin": "plan",
+  "antigravity-custom-agent": "plan",
+  "mock-launch-context": "read-only",
+};
+
+export function noWriteModeForRoleBindingInjectionMethod(
+  injectionMethod: RoleBindingInjectionMethod,
+): string | null {
+  return NO_WRITE_MODE_BY_ROLE_BINDING_INJECTION_METHOD[injectionMethod] ?? null;
 }

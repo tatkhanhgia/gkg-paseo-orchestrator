@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Text, View } from "react-native";
+import { ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type {
   CoordinationSignal,
@@ -10,6 +10,11 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, type StatusBadgeVariant } from "@/components/ui/status-badge";
 import { useSessionStore } from "@/stores/session-store";
+import { formatTimeAgo } from "@/utils/time";
+import {
+  partitionCoordinationSignals,
+  resolveKindLabelKey,
+} from "./coordination-signals-presentation";
 
 const RESOLUTIONS: readonly CoordinationSignalResolution[] = [
   "acknowledged",
@@ -18,30 +23,16 @@ const RESOLUTIONS: readonly CoordinationSignalResolution[] = [
   "completed",
 ];
 
-// Bounded presentation only: daemon storage is never mutated or capped. Every pending
-// signal is always shown; only the history list (already-resolved signals) is bounded.
-const HISTORY_DISPLAY_LIMIT = 5;
+// The pending queue plus a collapsed history toggle can still grow past a comfortable
+// height; bound the scroll region instead of letting it push the composer off-screen.
+// A flat pixel cap alone can still swallow most of a short pane, so it is additionally
+// capped as a fraction of the current window height (see useSignalsScrollMaxHeight).
+const SIGNALS_SCROLL_MAX_HEIGHT = 320;
+const SIGNALS_SCROLL_MAX_HEIGHT_RATIO = 0.4;
 
-function signalRecencyTimestamp(signal: CoordinationSignal): number {
-  const value = signal.resolvedAt ?? signal.lastOccurredAt ?? signal.createdAt;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-function selectVisibleSignals(signals: readonly CoordinationSignal[]): {
-  visible: CoordinationSignal[];
-  hiddenHistoryCount: number;
-} {
-  const pending = signals.filter((signal) => signal.status === "pending");
-  const history = signals
-    .filter((signal) => signal.status !== "pending")
-    .slice()
-    .sort((a, b) => signalRecencyTimestamp(b) - signalRecencyTimestamp(a));
-  const visibleHistory = history.slice(0, HISTORY_DISPLAY_LIMIT);
-  return {
-    visible: [...pending, ...visibleHistory],
-    hiddenHistoryCount: history.length - visibleHistory.length,
-  };
+function useSignalsScrollMaxHeight(): number {
+  const { height } = useWindowDimensions();
+  return Math.min(SIGNALS_SCROLL_MAX_HEIGHT, height * SIGNALS_SCROLL_MAX_HEIGHT_RATIO);
 }
 
 function resolveStatusLabel(
@@ -58,8 +49,31 @@ function resolveStatusVariant(status: CoordinationSignal["status"]): StatusBadge
   return "muted";
 }
 
-function resolveKindLabel(kind: CoordinationSignal["kind"], t: (key: string) => string): string {
-  return t(`agentPanel.coordinationSignals.kind.${kind}`);
+function resolveKindLabel(
+  signal: Pick<CoordinationSignal, "kind" | "question">,
+  t: (key: string) => string,
+): string {
+  return t(resolveKindLabelKey(signal));
+}
+
+function formatLastOccurredAt(
+  iso: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return t("agentPanel.coordinationSignals.lastOccurredAt", { time: iso });
+  }
+  return t("agentPanel.coordinationSignals.lastOccurredAt", { time: formatTimeAgo(parsed) });
+}
+
+function formatLastOccurredAtExact(
+  iso: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const parsed = new Date(iso);
+  const localized = Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleString();
+  return t("agentPanel.coordinationSignals.lastOccurredAtExact", { time: localized });
 }
 
 function pendingKeyFor(signalId: string, resolution: CoordinationSignalResolution): string {
@@ -198,6 +212,49 @@ function CoordinationSignalResolveControls({
   );
 }
 
+function CoordinationSignalDetails({
+  signal,
+  evidenceRefs,
+  evidenceEntries,
+}: {
+  signal: CoordinationSignal;
+  evidenceRefs: readonly string[];
+  evidenceEntries: ReadonlyArray<[string, unknown]>;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View testID={`coordination-signal-${signal.id}-details`}>
+      <Text style={styles.evidence}>
+        {t("agentPanel.coordinationSignals.reasonLabel")}: {signal.reason}
+      </Text>
+      {signal.observation ? (
+        <Text style={styles.evidence}>
+          {t("agentPanel.coordinationSignals.observationLabel")}: {signal.observation}
+        </Text>
+      ) : null}
+      {signal.question ? (
+        <Text style={styles.evidence}>
+          {t("agentPanel.coordinationSignals.questionLabel")}: {signal.question}
+        </Text>
+      ) : null}
+      {evidenceRefs.length > 0 ? (
+        <Text style={styles.evidence}>
+          {t("agentPanel.coordinationSignals.evidenceLabel")}: {evidenceRefs.join(", ")}
+        </Text>
+      ) : null}
+      {evidenceEntries.length > 0 ? (
+        <Text style={styles.evidence}>
+          {t("agentPanel.coordinationSignals.evidenceDetailLabel")}:{" "}
+          {evidenceEntries.map(([key, value]) => `${key}=${String(value)}`).join(", ")}
+        </Text>
+      ) : null}
+      {signal.lastOccurredAt ? (
+        <Text style={styles.evidence}>{formatLastOccurredAtExact(signal.lastOccurredAt, t)}</Text>
+      ) : null}
+    </View>
+  );
+}
+
 function CoordinationSignalRow({
   signal,
   agentId,
@@ -218,50 +275,81 @@ function CoordinationSignalRow({
   errorMessage: string | undefined;
 }) {
   const { t } = useTranslation();
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const toggleDetails = useCallback(() => setDetailsExpanded((prev) => !prev), []);
   const evidenceRefs = signal.evidenceRefs;
+  // Raw evidence, including explicit null/undefined values, is audit-relevant and must
+  // never be silently dropped (UX-08); it moves into the details disclosure below rather
+  // than cluttering the compact primary surface, but nothing is discarded.
   const evidenceEntries = signal.evidence ? Object.entries(signal.evidence) : [];
   const occurrenceCount = signal.occurrenceCount ?? 1;
   const showResolveControls = canResolve && signal.status === "pending";
+  // Only a `continuity_attention` signal that actually carries a question expects a
+  // reply; every other continuity_attention is a notice with nothing to answer (UX-07).
+  const isRealQuestion = signal.kind === "continuity_attention" && Boolean(signal.question);
+  const isNotice = signal.kind === "continuity_attention" && !signal.question;
+  // A question already resolved is no longer awaiting a reply; only claim
+  // "action needed" while the signal is still pending.
+  const needsActionNow = isRealQuestion && signal.status === "pending";
+  // The primary surface truncates reason/observation/question to keep the row compact;
+  // the details disclosure always carries the full, untruncated text alongside the raw
+  // evidence so nothing shown above is ever the only place it is readable (UX-08).
 
   return (
     <View style={styles.row} testID={`coordination-signal-${signal.id}`}>
       <View style={styles.headerRow}>
-        <Text style={styles.kind}>{resolveKindLabel(signal.kind, t)}</Text>
+        <Text style={styles.kind}>{resolveKindLabel(signal, t)}</Text>
         <StatusBadge
           label={resolveStatusLabel(signal.status, t)}
           variant={resolveStatusVariant(signal.status)}
         />
       </View>
-      <Text style={styles.reason}>
+      {isRealQuestion || isNotice ? (
+        <Text style={styles.actionHint}>
+          {needsActionNow
+            ? t("agentPanel.coordinationSignals.actionNeededLabel")
+            : t("agentPanel.coordinationSignals.noActionNeededLabel")}
+        </Text>
+      ) : null}
+      <Text style={styles.reason} numberOfLines={2}>
         {t("agentPanel.coordinationSignals.reasonLabel")}: {signal.reason}
       </Text>
       {signal.observation ? (
-        <Text style={styles.detail}>
+        <Text style={styles.detail} numberOfLines={2}>
           {t("agentPanel.coordinationSignals.observationLabel")}: {signal.observation}
         </Text>
       ) : null}
       {signal.question ? (
-        <Text style={styles.detail}>
+        <Text style={styles.detail} numberOfLines={2}>
           {t("agentPanel.coordinationSignals.questionLabel")}: {signal.question}
-        </Text>
-      ) : null}
-      {evidenceRefs.length > 0 ? (
-        <Text style={styles.evidence} numberOfLines={2}>
-          {t("agentPanel.coordinationSignals.evidenceLabel")}: {evidenceRefs.join(", ")}
-        </Text>
-      ) : null}
-      {evidenceEntries.length > 0 ? (
-        <Text style={styles.evidence} numberOfLines={2}>
-          {t("agentPanel.coordinationSignals.evidenceDetailLabel")}:{" "}
-          {evidenceEntries.map(([key, value]) => `${key}=${String(value)}`).join(", ")}
         </Text>
       ) : null}
       <Text style={styles.meta}>
         {t("agentPanel.coordinationSignals.occurrenceCount", { count: occurrenceCount })}
-        {signal.lastOccurredAt
-          ? ` · ${t("agentPanel.coordinationSignals.lastOccurredAt", { time: signal.lastOccurredAt })}`
-          : ""}
+        {signal.lastOccurredAt ? ` · ${formatLastOccurredAt(signal.lastOccurredAt, t)}` : ""}
       </Text>
+      <Button
+        size="xs"
+        variant="ghost"
+        onPress={toggleDetails}
+        testID={`coordination-signal-${signal.id}-details-toggle`}
+        accessibilityLabel={
+          detailsExpanded
+            ? t("agentPanel.coordinationSignals.detailsToggleHide")
+            : t("agentPanel.coordinationSignals.detailsToggleShow")
+        }
+      >
+        {detailsExpanded
+          ? t("agentPanel.coordinationSignals.detailsToggleHide")
+          : t("agentPanel.coordinationSignals.detailsToggleShow")}
+      </Button>
+      {detailsExpanded ? (
+        <CoordinationSignalDetails
+          signal={signal}
+          evidenceRefs={evidenceRefs}
+          evidenceEntries={evidenceEntries}
+        />
+      ) : null}
       {showResolveControls ? (
         <CoordinationSignalResolveControls
           agentId={agentId}
@@ -303,33 +391,66 @@ export function CoordinationSignalsSection({
     serverId ? state.sessions[serverId]?.client != null : false,
   );
   const { resolve, pendingKey, errorBySignalId } = useResolveCoordinationSignal(serverId ?? "");
+  // History is presentation-only and collapsed by default so a long resolved backlog
+  // never forces the pending queue and composer out of view (UX-01). This never calls
+  // `resolve` and never mutates the daemon's stored signals — collapsing is purely local
+  // view state.
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const toggleHistoryExpanded = useCallback(() => setHistoryExpanded((prev) => !prev), []);
+  const scrollMaxHeight = useSignalsScrollMaxHeight();
 
   if (!signals || signals.length === 0) return null;
 
   const resolveEnabled =
     canResolve && featureEnabled && hasClient && Boolean(agentId) && Boolean(serverId);
-  const { visible, hiddenHistoryCount } = selectVisibleSignals(signals);
+  const { pending, history } = partitionCoordinationSignals(signals);
+  const visibleHistory = historyExpanded ? history : [];
 
   return (
     <View style={styles.container} testID="coordination-signals-section">
       <Text style={styles.title} accessibilityRole="header">
         {t("agentPanel.coordinationSignals.title")}
       </Text>
-      {visible.map((signal) => (
-        <CoordinationSignalRow
-          key={signal.id}
-          signal={signal}
-          agentId={agentId ?? ""}
-          canResolve={resolveEnabled}
-          resolve={resolve}
-          pendingKey={pendingKey}
-          errorMessage={errorBySignalId[signal.id]}
-        />
-      ))}
-      {hiddenHistoryCount > 0 ? (
-        <Text style={styles.meta} testID="coordination-signals-hidden-history-count">
-          {t("agentPanel.coordinationSignals.hiddenHistoryCount", { count: hiddenHistoryCount })}
-        </Text>
+      <ScrollView style={[styles.scrollRegion, { maxHeight: scrollMaxHeight }]} nestedScrollEnabled>
+        {pending.map((signal) => (
+          <CoordinationSignalRow
+            key={signal.id}
+            signal={signal}
+            agentId={agentId ?? ""}
+            canResolve={resolveEnabled}
+            resolve={resolve}
+            pendingKey={pendingKey}
+            errorMessage={errorBySignalId[signal.id]}
+          />
+        ))}
+        {visibleHistory.map((signal) => (
+          <CoordinationSignalRow
+            key={signal.id}
+            signal={signal}
+            agentId={agentId ?? ""}
+            canResolve={resolveEnabled}
+            resolve={resolve}
+            pendingKey={pendingKey}
+            errorMessage={errorBySignalId[signal.id]}
+          />
+        ))}
+      </ScrollView>
+      {history.length > 0 ? (
+        <Button
+          size="xs"
+          variant="ghost"
+          onPress={toggleHistoryExpanded}
+          testID="coordination-signals-history-toggle"
+          accessibilityLabel={
+            historyExpanded
+              ? t("agentPanel.coordinationSignals.historyToggleCollapse")
+              : t("agentPanel.coordinationSignals.historyToggleExpand", { count: history.length })
+          }
+        >
+          {historyExpanded
+            ? t("agentPanel.coordinationSignals.historyToggleCollapse")
+            : t("agentPanel.coordinationSignals.historyToggleExpand", { count: history.length })}
+        </Button>
       ) : null}
     </View>
   );
@@ -346,6 +467,7 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foregroundMuted,
   },
+  scrollRegion: {},
   row: {
     gap: theme.spacing[1],
     paddingVertical: theme.spacing[2],
@@ -362,6 +484,11 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
+  },
+  actionHint: {
+    fontSize: theme.fontSize.xs,
+    fontWeight: theme.fontWeight.medium,
+    color: theme.colors.foregroundMuted,
   },
   reason: {
     fontSize: theme.fontSize.sm,

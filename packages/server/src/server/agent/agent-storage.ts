@@ -60,6 +60,126 @@ const BEADS_STATUS_CHECKPOINT_SCHEMA = z
 
 export type BeadsStatusCheckpoint = z.infer<typeof BEADS_STATUS_CHECKPOINT_SCHEMA>;
 
+const FINISH_NOTIFICATION_REASON_SCHEMA = z.enum([
+  "finished",
+  "errored",
+  "needs permission",
+  "was closed",
+]);
+
+export type FinishNotificationReason = z.infer<typeof FINISH_NOTIFICATION_REASON_SCHEMA>;
+
+// Excludes "needs permission": that reason is an intermediate checkpoint, not
+// a terminal outcome, and never retires a watch — see attachFinishNotificationWatch.
+const FINISH_NOTIFICATION_TERMINAL_REASON_SCHEMA = z.enum(["finished", "errored", "was closed"]);
+
+// A same-record (child) write-ahead receipt for a terminal event this
+// process has genuinely witnessed, persisted BEFORE the cross-record write to
+// the caller's delivery ledger. If the daemon crashes between the two
+// writes, resume can replay the caller-side delivery directly from this
+// receipt without re-observing the provider/manager. It is only ever written
+// for a terminal reason and only for the exact run this watch already has a
+// durable observedRunId/observedRunStartedAt for; see resumePendingFinishNotificationDeliveries.
+//
+// This lives in a ROOT-level array (`finishNotificationPendingTerminalDetections`,
+// keyed by `watchId`) rather than nested inside FINISH_NOTIFICATION_WATCH_SCHEMA.
+// The nested watch schema is `.strict()` and matches the shape already shipped
+// in 0.7.0-paseo.60's compiled parser (parseStoredAgentRecord); adding a field
+// to that strict nested object would make every OLDER installed parser THROW
+// on the entire array item (and therefore the whole agent record, per
+// readRecordFile's catch-all) the moment it saw this unrecognized nested key.
+// The root StoredAgentRecord schema is a plain (non-strict) z.object, so an
+// older parser reading a new record just silently strips this whole
+// top-level field instead of losing the agent. That still means a rollback to
+// an older build loses in-flight recovery evidence (the receipt becomes
+// UNKNOWN again, not fabricated finished) — a documented, accepted trade-off,
+// never agent/record loss.
+const FINISH_NOTIFICATION_PENDING_TERMINAL_SCHEMA = z
+  .object({
+    watchId: z.string(),
+    reason: FINISH_NOTIFICATION_TERMINAL_REASON_SCHEMA,
+    runId: z.string(),
+    runStartedAt: z.string(),
+    detectedAt: z.string(),
+    childTitle: z.string().nullable(),
+    lastAssistantMessage: z.string().nullable(),
+  })
+  .strict();
+
+export type FinishNotificationPendingTerminalDetection = z.infer<
+  typeof FINISH_NOTIFICATION_PENDING_TERMINAL_SCHEMA
+>;
+
+// A durable record of intent to notify `callerAgentId` about this agent's
+// run outcome, persisted BEFORE the run it watches is launched so a crash
+// between registration and the first observed event still leaves evidence
+// of the intent (reconciled by the resume-on-restart path).
+const FINISH_NOTIFICATION_WATCH_SCHEMA = z
+  .object({
+    watchId: z.string(),
+    callerAgentId: z.string(),
+    requireParentOwnership: z.boolean(),
+    // Compatibility launch identity for older persisted intent records. It is
+    // never used as a run receipt or as proof that a run started.
+    launchToken: z.string(),
+    observedRunId: z.string().nullable().optional(),
+    observedRunStartedAt: z.string().nullable().optional(),
+    registeredAt: z.string(),
+    status: z.enum(["active", "stopped"]),
+  })
+  .strict();
+
+export type FinishNotificationWatch = z.infer<typeof FINISH_NOTIFICATION_WATCH_SCHEMA>;
+
+// One entry per detected terminal/permission event awaiting (or having
+// completed) dispatch to `callerAgentId`. `deliveryId` is a content-addressed
+// dedupe key over (child, run, caller, reason[, permission request]) so two
+// independent watchers observing the same run's completion collapse into a
+// single delivery. `deliveredAt` records that the send was dispatched without
+// the transport throwing — it is NOT proof of provider execution, of the
+// recipient reading it, or of engineering acceptance of the finish.
+const FINISH_NOTIFICATION_PERMISSION_REQUEST_SCHEMA = z
+  .object({
+    id: z.string(),
+    provider: z.string(),
+    kind: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    input: z.unknown().nullable(),
+  })
+  .strict();
+
+const FINISH_NOTIFICATION_DELIVERY_SCHEMA = z
+  .object({
+    deliveryId: z.string(),
+    watchId: z.string(),
+    childAgentId: z.string(),
+    callerAgentId: z.string(),
+    runId: z.string(),
+    runStartedAt: z.string().nullable().optional(),
+    reason: FINISH_NOTIFICATION_REASON_SCHEMA,
+    requireParentOwnership: z.boolean(),
+    // Evidence captured AT DETECTION time, not re-read at dispatch time —
+    // by the time a safe boundary opens, the child's live state may have
+    // moved on (new turn, resolved permission).
+    childTitle: z.string().nullable(),
+    lastAssistantMessage: z.string().nullable(),
+    permissionRequest: FINISH_NOTIFICATION_PERMISSION_REQUEST_SCHEMA.nullable(),
+    detectedAt: z.string(),
+    deliveredAt: z.string().nullable(),
+    // A dispatch receipt is distinct from a dropped/revoked item. `deliveredAt`
+    // remains the historical field name for compatibility; new writes also
+    // populate `dispatchedAt` so the boundary is explicit.
+    dispatchedAt: z.string().nullable().optional(),
+    droppedAt: z.string().nullable().optional(),
+    dropReason: z.string().nullable().optional(),
+    attempts: z.number().int().nonnegative(),
+    lastError: z.string().nullable(),
+  })
+  .strict();
+
+export type FinishNotificationDelivery = z.infer<typeof FINISH_NOTIFICATION_DELIVERY_SCHEMA>;
+
 const STORED_AGENT_SCHEMA = z.object({
   id: z.string(),
   provider: z.string(),
@@ -99,6 +219,14 @@ const STORED_AGENT_SCHEMA = z.object({
   beadsStatusCheckpoint: BEADS_STATUS_CHECKPOINT_SCHEMA.optional(),
   coordinationSignals: z.array(CoordinationSignalSchema).optional(),
   leadHandoffs: z.array(LeadHandoffPacketSchema).optional(),
+  finishNotificationWatches: z.array(FINISH_NOTIFICATION_WATCH_SCHEMA).optional(),
+  finishNotificationDeliveries: z.array(FINISH_NOTIFICATION_DELIVERY_SCHEMA).optional(),
+  // Root-level (not nested in a watch) so an older strict-nested-watch parser
+  // just strips this whole field on read instead of rejecting the record; see
+  // the comment on FINISH_NOTIFICATION_PENDING_TERMINAL_SCHEMA above.
+  finishNotificationPendingTerminalDetections: z
+    .array(FINISH_NOTIFICATION_PENDING_TERMINAL_SCHEMA)
+    .optional(),
   eventPolicyStates: z
     .record(
       z.string(),
@@ -150,6 +278,16 @@ function preserveCoordinationMetadata(
   }
   if (existing?.leadHandoffs !== undefined) {
     record.leadHandoffs = existing.leadHandoffs;
+  }
+  if (existing?.finishNotificationWatches !== undefined) {
+    record.finishNotificationWatches = existing.finishNotificationWatches;
+  }
+  if (existing?.finishNotificationDeliveries !== undefined) {
+    record.finishNotificationDeliveries = existing.finishNotificationDeliveries;
+  }
+  if (existing?.finishNotificationPendingTerminalDetections !== undefined) {
+    record.finishNotificationPendingTerminalDetections =
+      existing.finishNotificationPendingTerminalDetections;
   }
   if (existing?.eventPolicyStates !== undefined) {
     record.eventPolicyStates = existing.eventPolicyStates;

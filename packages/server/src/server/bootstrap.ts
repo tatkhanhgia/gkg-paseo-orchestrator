@@ -157,6 +157,7 @@ import {
   resumePendingCoordinationSignalDeliveries,
   type CoordinationSignalDependencies,
 } from "./agent/coordination-signals.js";
+import { resumePendingFinishNotificationDeliveries } from "./agent/finish-notification.js";
 import { startEventPolicyRuntime } from "./agent/event-policy-runtime.js";
 import { attachAgentStoragePersistence } from "./persistence-hooks.js";
 import { createAgentMcpServer } from "./agent/mcp-server.js";
@@ -180,11 +181,13 @@ import { ScheduleService } from "./schedule/service.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
 import { resolvePaseoToolPolicy } from "./agent/paseo-tool-policy.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
+import { createCanonicalCouncilSeatProjectionResolver } from "./policy/runtime-policy-finish-notification.js";
 import { resolveConfigFromPersisted, type CliConfigOverrides } from "./config.js";
 import { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { DaemonConfigBrowserToolsPolicy } from "./browser-tools/policy.js";
 import { BeadsCentralService } from "./beads/beads-central-service.js";
 import { createMutatingPeerGrantVerifier } from "./beads/beads-grant-verifier.js";
+import { createNotebookGrantResolver } from "./project/notebook-grant-resolver.js";
 import { FoundationCredentialStore } from "./foundation-credential-store.js";
 import { WorkspaceGitServiceImpl } from "./workspace-git-service.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
@@ -1026,6 +1029,10 @@ export async function createPaseoDaemon(
       );
     },
   });
+  const resolveCouncilSeatProjection = createCanonicalCouncilSeatProjectionResolver({
+    councilCaseStore,
+    agentStorage,
+  });
   const workspaceLabelService = createWorkspaceLabelService({
     paseoHome: config.paseoHome,
     workspaceRegistry,
@@ -1080,6 +1087,10 @@ export async function createPaseoDaemon(
     config.paseoHome,
     logger,
   );
+  const harnessBindingResolver = createNotebookGrantResolver({
+    workspaceRegistry,
+    projectRegistry,
+  });
   const agentManager = new AgentManager({
     durableTimelineStore: timelineStore,
     clients: initialAgentManagerState.clients,
@@ -1099,6 +1110,8 @@ export async function createPaseoDaemon(
       service: beadsService,
       workspaceRegistry,
     }),
+    resolveNotebookGrant: harnessBindingResolver,
+    resolveHarnessBinding: harnessBindingResolver,
     logger,
   });
 
@@ -1327,6 +1340,7 @@ export async function createPaseoDaemon(
     agentManager,
     agentStorage,
     logger,
+    resolveCouncilSeatProjection,
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
     terminalManager,
@@ -1569,7 +1583,11 @@ export async function createPaseoDaemon(
       agentStorage,
     },
     advertisedPolicies: agentManager.listActiveBundledEventPolicies(),
-    resolvePolicies: (agentId) => agentManager.resolveBundledEventPoliciesForAgent(agentId),
+    resolvePolicies: (agentId, event) =>
+      agentManager.resolveBundledEventPoliciesForAgent(
+        agentId,
+        event.type === "agent_closure" ? event : undefined,
+      ),
   });
   logger.info(
     { enabledPolicies: eventPolicyRuntime.enabledPolicies, maturity: "candidate" },
@@ -1578,6 +1596,12 @@ export async function createPaseoDaemon(
   const stopPendingCoordinationSignalDeliveries = await resumePendingCoordinationSignalDeliveries({
     ...coordinationSignalDependencies,
     agentStorage,
+  });
+  const stopPendingFinishNotificationDeliveries = await resumePendingFinishNotificationDeliveries({
+    agentManager,
+    agentStorage,
+    logger,
+    resolveCouncilSeatProjection,
   });
 
   const createAgentToolHostDependencies = (
@@ -1590,6 +1614,7 @@ export async function createPaseoDaemon(
     scheduleService,
     chatService,
     councilCaseStore,
+    resolveCouncilSeatProjection,
     resolveAgentIdentifier: (identifier) =>
       resolveAgentIdentifier({ identifier, agentManager, agentStorage }),
     sendAgentMessage: async (agentId, text) => {
@@ -2017,6 +2042,7 @@ export async function createPaseoDaemon(
     await attempt("plugins", () => pluginRuntime.stopAllPlugins());
     await attempt("agent-event-policies", () => eventPolicyRuntime.stop());
     await attempt("pending-coordination-signals", () => stopPendingCoordinationSignalDeliveries());
+    await attempt("pending-finish-notifications", () => stopPendingFinishNotificationDeliveries());
     await attempt("hub-relationships", () => hubRelationships.stop());
     await attempt("workspace-reconciliation", () => workspaceReconciliation.dispose());
     await attempt("script-health-monitor", () => scriptHealthMonitor.stop());

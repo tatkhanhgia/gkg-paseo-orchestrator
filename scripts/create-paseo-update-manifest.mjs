@@ -15,12 +15,20 @@ const REQUIRED_TARGETS = [
 
 function parseArgs(argv) {
   const result = {
+    target: null,
     artifacts: path.join(REPO_ROOT, "artifacts"),
     output: path.join(REPO_ROOT, "artifacts", "paseo-update-manifest.json"),
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === "--artifacts") result.artifacts = path.resolve(argv[++index]);
+    if (value === "--target") {
+      const target = argv[++index];
+      if (!REQUIRED_TARGETS.some(([name]) => name === target)) {
+        throw new Error(`Unsupported release target: ${target}`);
+      }
+      if (result.target) throw new Error("Specify --target only once");
+      result.target = target;
+    } else if (value === "--artifacts") result.artifacts = path.resolve(argv[++index]);
     else if (value === "--output") result.output = path.resolve(argv[++index]);
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -57,7 +65,10 @@ async function main() {
   const files = await walk(options.artifacts);
   const assets = {};
 
-  for (const [target, extension] of REQUIRED_TARGETS) {
+  const targets = options.target
+    ? REQUIRED_TARGETS.filter(([target]) => target === options.target)
+    : REQUIRED_TARGETS;
+  for (const [target, extension] of targets) {
     const name = `paseo-web-cli-${version}-${target}${extension}`;
     const archiveMatches = files.filter((file) => path.basename(file) === name);
     const checksumMatches = files.filter((file) => path.basename(file) === `${name}.sha256`);

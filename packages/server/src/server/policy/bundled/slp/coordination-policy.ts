@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { LeadHandoffTransition } from "@getpaseo/protocol/lead-handoff";
 import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 
-export const SLP_COORDINATION_POLICY_VERSION = "5";
+export const SLP_COORDINATION_POLICY_VERSION = "6";
 
 export const SLP_COORDINATION_TOOL_DESCRIPTIONS = {
   prepareLeadHandoff:
@@ -93,18 +93,80 @@ function containsClauseSeparatorOrExtraSentence(value: string): boolean {
 }
 const MODAL_OR_REQUEST_PREFIX =
   /^(?:(?:can|could|would|will|should|may|might|do|does|did|please|kindly)\b|is\s+it\s+possible\b)/iu;
-const MODAL_LANGUAGE = /\b(?:can|could|would|will|should|may|might|must|shall)\b/iu;
 const SECOND_PERSON_REQUEST_LANGUAGE =
   /\b(?:for\s+you\s+to|you\s+(?:must|shall|should|need\s+to|have\s+to|will|are\s+to)|prevents?\s+you\s+from|requires?\s+you\s+to|asks?\s+you\s+to)\b/iu;
+// A modal immediately adjacent to "you" ("what would you do", "could you also...") is directed
+// at the recipient regardless of sentence position, unlike a bare modal elsewhere in the clause
+// (e.g. "what assumption would invalidate..."), which stays a third-person analytical question.
+// This is narrower than a blanket modal-word check: it requires the "you" adjacency that is the
+// actual signal of a directed request, so it does not reintroduce a bare-modal false positive.
+const MODAL_YOU_REQUEST = /\b(?:can|could|would|will|should|may|might|must|shall)\s+you\b/iu;
 const AUTHORITY_MODAL_LANGUAGE = /\b(?:must|shall|should|need(?:s)?\s+to|have\s+to|has\s+to)\b/iu;
-const OBSERVATION_IMPERATIVE_PREFIX =
-  /^(?:delete|remove|merge|squash|land|ship|apply|run|execute|assign|take|transfer|handoff|hand\s+off|detach|write|edit|commit|push|release|deploy|restart|stop|start|approve|accept|reject|decide|recover|override|escalate|close)\b/iu;
-const BOUNDED_AUTHORITY_OR_EFFECT_LANGUAGE =
-  /\b(?:delet(?:e|es|ed|ing|ion)|remov(?:e|es|ed|ing|al)|merg(?:e|es|ed|ing)|squash(?:es|ed|ing)?|land(?:s|ed|ing)?|ship(?:s|ped|ping)?|appl(?:y|ies|ied|ying|ication|ications)|run|runs|ran|running|execut(?:e|es|ed|ing|ion|ions)|assign(?:s|ed|ing|ment|ments)?|tak(?:e|es|ing)\s+(?:over|ownership)|took\s+(?:over|ownership)|ownership\s+transfer|transfer(?:s|red|ring)?|hand(?:off|\s+off|s\s+off|ed\s+off|ing\s+off)|detach(?:es|ed|ing|ment)?|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|commit(?:s|ted|ting)?|push(?:es|ed|ing)?|releas(?:e|es|ed|ing)|deploy(?:s|ed|ing|ment|ments)?|restart(?:s|ed|ing)?|stop(?:s|ped|ping)?|start(?:s|ed|ing)?|approv(?:e|es|ed|ing|al)|accept(?:s|ed|ing|ance)?|reject(?:s|ed|ing|ion)?|decid(?:e|es|ed|ing)|decision(?:s)?|verdict(?:s)?|recover(?:s|ed|ing|y|ies)?|override(?:s|d|ing)?|escalat(?:e|es|ed|ing|ion)|clos(?:e|es|ed|ing)|activat(?:e|es|ed|ing|ion)|reassign(?:s|ed|ing|ment)?|replac(?:e|es|ed|ing|ement)|implement(?:s|ed|ing|ation)?|modif(?:y|ies|ied|ying|ication)|tag(?:s|ged|ging)?)\b/iu;
+// Clause-initial bare verb: imperative mood regardless of whether the clause
+// is punctuated as a statement ("Delete the branch.") or dressed up as a
+// question ("Delete the branch?") — the mood, not the trailing punctuation,
+// is what makes it a command. Checked against both the observation and the
+// clarification question.
+// The bare/infinitive verb forms only — no past ("-ed"), gerund ("-ing"), or
+// nominal ("-ion"/"-al"/"-ance") inflections. This is what "I/we/you" takes
+// in a live performative claim ("I approve", not "I approved" or "I
+// approving"), and what a dropped-subject imperative clause starts with
+// ("Delete the branch", not "Deleted the branch"). Kept as an un-anchored
+// string so both IMPERATIVE_CLAUSE_PREFIX and PRESENT_PERFORMATIVE_CLAIM
+// below share one list instead of drifting apart.
+const IMPERATIVE_BASE_VERBS =
+  "delete|remove|merge|squash|land|ship|apply|run|execute|assign|take\\s+over|take\\s+ownership|transfer|handoff|hand\\s+off|detach|write|edit|commit|push|release|deploy|restart|stop|start|approve|authorize|accept|reject|decide|recover|override|escalate|close|activate|reassign|replace|implement|modify|tag";
+const IMPERATIVE_CLAUSE_PREFIX = new RegExp(`^(?:${IMPERATIVE_BASE_VERBS})\\b`, "iu");
+// The bare verb alternation, kept as an un-anchored string so it can be
+// reused both as its own word-bounded regex below and inside the composed
+// directive-shape patterns (request-shape, potential-passive-shape) without
+// duplicating the (long) verb list.
+const BOUNDED_AUTHORITY_OR_EFFECT_VERBS =
+  "delet(?:e|es|ed|ing|ion)|remov(?:e|es|ed|ing|al)|merg(?:e|es|ed|ing)|squash(?:es|ed|ing)?|land(?:s|ed|ing)?|ship(?:s|ped|ping)?|appl(?:y|ies|ied|ying|ication|ications)|run|runs|ran|running|execut(?:e|es|ed|ing|ion|ions)|assign(?:s|ed|ing|ment|ments)?|tak(?:e|es|ing)\\s+(?:over|ownership)|took\\s+(?:over|ownership)|ownership\\s+transfer|transfer(?:s|red|ring)?|hand(?:off|\\s+off|s\\s+off|ed\\s+off|ing\\s+off)|detach(?:es|ed|ing|ment)?|writ(?:e|es|ing|ten)|edit(?:s|ed|ing)?|commit(?:s|ted|ting)?|push(?:es|ed|ing)?|releas(?:e|es|ed|ing)|deploy(?:s|ed|ing|ment|ments)?|restart(?:s|ed|ing)?|stop(?:s|ped|ping)?|start(?:s|ed|ing)?|approv(?:e|es|ed|ing|al)|authoriz(?:e|es|ed|ing|ation|ations)|accept(?:s|ed|ing|ance)?|reject(?:s|ed|ing|ion)?|decid(?:e|es|ed|ing)|decision(?:s)?|verdict(?:s)?|recover(?:s|ed|ing|y|ies)?|override(?:s|d|ing)?|escalat(?:e|es|ed|ing|ion)|clos(?:e|es|ed|ing)|activat(?:e|es|ed|ing|ion)|reassign(?:s|ed|ing|ment)?|replac(?:e|es|ed|ing|ement)|implement(?:s|ed|ing|ation)?|modif(?:y|ies|ied|ying|ication)|tag(?:s|ged|ging)?";
+const BOUNDED_AUTHORITY_OR_EFFECT_LANGUAGE = new RegExp(
+  `\\b(?:${BOUNDED_AUTHORITY_OR_EFFECT_VERBS})\\b`,
+  "iu",
+);
 const OBSERVATION_REQUEST_SHAPE = new RegExp(
   `(?:^(?:please|kindly|do|make|go|proceed|change|freeze)\\b|\\b(?:requests?|proposes?|instructs?|asks?)\\s+(?:you\\s+)?(?:to\\s+)?${BOUNDED_AUTHORITY_OR_EFFECT_LANGUAGE.source})`,
   "iu",
 );
+// A bare mention of an effect verb (a past-tense fact like "the migration
+// deleted three records", or a nominal object like "evidence for this
+// acceptance") reports/references an action without requesting, proposing,
+// or threatening one — that is ordinary factual prose, not a directive
+// shape, and must stay allowed. What genuinely carries directive/authority
+// shape is a MODAL pairing that frames the action as still pending/decidable
+// ("may be deleted", "should be merged", "will approve") — this is
+// deliberately narrower than banning the bare verb anywhere in the text.
+const POTENTIAL_ACTION_SHAPE = new RegExp(
+  `\\b(?:can|could|would|will|shall|should|may|might|must)\\s+(?:be\\s+)?(?:${BOUNDED_AUTHORITY_OR_EFFECT_VERBS})\\b`,
+  "iu",
+);
+// A first/second-person present-tense claim ("I approve...", "we accept...",
+// "you transfer...") is a performative utterance — the act of saying it IS
+// the authority-changing act, regardless of grammatical mood. This is
+// distinct from third-party past-tense narration ("the reviewer approved
+// the candidate yesterday") or a first-person past-tense report ("I deleted
+// three records yesterday"), which only report that the act already
+// happened and stay allowed — hence the bare/infinitive-only verb list
+// (IMPERATIVE_BASE_VERBS), not the full inflected BOUNDED_AUTHORITY_OR_EFFECT_VERBS
+// (which also matches the past-tense forms this check must not catch).
+const PRESENT_PERFORMATIVE_MODIFIERS =
+  "(?:(?:hereby|now|just|formally|explicitly|personally|directly|officially|currently)\\s+)*";
+const PRESENT_PERFORMATIVE_CLAIM = new RegExp(
+  `\\b(?:I|we|you)\\s+${PRESENT_PERFORMATIVE_MODIFIERS}(?:${IMPERATIVE_BASE_VERBS})\\b`,
+  "iu",
+);
+// A direct, clause-initial present-tense ownership transfer is still an
+// authority-changing claim ("The ownership transfers to the Supervisor")
+// rather than a historical fact. Keep this structural and clause-initial:
+// analytical prose such as "The policy explains how ownership transfers ..."
+// is a report about the rule, not the transfer itself. Modal/potential forms
+// remain covered by POTENTIAL_ACTION_SHAPE, and imperative/first- or
+// second-person forms by the predicates above.
+const DIRECT_OWNERSHIP_TRANSFER_CLAIM =
+  /^(?:the\s+)?ownership\s+transfers?\s+(?:to|from)\b|^(?:the\s+)?current\s+owner\s+transfers?\s+(?:the\s+)?ownership\b/iu;
 const ROLE_TOKEN = "(?:lead|peer|supervisor|human)";
 const ROUTING_OR_HANDOFF_LANGUAGE = new RegExp(
   `\\b(?:back\\s+to\\s+the\\s+${ROLE_TOKEN}\\b|go(?:es)?\\s+back\\s+to\\b|return(?:s|ed|ing)?\\s+to\\s+the\\s+${ROLE_TOKEN}\\b|hand(?:ed|ing)?\\s+(?:back\\s+)?to\\s+the\\s+${ROLE_TOKEN}\\b|rout(?:e|es|ed|ing)\\s+to\\s+the\\s+${ROLE_TOKEN}\\b|escalat(?:e|es|ed|ing)\\s+to\\s+the\\s+${ROLE_TOKEN}\\b|về\\s+${ROLE_TOKEN}\\b|đưa\\s+về\\b)`,
@@ -127,15 +189,96 @@ const VI_ACTION_OR_EFFECT_TERMS = [
   "khởi động lại",
   "triển khai",
 ];
-const VI_ACTION_OR_EFFECT_LANGUAGE = new RegExp(
-  `${UWB_START}(?:${VI_ACTION_OR_EFFECT_TERMS.join("|")})${UWB_END}`,
+// Keep the Vietnamese action vocabulary separate from the speech-act shapes
+// below. A bare term can be a past report or a nominal/analytical reference;
+// only its structural context determines whether it is a live directive.
+const VI_ACTION_OR_EFFECT_TERMS_SOURCE = VI_ACTION_OR_EFFECT_TERMS.join("|");
+// Dropped-subject imperative: a bare action term opening the clause
+// ("Xóa nhánh này." / "Xóa nhánh này?") is a command regardless of trailing
+// punctuation, mirroring IMPERATIVE_CLAUSE_PREFIX above.
+const VI_IMPERATIVE_CLAUSE_PREFIX = new RegExp(
+  `^(?:${VI_ACTION_OR_EFFECT_TERMS_SOURCE})${UWB_END}`,
   "iu",
 );
-const VI_MODAL_OR_REQUEST_TERMS = ["hãy", "vui lòng", "có thể", "nên", "phải", "cần"];
-const VI_MODAL_OR_REQUEST_LANGUAGE = new RegExp(
-  `${UWB_START}(?:${VI_MODAL_OR_REQUEST_TERMS.join("|")})${UWB_END}`,
+// Vietnamese "có ... không?" is the standard yes/no polarity question shape;
+// wrapped around an action term it asks whether to still-pendingly perform
+// that action ("Có nên xóa nhánh này không?" ~ "Should this branch be
+// deleted?"), the same deliberative/potential shape POTENTIAL_ACTION_SHAPE
+// bans in English. An open WH-question that merely references the term
+// nominally ("Bằng chứng nào hỗ trợ việc chấp nhận kết quả này?") has no
+// "có ... không" wrapper and stays analytical.
+const VI_POLARITY_POTENTIAL_ACTION = new RegExp(
+  `${UWB_START}có${UWB_END}\\s+(?:(?:nên|cần|thể|phải)${UWB_END}\\s+)?(?:được${UWB_END}\\s+)?(?:${VI_ACTION_OR_EFFECT_TERMS_SOURCE})${UWB_END}[\\s\\S]{0,60}?${UWB_START}không${UWB_END}`,
   "iu",
 );
+// "hãy"/"vui lòng" are imperative-forming particles ("please do X") and are a directive
+// regardless of who the sentence names, so they ban unconditionally. "có thể"/"nên"/"phải"/
+// "cần" remain analytical when they introduce a proposition, but a clause-initial
+// addressee+modal or a clause-initial modal immediately followed by an action is a directed
+// request/potential effect. A third-person analytical question with no such action adjacency,
+// e.g. "Giả định nào có thể làm sai lệch kết luận hiện tại?", stays analytical.
+const VI_IMPERATIVE_REQUEST_TERMS = ["hãy", "vui lòng"];
+const VI_IMPERATIVE_REQUEST_LANGUAGE = new RegExp(
+  `${UWB_START}(?:${VI_IMPERATIVE_REQUEST_TERMS.join("|")})${UWB_END}`,
+  "iu",
+);
+const VI_ADDRESSEE_PRONOUN_TERMS = [
+  "bạn",
+  "các bạn",
+  "chúng ta",
+  "chúng tôi",
+  "tôi",
+  "mình",
+  "anh",
+  "chị",
+  "em",
+];
+const VI_DIRECT_PERFORMATIVE_TERMS_SOURCE = [
+  ...VI_ACTION_OR_EFFECT_TERMS,
+  "quyết định",
+  "cho phép",
+  "ủy quyền",
+  "xác nhận",
+].join("|");
+const VI_PAST_ACTION_MARKER = "(?:đã|từng|vừa|mới)";
+// A pronoun at the start of the one allowed clause followed by a present,
+// ongoing, future, or modal action is a live speech act ("Tôi xóa...",
+// "Bạn sẽ phê duyệt..."). A past marker makes it a completed report
+// ("Tôi đã xóa...") and is intentionally outside this predicate.
+const VI_DIRECT_PRONOUN_ACTION = new RegExp(
+  `^(?:${VI_ADDRESSEE_PRONOUN_TERMS.join("|")})${UWB_END}\\s+(?!${VI_PAST_ACTION_MARKER}${UWB_END}\\s)(?:(?:đang|sẽ|có|có thể|nên|phải|cần|định)${UWB_END}\\s+)?(?:${VI_DIRECT_PERFORMATIVE_TERMS_SOURCE})${UWB_END}`,
+  "iu",
+);
+// Keep a bare Vietnamese modal-action clause covered even when the subject is
+// dropped ("Nên xóa...", "Có thể chấp nhận..."). The action must be adjacent
+// to the modal, so nominal/analytical references such as "có thể giải thích
+// việc chấp nhận..." are not treated as performatives.
+const VI_MODAL_ACTION_PREFIX = new RegExp(
+  `^(?:(?:nên|phải|cần|sẽ|đang|có thể)${UWB_END}\\s+)(?:được${UWB_END}\\s+)?(?:${VI_ACTION_OR_EFFECT_TERMS_SOURCE})${UWB_END}`,
+  "iu",
+);
+const VI_DIRECT_PRONOUN_MODAL = new RegExp(
+  `^(?:${VI_ADDRESSEE_PRONOUN_TERMS.join("|")})${UWB_END}\\s+(?:có thể|nên|phải|cần)${UWB_END}`,
+  "iu",
+);
+
+// A clause-initial self/addressee pronoun followed by a (non-past) action term
+// clause is a performative claim ("Tôi xóa file này." = "I delete this
+// file.") — mirrors PRESENT_PERFORMATIVE_CLAIM. Combined with the "đã"
+// exclusion in VI_DIRECT_PRONOUN_ACTION, a past-tense report by the same
+// speaker ("Tôi đã xóa file này." = "I deleted this file.") stays allowed.
+function matchesViActionDirectiveShape(value: string): boolean {
+  return (
+    VI_IMPERATIVE_CLAUSE_PREFIX.test(value) ||
+    VI_MODAL_ACTION_PREFIX.test(value) ||
+    VI_POLARITY_POTENTIAL_ACTION.test(value) ||
+    VI_DIRECT_PRONOUN_ACTION.test(value)
+  );
+}
+
+function matchesViModalOrRequestLanguage(value: string): boolean {
+  return VI_IMPERATIVE_REQUEST_LANGUAGE.test(value) || VI_DIRECT_PRONOUN_MODAL.test(value);
+}
 
 function normalizeAttentionQuestionPart(value: string): string {
   return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
@@ -182,14 +325,17 @@ function assertAuthorityNeutralObservation(observation: string): void {
   if (
     containsClauseSeparatorOrExtraSentence(normalized) ||
     SECOND_PERSON_REQUEST_LANGUAGE.test(normalized) ||
+    MODAL_YOU_REQUEST.test(normalized) ||
     AUTHORITY_MODAL_LANGUAGE.test(normalized) ||
     MODAL_OR_REQUEST_PREFIX.test(normalized) ||
-    OBSERVATION_IMPERATIVE_PREFIX.test(normalized) ||
+    IMPERATIVE_CLAUSE_PREFIX.test(normalized) ||
     OBSERVATION_REQUEST_SHAPE.test(normalized) ||
-    BOUNDED_AUTHORITY_OR_EFFECT_LANGUAGE.test(normalized) ||
+    POTENTIAL_ACTION_SHAPE.test(normalized) ||
+    PRESENT_PERFORMATIVE_CLAIM.test(normalized) ||
+    DIRECT_OWNERSHIP_TRANSFER_CLAIM.test(normalized) ||
     ROUTING_OR_HANDOFF_LANGUAGE.test(normalized) ||
-    VI_ACTION_OR_EFFECT_LANGUAGE.test(normalized) ||
-    VI_MODAL_OR_REQUEST_LANGUAGE.test(normalized)
+    matchesViActionDirectiveShape(normalized) ||
+    matchesViModalOrRequestLanguage(normalized)
   ) {
     throw new Error("attention_question observation must be authority-neutral factual prose");
   }
@@ -211,12 +357,16 @@ function assertAuthorityNeutralClarificationQuestion(question: string): void {
   }
   if (
     MODAL_OR_REQUEST_PREFIX.test(normalized) ||
-    MODAL_LANGUAGE.test(normalized) ||
+    IMPERATIVE_CLAUSE_PREFIX.test(normalized) ||
+    OBSERVATION_REQUEST_SHAPE.test(normalized) ||
     SECOND_PERSON_REQUEST_LANGUAGE.test(normalized) ||
-    BOUNDED_AUTHORITY_OR_EFFECT_LANGUAGE.test(normalized) ||
+    MODAL_YOU_REQUEST.test(normalized) ||
+    POTENTIAL_ACTION_SHAPE.test(normalized) ||
+    PRESENT_PERFORMATIVE_CLAIM.test(normalized) ||
+    DIRECT_OWNERSHIP_TRANSFER_CLAIM.test(normalized) ||
     ROUTING_OR_HANDOFF_LANGUAGE.test(normalized) ||
-    VI_ACTION_OR_EFFECT_LANGUAGE.test(normalized) ||
-    VI_MODAL_OR_REQUEST_LANGUAGE.test(normalized)
+    matchesViActionDirectiveShape(normalized) ||
+    matchesViModalOrRequestLanguage(normalized)
   ) {
     throw new Error(
       "attention_question cannot request action, authority, verdict, or external effect",

@@ -43,18 +43,39 @@ Implementation branch: `codex/slp-bundled-policy-plugin`.
 | WebUI receipts                       | `workspace-protocol/role-binding-receipt.ts` hiển thị exact owner/digest; settings profile card                                                                                                                         | Generic UI + một số SLP wording                                                                  | Generic receipt UI; plugin-fed catalog                                                                                                                                          | 2, 5    | Policy owner projection và dynamic catalog                                                       | Medium: source-green nhưng shipped WebUI stale                                                                       | app unit tests và required browser journey sau install                                                                          |
 | Legacy core materializer/imports     | `agent/legacy-role-binding.ts`, frozen operational compatibility policy và bốn re-export modules dưới `agent/`                                                                                                          | Compatibility layer; không resolve active plugin cho legacy owner                                | Xóa sau migration window                                                                                                                                                        | 4       | Không thêm hook                                                                                  | Medium: production caller quay lại legacy sẽ tạo dual behavior                                                       | literal caller inventory; test production create luôn ghi plugin owner; plugin reload không đổi legacy owner                    |
 
-## Kết luận kiến trúc sau tranche hiện tại
+## Kết luận kiến trúc của baseline và correction wave `.57`
 
-Đường create mới đã có một policy owner duy nhất và materialize qua bundled `slp`; kernel không giả lập root instruction bằng user prompt và không xóa native provider adapters. Exact role instructions, assignment, profile và tool ceiling được persist trước launch; resume dùng lại receipt đó.
+Đường create mới dùng một trusted policy contribution để materialize policy owner; generic kernel không
+chọn SLP bằng host default, không giả lập root instruction bằng user prompt và không xóa native provider
+adapters. Exact role instructions, assignment, profile và tool ceiling được persist trước launch; resume
+dùng lại receipt đó. Một non-SLP trusted fixture đã đi qua real AgentManager/catalog boundary để kiểm tra
+admission, native launch context, tool intersection, state và event delivery.
 
-Council, Lead handoff/coordination, execution-profile resolution và role descriptors hiện được resolve qua contribution của generation đã pin. Static role options chỉ còn trong compatibility lane cho daemon cũ không có feature `roleProfiles`; daemon mới có feature nhưng plugin missing/invalid sẽ fail closed. Những phần provider transport, persistence, Workspace Protocol file validation, Beads ACL, Room identity, lifecycle receipt validation và no-write enforcement vẫn ở kernel vì đó là technical mechanism.
+Council, Lead handoff/coordination, execution-profile resolution, checkpoint semantics và role
+descriptors được resolve qua contribution của generation đã pin. Static role options chỉ còn trong
+compatibility lane cho daemon cũ không có feature `roleProfiles`; daemon mới có plugin missing/invalid
+thì fail closed. Những phần provider transport, persistence, Workspace Protocol file validation, Beads
+ACL, Room identity, lifecycle receipt validation và no-write enforcement vẫn ở kernel vì đó là technical
+mechanism.
 
 Tranche `.46` chuyển automatic attention sang đúng một live bundled-policy path. Kernel không còn chứa
 active SLP classifier/routing/threshold; nó chỉ host generic event policies và durable versioned state.
 Bundled SLP mặc định bật, có emergency disable `PASEO_DISABLE_SLP_ATTENTION_POLICY=1`. `.46` re-arm theo
 episode/fingerprint và fail closed khi target không unique. Supervisor question dùng bounded surface riêng
 với structural observation/question/evidence; broader signal/handoff surface không được mở mặc định cho
-Supervisor hoặc Peer.
+Supervisor hoặc Peer. Correction wave `.57` yêu cầu policy khai báo event subscriptions, và closure
+policy nhận captured owner/run evidence trước deletion thay vì suy lost-run từ closed snapshot.
+
+`.57` cũng bổ sung production `get_agent_checkpoint` qua catalog/bootstrap path. Adapter này giữ
+assignment/resource-grant/Beads ACL, current `beads_status` prerequisite, canonical Council receipt và
+UNKNOWN khi target, disposition hoặc dependency evidence không đủ. Nó không tạo acceptance authority,
+taskgraph, idle-done hay restart action.
+
+Current `.57` source/test evidence và các giới hạn activation được ghi trong
+[implementation handoff](research/2026-09-06-maestro-slp-implementation-handoff.md). Xia report vẫn ở
+read-only Foundation checkout tại
+`/Users/iznogoud/Desktop/Projects-AI/Paseo/paseo-foundation/docs/research/2026-09-06-maestro-slp-adoption-xia-deep.md`,
+cùng probes `2026-09-06-maestro-slp-probes.mjs` và `.json`; Product không copy hoặc sửa các file đó.
 
 **Cập nhật F-04 (Phase 2A):** frozen SLP v1.0 generation `569c7f…483f0` (`.45`) từng được registry dựng lại
 song song `.46`, giữ bằng một untagged, dateless `COMPAT` module. Đây chính là anti-pattern mà audit này
@@ -102,3 +123,60 @@ Ledger trên là historical baseline của tranche `.46`; dòng `plugin:slp@569c
 đã superseded bởi F-04 (Phase 2A) — generation đó không còn được registry dựng lại, resolve owner này
 bây giờ fail closed với `bundled_policy_pack_missing`. Đọc ledger này như bằng chứng lịch sử tại thời điểm
 tranche `.46`, không phải trạng thái hiện hành.
+
+## Retained-hook-fidelity guard (retained `.60` generation resume)
+
+`policy/bundled/slp/retained-hook-fidelity-guard.ts` đóng lại một gap có tên cụ thể trong
+`registerRetainedSlpGenerations` (`retained-generations.ts`): guard mô tả DATA-only
+(`buildCanonicalSlpArtifactBytesForCoordinationVersion`) dùng `JSON.stringify`, mà `JSON.stringify`
+âm thầm bỏ qua function VALUES, nên một edit chỉ đổi function body của bất kỳ module nào trong
+mười module này sẽ vô hình với guard đó: chín module mà
+`buildDefaultSlpBundledPolicyContribution()` reference TRỰC TIẾP (council-policy,
+checkpoint-policy, execution-profiles, role-binding-policy, attention-policy,
+lifecycle-attention-policy, role-profiles, `agent/role-binding.ts`, và chính slp.ts) cộng thêm
+`retained-coordination-policy-v5.ts` — fixture fork mà `registerRetainedSlpGenerations` swap vào
+làm `coordinationPolicy` của owner `.60` retained. Guard này là một byte fingerprint thuần của
+chính file mỗi module được check, read-only — không bao giờ import hay gọi vào bất kỳ policy
+function nào.
+
+Provenance wording chính xác (không overclaim): mỗi checked module mang hai frozen digest,
+`sourceDigest` và `distDigest`. Bất kỳ thay đổi byte nào — kể cả chỉ whitespace hoặc comment,
+không đổi semantics — đều làm digest lệch và đòi hỏi requalify frozen digest một cách chủ ý (chạy
+lại hash/build và cập nhật giá trị frozen); đây là literal byte check, không phải semantic/AST
+check, nên guard không tự "bỏ qua" no-op edit.
+
+Ba `kind` khác nhau, không phải một claim đồng nhất:
+
+- **Tám module `"old-equal"`** (council-policy, checkpoint-policy, execution-profiles,
+  role-binding-policy, attention-policy, lifecycle-attention-policy, role-profiles,
+  `agent/role-binding.ts`): claim `.60`-equivalence chỉ được chứng minh ở mức COMPILED: `*.ts`
+  source hiện tại, chạy qua một `tsc` build mới, tạo ra `*.js` byte-identical với compiled dist của
+  release `0.7.0-paseo.60` thật đã installed hôm nay. `distDigest` ghi lại compiled output đã
+  proven-equal đó; `sourceDigest` fingerprint `*.ts` source hiện tại đang checked-out, KHÔNG claim
+  bằng bất kỳ `.60` TypeScript source gốc nào (không có `.60` TypeScript nào từng được đọc hay
+  được claim tồn tại) — nó chỉ tồn tại để freeze form dev/test-mode từ hôm nay trở đi.
+- **Một module `"reviewed-adapter"`** (slp.ts): KHÔNG phải old-equal claim ở form nào cả. slp.ts là
+  bridge đã sửa đổi implement chính retained-generation feature (thay đổi của riêng candidate này);
+  cả `sourceDigest` lẫn `distDigest` đều là baseline forward-only "đã review, không âm thầm drift
+  thêm nữa", không phải claim `.60` equivalence.
+- **Một module `"retained-fork"`** (retained-coordination-policy-v5.ts): CŨNG không phải old-equal
+  raw-JS-identity claim — đây là một fork đã được AST-qualify từ semantics `.60` (cùng policy
+  contribution nhưng export names/module shape chủ ý khác so với `.60` coordination-policy.js
+  thật, không phải literal byte copy). Claim của guard này với `kind` đó hẹp hơn và thuần cơ học:
+  bất biến byte-cho-byte của chính file fork đó kể từ hôm nay trở đi, cả ở form source lẫn compiled
+  — bắt mọi edit tiếp theo (cố ý hay vô tình) vào fixture đã qualify này.
+
+Source vs. compiled resolution: guard tự suy ra nó đang execute ở form nào (`.ts` qua tsx/vitest,
+`.js` từ compiled dist, lấy từ chính `import.meta.url` của nó) và chỉ hash sibling của checked
+module ở đúng form đó — không bao giờ dùng form còn lại, không có fallback. Một guard `.js` compiled
+mà chỉ tìm thấy sibling `.ts` liền kề bị stale/drift (hoặc ngược lại) phải fail closed thay vì âm
+thầm validate bytes của sai form.
+
+Bounded coverage, không phải transitive graph freeze: chỉ các module được
+`buildDefaultSlpBundledPolicyContribution()` reference TRỰC TIẾP (cộng fixture fork nêu trên) mới
+được check; các import sâu hơn của chính chúng (vd. role-binding-policy.ts import
+assignment-policy.ts, harness-package-policy.ts, role-definitions.ts, skill-policy.ts) chủ ý không
+được walk. Residual gap hẹp lại còn: `role-definitions.ts` — chỉ phần IMPLEMENTATION logic của
+module này chưa có mitigation nào (phần DATA của nó đã được cover gián tiếp qua digest content mà
+`role-definitions.json`/DATA-only guard kia embed); `assignment-policy.ts` vẫn là residual gap đã
+named, acknowledged, không có mitigation nào cả.

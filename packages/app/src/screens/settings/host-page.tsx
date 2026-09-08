@@ -1712,10 +1712,11 @@ function TerminalProfilesSection({ serverId }: { serverId: string }) {
         leftIcon={addProfileIcon}
         onPress={handleAddOpen}
         disabled={!isConnected || !profiles}
+        accessibilityLabel={t("settings.host.terminalProfiles.addProfileTitle")}
         testID="terminal-profiles-add-button"
       />
     ),
-    [handleAddOpen, isConnected, profiles],
+    [handleAddOpen, isConnected, profiles, t],
   );
 
   if (!isConnected) {

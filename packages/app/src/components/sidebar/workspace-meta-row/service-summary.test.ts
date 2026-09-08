@@ -1,5 +1,7 @@
+import { createInstance } from "i18next";
 import { describe, expect, it } from "vitest";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
+import { en } from "@/i18n/resources/en";
 import { selectWorkspaceServiceSummary, workspaceServiceLabelKey } from "./service-summary";
 
 type Script = SidebarWorkspaceEntry["scripts"][number];
@@ -70,13 +72,45 @@ describe("selectWorkspaceServiceSummary", () => {
 describe("workspaceServiceLabelKey", () => {
   it("names an unhealthy service differently from a running one", () => {
     expect(workspaceServiceLabelKey({ name: "web", health: "unhealthy" })).toBe(
-      "workspace.status.serviceUnhealthy",
+      "sidebar.workspace.status.serviceUnhealthy",
     );
   });
 
   it.each([["healthy"], [null]] as const)("treats %s as simply running", (health) => {
     expect(workspaceServiceLabelKey({ name: "web", health })).toBe(
-      "workspace.status.serviceRunning",
+      "sidebar.workspace.status.serviceRunning",
     );
+  });
+});
+
+describe("workspaceServiceLabelKey i18n resolution", () => {
+  async function realT() {
+    const i18n = createInstance();
+    await i18n.init({
+      compatibilityJSON: "v4",
+      lng: "en",
+      fallbackLng: "en",
+      resources: { en: { translation: en } },
+      interpolation: { escapeValue: false },
+    });
+    return i18n.t.bind(i18n);
+  }
+
+  it("resolves the running key to real English copy with the service name interpolated", async () => {
+    const t = await realT();
+    const key = workspaceServiceLabelKey({ name: "web", health: "healthy" });
+    expect(t(key, { name: "web" })).toBe("Service web running");
+  });
+
+  it("resolves the unhealthy key to real English copy with the service name interpolated", async () => {
+    const t = await realT();
+    const key = workspaceServiceLabelKey({ name: "api", health: "unhealthy" });
+    expect(t(key, { name: "api" })).toBe("Service api unhealthy");
+  });
+
+  it("does not fall back to the raw key (the U4 regression)", async () => {
+    const t = await realT();
+    const key = workspaceServiceLabelKey({ name: "web", health: null });
+    expect(t(key, { name: "web" })).not.toBe(key);
   });
 });

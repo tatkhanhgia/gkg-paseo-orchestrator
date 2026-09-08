@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCliAssignment,
+  buildCliNotebookGrantRequest,
   resolveExistingRunWorkspace,
   resolveRunCallerAgentId,
   runRunCommand,
@@ -34,6 +35,79 @@ describe("CLI assignment issue grants", () => {
         scope: "Beads Central issue/work graph for this assignment only; no other external effects",
       },
     });
+  });
+});
+
+describe("CLI Supervisor notebook grant request", () => {
+  const now = new Date("2026-09-07T00:00:00.000Z");
+  const expiresAt = "2026-09-07T01:00:00.000Z";
+
+  it("accepts only scope and expiry and keeps daemon identities out of the request", () => {
+    const request = buildCliNotebookGrantRequest({
+      roleId: "supervisor",
+      scope: " append evidence ",
+      expiresAt,
+      now,
+    });
+    expect(request).toEqual({ scope: "append evidence", expiresAt });
+    expect(request).not.toHaveProperty("notebookId");
+    expect(request).not.toHaveProperty("location");
+    expect(request).not.toHaveProperty("designatedWriterId");
+  });
+
+  it("adds the grant request without widening provider or external boundaries", () => {
+    const notebookGrant = buildCliNotebookGrantRequest({
+      roleId: "supervisor",
+      scope: "append evidence",
+      expiresAt,
+      now,
+    });
+    expect(
+      buildCliAssignment({
+        roleId: "supervisor",
+        effectClass: "read-only",
+        objective: "Observe and report",
+        cwd: "/repo",
+        notebookGrant,
+      }),
+    ).toMatchObject({
+      mutationBoundary: { mode: "no-write" },
+      externalEffectBoundary: { mode: "denied" },
+      notebookGrant: { scope: "append evidence", expiresAt },
+    });
+  });
+
+  it("rejects grants for non-Supervisor roles", () => {
+    expect(() =>
+      buildCliNotebookGrantRequest({
+        roleId: "peer",
+        scope: "append evidence",
+        expiresAt,
+        now,
+      }),
+    ).toThrowError(/require --role supervisor/);
+  });
+
+  it("rejects incomplete, expired, and malformed requests", () => {
+    expect(() =>
+      buildCliNotebookGrantRequest({ roleId: "supervisor", scope: "append evidence", now }),
+    ).toThrowError(/must be provided together/);
+    expect(() =>
+      buildCliNotebookGrantRequest({
+        roleId: "supervisor",
+        scope: "append evidence",
+        expiresAt: "2026-09-06T23:00:00.000Z",
+        now,
+      }),
+    ).toThrowError(/must be in the future/);
+    expect(() =>
+      buildCliNotebookGrantRequest({
+        roleId: "supervisor",
+        scope: "append evidence",
+        expiresAt: "not-a-timestamp",
+        now,
+      }),
+    ).toThrowError(/Invalid Supervisor notebook grant request/);
   });
 });
 
@@ -160,6 +234,30 @@ describe("runRunCommand option validation", () => {
     await expectInvalidOptions(
       { role: "lead", assignmentEffect: "read-only", beadsIssue: ["ps123-abc"] },
       /--beads-issue is only valid with --role peer/,
+    );
+  });
+
+  it("validates notebook grant flags before connecting to a daemon", async () => {
+    await expectInvalidOptions(
+      { notebookGrantScope: "append evidence" },
+      /require --role supervisor/,
+    );
+    await expectInvalidOptions(
+      {
+        role: "supervisor",
+        assignmentEffect: "read-only",
+        notebookGrantScope: "append evidence",
+      },
+      /must be provided together/,
+    );
+    await expectInvalidOptions(
+      {
+        role: "supervisor",
+        assignmentEffect: "read-only",
+        notebookGrantScope: "append evidence",
+        notebookGrantExpiresAt: "2020-01-01T00:00:00.000Z",
+      },
+      /must be in the future/,
     );
   });
 });

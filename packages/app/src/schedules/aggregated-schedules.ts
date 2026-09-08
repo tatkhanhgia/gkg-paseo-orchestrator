@@ -116,7 +116,7 @@ export async function fetchAggregatedSchedules(
     throw new Error(ALL_SCHEDULE_HOSTS_FAILED_MESSAGE);
   }
 
-  if (schedules.length === 0 && hasSettlingHost) {
+  if (connectedAttempts === 0 && hasSettlingHost) {
     return { status: "connecting" };
   }
 

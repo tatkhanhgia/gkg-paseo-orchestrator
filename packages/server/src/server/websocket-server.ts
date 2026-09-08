@@ -36,6 +36,14 @@ import {
   type SessionOptions,
   type SessionRuntimeMetrics,
 } from "./session.js";
+import {
+  createProjectHarnessService,
+  type ProjectHarnessService,
+} from "./project/project-harness-service.js";
+import {
+  createProjectHarnessBindingService,
+  type HarnessBindingResolver,
+} from "./project/harness-binding-service.js";
 import type { HubRelationshipManagement } from "./hub/relationship-controller.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
 import type { HubExecutionAgents } from "./hub/daemon-executions.js";
@@ -91,6 +99,30 @@ import {
   normalizeClientRestartRpcReason,
 } from "./lifecycle-reasons.js";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
+
+function loadOptionalProjectHarnessService(logger: pino.Logger): ProjectHarnessService | null {
+  try {
+    return createProjectHarnessService();
+  } catch (error) {
+    logger.warn(
+      { err: error },
+      "Project Harness disabled because its pinned SLP package is unavailable",
+    );
+    return null;
+  }
+}
+
+function loadOptionalProjectHarnessBindingResolver(input: {
+  service: ProjectHarnessService | null;
+  workspaceRegistry: WorkspaceRegistry;
+  projectRegistry: ProjectRegistry;
+}): HarnessBindingResolver | null {
+  if (!input.service) return null;
+  return createProjectHarnessBindingService({
+    workspaceRegistry: input.workspaceRegistry,
+    projectRegistry: input.projectRegistry,
+  });
+}
 import type { BrowserAutomationExecuteResponse } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import {
   BrowserAutomationHostCapabilitySchema,
@@ -630,6 +662,8 @@ export class VoiceAssistantWebSocketServer {
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+  private readonly projectHarnessService: ProjectHarnessService | null;
+  private readonly harnessBindingResolver: HarnessBindingResolver | null;
 
   constructor(
     server: HTTPServer,
@@ -695,6 +729,12 @@ export class VoiceAssistantWebSocketServer {
     this.browserToolsBroker = browserToolsBroker ?? null;
     this.projectRegistry = projectRegistry ?? createNoopProjectRegistry();
     this.workspaceRegistry = workspaceRegistry ?? createNoopWorkspaceRegistry();
+    this.projectHarnessService = loadOptionalProjectHarnessService(this.logger);
+    this.harnessBindingResolver = loadOptionalProjectHarnessBindingResolver({
+      service: this.projectHarnessService,
+      workspaceRegistry: this.workspaceRegistry,
+      projectRegistry: this.projectRegistry,
+    });
     this.workspaceLabelService = workspaceLabelService ?? null;
     this.chatService = chatService ?? null;
     this.councilCaseStore = optionalCouncilCaseStore(councilCaseStore);
@@ -1464,6 +1504,8 @@ export class VoiceAssistantWebSocketServer {
       agentStorage: this.agentStorage,
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
+      projectHarnessService: this.projectHarnessService,
+      harnessBindingResolver: this.harnessBindingResolver,
       beadsService: this.beadsService,
       chatService: this.chatService ?? undefined,
       councilCaseStore: this.councilCaseStore ?? undefined,
@@ -1770,6 +1812,9 @@ export class VoiceAssistantWebSocketServer {
         workspaceFileEditing: true,
         // COMPAT(workspaceProtocolEditing): keep gated while older daemons remain connectable.
         workspaceProtocolEditing: true,
+        // COMPAT(projectHarness): additive feature with release-floor version owned by the
+        // release owner; keep gated while older daemons remain connectable.
+        projectHarness: this.projectHarnessService !== null,
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: true,
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.

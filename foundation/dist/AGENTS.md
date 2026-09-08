@@ -51,3 +51,11 @@ và role contract; file này tham chiếu chứ không giữ bản sao.
 Chọn smallest useful topology. Trước abstraction, service, patch hoặc ceremony mới, nêu reproduced problem, owning layer và vì sao deletion, native Paseo, config, convention hoặc smaller prototype chưa đủ.
 
 Evidence phải proportional: Git identity/diff và focused checks thường đủ; hash chỉ dùng khi Git không đủ hoặc risk cụ thể cần. Status, notification, silence và test pass không tự là acceptance.
+
+<!-- PASEO_HARNESS:BEGIN -->
+Đọc [Project Harness entry map](templates/harness/README.md) để tìm repository authority, validation
+và hướng dẫn theo role. Với Paseo SLP, dùng role/assignment binding do daemon cung cấp. Lead đọc
+[Workspace Protocol](WORKSPACE_PROTOCOL.md) trước orchestration; Peer chỉ nhận relevant constraints
+trong assignment; Supervisor đọc protocol khi có governance mandate. Notebook location và Beads project
+lấy từ binding, không tự suy từ cwd hoặc tên thư mục.
+<!-- PASEO_HARNESS:END -->

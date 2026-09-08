@@ -363,6 +363,8 @@ interface SessionForTestOptions {
   };
   workspaceRegistry?: { get: ReturnType<typeof vi.fn> };
   projectRegistry?: Partial<SessionOptions["projectRegistry"]>;
+  projectHarnessService?: SessionOptions["projectHarnessService"];
+  harnessBindingResolver?: SessionOptions["harnessBindingResolver"];
   terminalManager?: SessionOptions["terminalManager"];
   serviceProxy?: SessionOptions["serviceProxy"];
   scriptRuntimeStore?: SessionOptions["scriptRuntimeStore"];
@@ -458,6 +460,8 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
       get: vi.fn(),
       list: vi.fn().mockResolvedValue([]),
     },
+    projectHarnessService: options.projectHarnessService,
+    harnessBindingResolver: options.harnessBindingResolver,
     workspaceLabelService: options.workspaceLabelService,
     scheduleService: asScheduleService(),
     checkoutDiffManager: asCheckoutDiffManager(checkoutDiffManager),
@@ -490,6 +494,114 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
   };
   return new Session(sessionOptions);
 }
+
+test("project harness notebook release uses the authenticated permission boundary", async () => {
+  const root = mkdtempSync(join(tmpdir(), "paseo-project-harness-release-session-"));
+  const projectId = "prj_release_session";
+  const workspaceId = "wks_release_session";
+  const writerId = "supervisor-writer-1";
+  const expectedRevision = {
+    status: "regular" as const,
+    mtimeMs: 10,
+    size: 20,
+    sha256: "a".repeat(64),
+  };
+  const releaseResult = {
+    projectId,
+    workspaceId,
+    notebookId: "nb_release_session",
+    location: "docs/harness/SUPERVISOR_NOTEBOOK.md",
+    releasedWriterId: writerId,
+    metadataRevision: { ...expectedRevision, mtimeMs: 11, size: 21 },
+    nextStep: "fresh_supervisor_role_first" as const,
+  };
+  const release = vi.fn().mockResolvedValue(releaseResult);
+  const project = { projectId, rootPath: root, archivedAt: null };
+  const workspace = { workspaceId, projectId, cwd: root, archivedAt: null };
+  const service = {
+    inspect: vi.fn(),
+    preview: vi.fn(),
+    apply: vi.fn(),
+    update: vi.fn(),
+  } as unknown as SessionOptions["projectHarnessService"];
+  const registries = {
+    projectRegistry: {
+      get: vi.fn().mockResolvedValue(project),
+      list: vi.fn().mockResolvedValue([project]),
+    },
+    workspaceRegistry: { get: vi.fn().mockResolvedValue(workspace) },
+  };
+  const agentManager = {
+    getAgent: vi.fn(() => ({ id: writerId, lifecycle: "idle" })),
+    isAgentCloseInFlight: vi.fn(() => false),
+    hasInFlightRun: vi.fn(() => false),
+  };
+  const request = {
+    type: "foundation.projectHarness.notebook.release.request" as const,
+    requestId: "release-session-request",
+    projectId,
+    workspaceId,
+    cwd: root,
+    notebookId: releaseResult.notebookId,
+    location: releaseResult.location,
+    designatedWriterId: writerId,
+    expectedRevision,
+  };
+  try {
+    const allowedMessages: unknown[] = [];
+    const allowed = createSessionForTest({
+      messages: allowedMessages,
+      permissions: ["workspace.manage"],
+      agentManager,
+      ...registries,
+      projectHarnessService: service,
+      harnessBindingResolver: { release } as never,
+    });
+
+    await allowed.handleMessage(request);
+
+    expect(release).toHaveBeenCalledWith({
+      projectId,
+      workspaceId,
+      cwd: root,
+      notebookId: releaseResult.notebookId,
+      location: releaseResult.location,
+      designatedWriterId: writerId,
+      expectedRevision,
+      revalidate: expect.any(Function),
+    });
+    expect(allowedMessages).toContainEqual({
+      type: "foundation.projectHarness.notebook.release.response",
+      payload: { requestId: request.requestId, ok: true, result: releaseResult },
+    });
+
+    release.mockClear();
+    const deniedMessages: unknown[] = [];
+    const denied = createSessionForTest({
+      messages: deniedMessages,
+      permissions: ["workspace.write"],
+      agentManager,
+      ...registries,
+      projectHarnessService: service,
+      harnessBindingResolver: { release } as never,
+    });
+
+    await denied.handleMessage(request);
+
+    expect(release).not.toHaveBeenCalled();
+    expect(deniedMessages).toContainEqual({
+      type: "rpc_error",
+      payload: {
+        requestId: request.requestId,
+        requestType: request.type,
+        error: `Session is not authorized for ${request.type}`,
+        code: "access_denied",
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("Human attention question requests", () => {
   const boundedQuestion = {
@@ -5611,6 +5723,33 @@ test("keeps selective delivery scoped per socket when a retained session also ha
       }),
     },
   ]);
+});
+
+test("does not route an internal agent_closure receipt through stream forwarding", () => {
+  const messages: SessionOutboundMessage[] = [];
+  const agentEventListeners: Array<(event: AgentManagerEvent) => void> = [];
+  createSessionForTest({
+    messages,
+    agentManager: {
+      subscribe: vi.fn((listener: (event: AgentManagerEvent) => void) => {
+        agentEventListeners.push(listener);
+        return () => {};
+      }),
+    },
+  });
+
+  const listener = agentEventListeners[0];
+  if (!listener) throw new Error("Agent event listener was not installed");
+  listener({
+    type: "agent_closure",
+    agentId: "closed-agent",
+    cause: "agent closed",
+    lifecycleBeforeClose: "running",
+    run: null,
+    internal: true,
+  });
+
+  expect(messages).toEqual([]);
 });
 
 test("sends project updates only to capable sockets in a retained session", async () => {

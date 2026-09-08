@@ -94,6 +94,7 @@ import {
   type AgentCapabilityFlags,
   type AgentClient,
   type AgentCreateSessionOptions,
+  type AgentMandatoryResourceRead,
   type AgentFeature,
   type AgentLaunchContext,
   type AgentMetadata,
@@ -429,6 +430,7 @@ interface ClaudeAgentSessionOptions {
   roleId?: PaseoRoleId;
   allowedFoundationSkills?: readonly string[];
   noWrite?: boolean;
+  mandatoryResourceReads?: readonly AgentMandatoryResourceRead[];
   productSkillBundleRoot?: string;
   persistSession?: boolean;
   logger: Logger;
@@ -1551,6 +1553,7 @@ export class ClaudeAgentClient implements AgentClient {
       roleId: launchContext?.roleBinding?.roleId,
       allowedFoundationSkills: launchContext?.roleBinding?.allowedSkills,
       noWrite: launchContext?.roleBinding?.noWrite === true,
+      mandatoryResourceReads: launchContext?.roleBinding?.mandatoryResourceReads,
       productSkillBundleRoot: this.productSkillBundleRoot,
       persistSession: options?.persistSession,
       logger: this.logger,
@@ -1585,6 +1588,7 @@ export class ClaudeAgentClient implements AgentClient {
       roleId: launchContext?.roleBinding?.roleId,
       allowedFoundationSkills: launchContext?.roleBinding?.allowedSkills,
       noWrite: launchContext?.roleBinding?.noWrite === true,
+      mandatoryResourceReads: launchContext?.roleBinding?.mandatoryResourceReads,
       productSkillBundleRoot: this.productSkillBundleRoot,
       logger: this.logger,
       queryFactory: this.queryFactory,
@@ -2060,6 +2064,7 @@ class ClaudeAgentSession implements AgentSession {
   private readonly agentId?: string;
   private readonly roleInstructions?: string;
   private readonly noWrite: boolean;
+  private readonly mandatoryResourceReads?: readonly AgentMandatoryResourceRead[];
   private readonly exactPreapprovedToolNames: ReadonlySet<string>;
   private readonly foundationSkillPolicy: FoundationSkillPolicy | null;
   private readonly productSkillPolicy: ProductSkillPolicy | null;
@@ -2145,6 +2150,7 @@ class ClaudeAgentSession implements AgentSession {
     this.agentId = options.agentId;
     this.roleInstructions = options.roleInstructions;
     this.noWrite = options.noWrite === true;
+    this.mandatoryResourceReads = options.mandatoryResourceReads;
     this.exactPreapprovedToolNames = new Set(
       (config.toolPolicy?.preapproved ?? []).map((grant) => `mcp__${grant.server}__${grant.tool}`),
     );
@@ -4744,11 +4750,21 @@ class ClaudeAgentSession implements AgentSession {
   ): Promise<PermissionResult> => {
     // Claude plan mode may still consult canUseTool for MCP calls even when
     // allowedTools contains the exact daemon-owned grant. Honor only the
-    // immutable ToolPolicy receipts here so role-scoped Paseo tools do not
-    // deadlock behind a permission escalation that no-write assignments must
-    // reject. Unlisted MCP tools and every provider-native write tool continue
-    // through the normal permission path.
+    // immutable daemon-owned receipts here so role-scoped Paseo tools and the
+    // exact current mandatory Project Harness resources do not deadlock behind a
+    // permission escalation. Unlisted MCP tools, every other native read, and
+    // every provider-native write tool continue through the normal permission path.
     if (this.exactPreapprovedToolNames.has(toolName)) {
+      return {
+        behavior: "allow",
+        updatedInput: input,
+      };
+    }
+    if (
+      this.noWrite &&
+      toolName === "Read" &&
+      this.mandatoryResourceReads?.some((resource) => input.file_path === resource.path)
+    ) {
       return {
         behavior: "allow",
         updatedInput: input,

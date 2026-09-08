@@ -26,7 +26,15 @@ import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
 import type { AgentMode } from "@getpaseo/protocol/agent-types";
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
+import {
+  buildLockedNoWriteModeOption,
+  canAttemptModeSelection,
+  computeRequiredNoWriteModeId,
+  persistConfirmedAgentMode,
+  resolveLockedModeOptions,
+} from "@/composer/draft/effective-agent-modes";
 import { getAgentModeIcon, getAgentModeOptionIcon } from "@/agent-controls/icons";
+
 interface ModeComboboxOptionProps {
   option: ComboboxOption;
   selected: boolean;
@@ -69,6 +77,7 @@ export interface AgentModeControlValue {
   selectedModeId: string | null | undefined;
   onSelectMode: (modeId: string) => void;
   disabled?: boolean;
+  lockReason?: string;
 }
 
 function normalizeSearchQuery(value: string): string {
@@ -82,6 +91,7 @@ export function AgentModeControl({
   selectedModeId,
   onSelectMode,
   disabled = false,
+  lockReason,
   surface = "toolbar",
   onClose,
 }: AgentModeControlValue & { surface?: "toolbar" | "sheet"; onClose?: () => void }) {
@@ -178,15 +188,19 @@ export function AgentModeControl({
   );
 
   const sheetHeader = useMemo<SheetHeader>(
+    // The tooltip explaining a locked mode only renders on desktop hover; the sheet
+    // subtitle is the equivalent explanation reachable on mobile/touch and by
+    // assistive tech that never triggers a hover tooltip.
     () => ({
       title: t("agentControls.mode.title"),
+      subtitle: lockReason,
       search: {
         onChange: setSearchQuery,
         placeholder: t("agentControls.mode.searchPlaceholder"),
         testID: "mode-search-input",
       },
     }),
-    [t],
+    [t, lockReason],
   );
 
   if (!selectedMode) return null;
@@ -210,13 +224,20 @@ export function AgentModeControl({
             accessibilityLabel={t("agentControls.mode.selectWithValue", {
               value: selectedModeLabel,
             })}
+            // The hover tooltip explaining a lock is desktop-only; accessibilityHint
+            // reaches touch/mobile and assistive tech that never triggers a hover.
+            accessibilityHint={lockReason}
             testID="mode-control"
           />
         </TooltipTrigger>
         <TooltipContent side="top" align="center" offset={8}>
           <View style={styles.tooltipRow}>
-            <Text style={styles.tooltipText}>{t(getAgentControlHintKey("mode"))}</Text>
-            {isActiveComposer && cycleShortcutKeys ? <Shortcut chord={cycleShortcutKeys} /> : null}
+            <Text style={styles.tooltipText}>
+              {lockReason ?? t(getAgentControlHintKey("mode"))}
+            </Text>
+            {!lockReason && isActiveComposer && cycleShortcutKeys ? (
+              <Shortcut chord={cycleShortcutKeys} />
+            ) : null}
           </View>
         </TooltipContent>
       </Tooltip>
@@ -246,6 +267,7 @@ export function useLiveAgentModeControl(
   serverId: string,
   agentId: string,
 ): AgentModeControlValue | null {
+  const { t } = useTranslation();
   const slice = useSessionStore(
     useShallow((state) => {
       const agent = state.sessions[serverId]?.agents?.get(agentId);
@@ -254,6 +276,7 @@ export function useLiveAgentModeControl(
         provider: agent.provider,
         cwd: agent.cwd,
         currentModeId: agent.currentModeId,
+        roleBinding: agent.roleBinding,
       };
     }),
   );
@@ -273,40 +296,70 @@ export function useLiveAgentModeControl(
     return definition ? [definition] : [];
   }, [slice?.provider, snapshotEntries]);
 
+  const requiredNoWriteModeId = useMemo(
+    () => computeRequiredNoWriteModeId(slice?.roleBinding),
+    [slice?.roleBinding],
+  );
+
+  const lockedModeOptions = useMemo<AgentMode[] | null>(
+    () =>
+      resolveLockedModeOptions(availableModes, requiredNoWriteModeId, (modeId) =>
+        buildLockedNoWriteModeOption(modeId, t),
+      ),
+    [availableModes, requiredNoWriteModeId, t],
+  );
+
   const handleSelectMode = useCallback(
     (modeId: string) => {
       if (!client || !slice?.provider) return;
-      void updatePreferences((current) =>
-        mergeProviderPreferences({
-          preferences: current,
-          provider: slice.provider,
-          updates: { mode: modeId || undefined },
-        }),
-      ).catch((error) => {
-        console.warn("[AgentModeControl] persist mode preference failed", error);
+      if (!canAttemptModeSelection(modeId, requiredNoWriteModeId)) return;
+      // Only persist the mode preference after the daemon confirms the mode
+      // change succeeded and a fresh readback confirms the effective mode,
+      // so a rejected mode is never saved as if it had taken effect (UX-04).
+      void persistConfirmedAgentMode({
+        agentId,
+        modeId,
+        setAgentMode: (id, mode) => client.setAgentMode(id, mode),
+        onNotice: (notice) => showProviderNoticeToast(toast, notice),
+        fetchAgent: (id) => client.fetchAgent(id),
+        persist: (effectiveModeId) =>
+          updatePreferences((current) =>
+            mergeProviderPreferences({
+              preferences: current,
+              provider: slice.provider,
+              updates: { mode: effectiveModeId },
+            }),
+          ),
+      }).catch((error) => {
+        console.warn("[AgentModeControl] setAgentMode failed", error);
+        toast.error(toErrorMessage(error));
       });
-      void client
-        .setAgentMode(agentId, modeId)
-        .then((notice) => showProviderNoticeToast(toast, notice))
-        .catch((error) => {
-          console.warn("[AgentModeControl] setAgentMode failed", error);
-          toast.error(toErrorMessage(error));
-        });
     },
-    [agentId, client, slice?.provider, toast, updatePreferences],
+    [agentId, client, requiredNoWriteModeId, slice?.provider, toast, updatePreferences],
   );
 
   return useMemo(() => {
     if (!slice || availableModes.length === 0) return null;
+    const modeOptions = lockedModeOptions ?? availableModes;
     return {
       provider: slice.provider,
       providerDefinitions,
-      modeOptions: availableModes,
-      selectedModeId: slice.currentModeId,
+      modeOptions,
+      selectedModeId: requiredNoWriteModeId ?? slice.currentModeId,
       onSelectMode: handleSelectMode,
       disabled: !client,
+      lockReason: requiredNoWriteModeId ? t("agentControls.mode.lockedHint") : undefined,
     };
-  }, [availableModes, client, handleSelectMode, providerDefinitions, slice]);
+  }, [
+    availableModes,
+    client,
+    handleSelectMode,
+    lockedModeOptions,
+    providerDefinitions,
+    requiredNoWriteModeId,
+    slice,
+    t,
+  ]);
 }
 
 const styles = StyleSheet.create((theme) => ({

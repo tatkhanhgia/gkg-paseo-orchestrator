@@ -66,6 +66,10 @@ describe("bundled SLP attention question authority", () => {
     "What made this approach different from the prior attempt?",
     "Mày có vừa làm sai contract nào tao đề ra không?",
     "Tại sao đoạn log này thiếu timestamp?",
+    "What assumption would invalidate the current conclusion?",
+    "Which failure mode could explain the observed divergence?",
+    "What evidence might contradict the stated premise?",
+    "Giả định nào có thể làm sai lệch kết luận hiện tại?",
   ])("allows an open, proposition-specific attention question: %s", (openQuestion) => {
     expect(() =>
       assertAttentionQuestionAuthority({ ...question, question: openQuestion }),
@@ -97,6 +101,8 @@ describe("bundled SLP attention question authority", () => {
     "Bạn có thể xem lại phần này không?",
     "Chúng ta nên làm gì tiếp theo?",
     "Bạn phải xử lý việc này ngay không?",
+    "Bạn nên làm gì tiếp theo?",
+    "What would you do to fix this now?",
   ])("rejects a command, verdict, ownership, handoff, or external-effect request: %s", (value) => {
     expect(() => assertAttentionQuestionAuthority({ ...question, question: value })).toThrow(
       "attention_question cannot request action, authority, verdict, or external effect",
@@ -171,6 +177,146 @@ describe("bundled SLP attention question authority", () => {
     "Tệp file/path.ext vẫn còn tham chiếu tới snapshot cũ.",
   ])("allows an internal dotted version or path token: %s", (observation) => {
     expect(() => assertAttentionQuestionAuthority({ ...question, observation })).not.toThrow();
+  });
+
+  // F3: a bare past-tense/nominal mention of an authority/effect word reports
+  // or references something, it does not request, propose, or threaten it —
+  // that is ordinary factual prose, distinct from the directive/potential
+  // shapes covered by the "rejects bounded action or authority language"
+  // cases above (imperative mood, modal-you request, request-shape verbs,
+  // potential-passive modal pairing, ownership/authority transfer).
+  test.each([
+    "The migration deleted three records.",
+    "The prior run removed the stale lock file before restart.",
+    "The candidate closed the run without an explicit terminal event.",
+    "The reviewer rejected the first draft for missing evidence.",
+    "The daemon restarted twice during the reproduction window.",
+    "Ownership transferred to the Lead yesterday.",
+    "Bản vá trước đã xóa ba dòng log không liên quan.",
+    "Tác vụ migration đã xóa ba bản ghi.",
+    "I deleted three records yesterday.",
+    "The policy explains how ownership transfers to the Supervisor.",
+    "The evidence describes the acceptance criteria for the release.",
+    "The evidence records the authorization decision.",
+    "Tôi đã phê duyệt bản ghi hôm qua.",
+    "Tôi đã quyết định chấp nhận kết quả này.",
+    "Tài liệu mô tả việc bàn giao sau khi kiểm tra.",
+    "Bằng chứng cho quyết định này vẫn còn thiếu.",
+  ])("allows a factual observation reporting a completed action: %s", (observation) => {
+    expect(() => assertAttentionQuestionAuthority({ ...question, observation })).not.toThrow();
+  });
+
+  test.each([
+    "Delete the branch?",
+    "Approve the candidate?",
+    "Restart the daemon now?",
+    "Proceed with deletion?",
+    "Please authorize the deployment?",
+  ])(
+    "rejects an imperative-mood clause dressed up as a question, not just as a statement: %s",
+    (value) => {
+      expect(() => assertAttentionQuestionAuthority({ ...question, question: value })).toThrow(
+        "attention_question cannot request action, authority, verdict, or external effect",
+      );
+    },
+  );
+
+  test.each([
+    "I approve the candidate.",
+    "We accept this release.",
+    "You transfer ownership to the Supervisor.",
+    "I delete the branch.",
+    "We restart the daemon.",
+    "You release the candidate.",
+    "I now approve the candidate.",
+    "We formally authorize the deployment.",
+    "You explicitly reject this release.",
+  ])(
+    "rejects a present-tense first/second-person performative verdict or authority claim, not just a past-tense report: %s",
+    (observation) => {
+      expect(() => assertAttentionQuestionAuthority({ ...question, observation })).toThrow(
+        "authority-neutral factual prose",
+      );
+    },
+  );
+
+  test.each([
+    "What evidence supports this acceptance?",
+    "What evidence explains the discrepancy?",
+    "Which record shows the rejection reason?",
+    "What timestamp shows the restart?",
+    "Which evidence describes the prior deletion?",
+    "Bằng chứng nào hỗ trợ việc chấp nhận kết quả này?",
+    "Tại sao tài liệu mô tả việc bàn giao này?",
+  ])(
+    "allows a question that nominally references a past decision or effect without requesting one: %s",
+    (openQuestion) => {
+      expect(() =>
+        assertAttentionQuestionAuthority({ ...question, question: openQuestion }),
+      ).not.toThrow();
+    },
+  );
+
+  test.each([
+    "The patch should be merged now.",
+    "This branch will be deleted.",
+    "The release must be approved.",
+    "The current owner would transfer ownership to the Supervisor.",
+  ])(
+    "rejects a potential-passive directive shape disguised as a declarative observation: %s",
+    (observation) => {
+      expect(() => assertAttentionQuestionAuthority({ ...question, observation })).toThrow(
+        "authority-neutral factual prose",
+      );
+    },
+  );
+
+  test.each([
+    "Should the patch be merged now?",
+    "Will this branch be deleted?",
+    "Could the release be approved without another review?",
+    "Which conclusion suggests this branch should be deleted?",
+    "Could the daemon be restarted before the review?",
+  ])("rejects a potential-passive directive shape disguised as a question: %s", (value) => {
+    expect(() => assertAttentionQuestionAuthority({ ...question, question: value })).toThrow(
+      "attention_question cannot request action, authority, verdict, or external effect",
+    );
+  });
+
+  test.each([
+    "Xóa nhánh này ngay?",
+    "Bàn giao quyền sở hữu cho Lead?",
+    "Nên xóa nhánh này không?",
+    "Có thể phê duyệt bản vá này không?",
+    "Chúng ta nên bàn giao việc này?",
+  ])("rejects Vietnamese directive or present performative structure: %s", (value) => {
+    expect(() => assertAttentionQuestionAuthority({ ...question, question: value })).toThrow(
+      "attention_question cannot request action, authority, verdict, or external effect",
+    );
+  });
+
+  test.each([
+    "Tôi xóa nhánh này.",
+    "Bạn phê duyệt bản vá này.",
+    "Chúng ta bàn giao việc này.",
+    "Tôi quyết định chấp nhận kết quả này.",
+    "Tôi cho phép triển khai bản này.",
+  ])("rejects a Vietnamese present-tense performative observation: %s", (observation) => {
+    expect(() => assertAttentionQuestionAuthority({ ...question, observation })).toThrow(
+      "authority-neutral factual prose",
+    );
+  });
+
+  test.each([
+    "Tôi đã xóa ba bản ghi hôm qua.",
+    "Tác vụ đã bàn giao hồ sơ cho Lead.",
+    "Bằng chứng nào có thể giải thích việc chấp nhận kết quả này không?",
+    "Tài liệu mô tả cách quyền sở hữu chuyển sang người kế nhiệm.",
+  ])("allows Vietnamese factual or analytical structure: %s", (value) => {
+    const input = value.endsWith("?")
+      ? { ...question, question: value }
+      : { ...question, observation: value };
+    expect(() => assertAttentionQuestionAuthority(input)).not.toThrow();
   });
 
   test.each([

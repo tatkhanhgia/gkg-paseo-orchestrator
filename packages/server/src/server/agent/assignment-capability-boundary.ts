@@ -1,4 +1,5 @@
 import type { RoleBindingInjectionMethod } from "@getpaseo/protocol/role-binding";
+import { noWriteModeForRoleBindingInjectionMethod } from "@getpaseo/protocol/provider-manifest";
 
 import type {
   AgentPermissionRequest,
@@ -10,24 +11,18 @@ import { ROLE_TOOL_CEILINGS } from "../policy/bundled/slp/role-profiles.js";
 
 export const ASSIGNMENT_CAPABILITY_BOUNDARY_ERROR = "assignment_capability_boundary_required";
 
-const NO_WRITE_MODE_BY_INJECTION_METHOD: Partial<Record<RoleBindingInjectionMethod, string>> = {
-  "codex-developer-instructions": "read-only",
-  // Claude plan mode injects a planning workflow that tells the model to avoid
-  // every state-changing call, including exact daemon-preapproved Paseo Room
-  // coordination. The adapter enforces no-write independently with a strict
-  // built-in tools allowlist plus explicit write-tool denies, so pin the
-  // guarded default mode and keep the model out of the Plan workflow.
-  "claude-system-prompt": "default",
-  "cursor-project-rule-capsule": "plan",
-  "cursor-always-apply-plugin": "plan",
-  "antigravity-custom-agent": "plan",
-  "mock-launch-context": "read-only",
-};
-
+// Claude plan mode injects a planning workflow that tells the model to avoid
+// every state-changing call, including exact daemon-preapproved Paseo Room
+// coordination. The adapter enforces no-write independently with a strict
+// built-in tools allowlist plus explicit write-tool denies, so pin the
+// guarded default mode and keep the model out of the Plan workflow. This
+// mapping is the enforcement source of truth; it is projected verbatim from
+// `@getpaseo/protocol/provider-manifest` so client draft/live mode UI cannot
+// silently disagree with it.
 export function noWriteModeForInjectionMethod(
   injectionMethod: RoleBindingInjectionMethod,
 ): string | null {
-  return NO_WRITE_MODE_BY_INJECTION_METHOD[injectionMethod] ?? null;
+  return noWriteModeForRoleBindingInjectionMethod(injectionMethod);
 }
 
 function requiresTechnicalNoWrite(roleBinding: PersistedRoleBinding | undefined): boolean {
