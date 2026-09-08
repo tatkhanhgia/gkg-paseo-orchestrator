@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2-paseo.63 - 2026-09-08
+
+### Đã hợp nhất
+
+- Giữ upstream v0.7.2 đã merge cùng các sửa lỗi Maestro/SLP, Project Harness và UX từ nhánh local tới `0.7.0-paseo.62`.
+- Đồng bộ phiên bản downstream mới; `.57` trên nhánh v0.7.2 là version preparation chưa commit, không phải bản phát hành cần giữ lại.
+- Giữ generation cũ cho resume agent, guard chống đổi hành vi policy đã pin và các sửa lỗi notification/coordination.
+- Bỏ bốn Playwright và hai desktop jobs khỏi CI thường ngày; validate các surface này local.
+- Hỗ trợ manifest chỉ có macOS ARM64 cho release WebUI + CLI build/smoke local; không công bố artifact Windows, Linux hoặc macOS Intel mới.
+
 ## 0.7.0-paseo.59 - 2026-09-08
 
 Bản sửa transport và admission đã được Lead chấp nhận ở source/test; qualification
