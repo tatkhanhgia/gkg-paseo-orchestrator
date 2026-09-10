@@ -1179,6 +1179,35 @@ describe("stream reducer canonical tool calls", () => {
     );
   });
 
+  it("collapses repeated loading compaction pings into a single marker", () => {
+    const state = hydrateStreamState([
+      {
+        event: compactionTimeline("loading", "auto"),
+        timestamp: new Date("2025-01-01T10:50:00Z"),
+      },
+      {
+        event: compactionTimeline("loading"),
+        timestamp: new Date("2025-01-01T10:50:01Z"),
+      },
+      {
+        event: compactionTimeline("loading"),
+        timestamp: new Date("2025-01-01T10:50:02Z"),
+      },
+      {
+        event: compactionTimeline("completed"),
+        timestamp: new Date("2025-01-01T10:50:03Z"),
+      },
+    ]);
+
+    const compactions = state.filter(
+      (item): item is Extract<StreamItem, { kind: "compaction" }> => item.kind === "compaction",
+    );
+
+    assert.strictEqual(compactions.length, 1);
+    assert.strictEqual(compactions[0].status, "completed");
+    assert.strictEqual(compactions[0].trigger, "auto");
+  });
+
   it("renders Claude TodoWrite as todo_list and suppresses tool call badge", () => {
     const state = hydrateStreamState([
       {

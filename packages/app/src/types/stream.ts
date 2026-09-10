@@ -1394,22 +1394,19 @@ function reduceTimelineCompaction(
   timestamp: Date,
   timelineCursor?: TimelinePosition,
 ): StreamItem[] {
-  if (item.status === "completed") {
-    const loadingIdx = state.findIndex((s) => s.kind === "compaction" && s.status === "loading");
-    const existing = loadingIdx >= 0 ? state[loadingIdx] : undefined;
-    if (loadingIdx >= 0 && existing && existing.kind === "compaction") {
-      const updated: CompactionItem = {
-        ...existing,
-        ...(timelineCursor ? { timelineCursor } : {}),
-        status: "completed",
-        trigger: item.trigger ?? existing.trigger,
-        preTokens: item.preTokens ?? existing.preTokens,
-      };
-      return [...state.slice(0, loadingIdx), updated, ...state.slice(loadingIdx + 1)];
-    }
-    if (loadingIdx >= 0) {
-      return state;
-    }
+  const loadingIdx = state.findIndex((s) => s.kind === "compaction" && s.status === "loading");
+  const existing = loadingIdx >= 0 ? state[loadingIdx] : undefined;
+  if (existing && existing.kind === "compaction") {
+    // Fold a completed event, or repeated loading progress pings, into the one
+    // in-flight marker instead of stacking duplicate "Compacting…" rows.
+    const updated: CompactionItem = {
+      ...existing,
+      ...(timelineCursor ? { timelineCursor } : {}),
+      status: item.status,
+      trigger: item.trigger ?? existing.trigger,
+      preTokens: item.preTokens ?? existing.preTokens,
+    };
+    return [...state.slice(0, loadingIdx), updated, ...state.slice(loadingIdx + 1)];
   }
   const compaction: CompactionItem = {
     kind: "compaction",
