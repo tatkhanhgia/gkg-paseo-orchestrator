@@ -74,6 +74,7 @@ import { getProviderIcon } from "@/components/provider-icons";
 import { BrowserToolsOptInCard } from "./browser-tools-card";
 import { hasDaemonReconnectedAfter, type DaemonConnectionMarker } from "./daemon-reconnect";
 import { restartDaemonFromSettings } from "./daemon-restart";
+import { ExternalEffectsCard } from "./external-effects-card";
 import { RoleProfilesCard } from "./role-profiles-card";
 import { PeerDelegationProfilesCard } from "./peer-delegation-models-card";
 
@@ -282,6 +283,7 @@ export function HostAgentsPage({ serverId }: { serverId: string }) {
       {isConnected ? (
         <SettingsSection title={t("settings.hostSections.agents")}>
           <RoleProfilesCard serverId={serverId} />
+          <ExternalEffectsCard serverId={serverId} />
           <PeerDelegationProfilesCard serverId={serverId} />
           <InjectPaseoToolsCard serverId={serverId} />
           <BrowserToolsOptInCard serverId={serverId} />
