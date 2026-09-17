@@ -14,6 +14,7 @@ import {
   RoleBindingReceiptSchema,
 } from "./role-binding.js";
 import { LaunchContractReceiptSchema } from "./launch-contract.js";
+import { ExternalEffectCatalogSchema } from "./external-effect-catalog.js";
 import { RoleProfileCatalogSchema, RoleProfilePreferencesMapSchema } from "./role-profile.js";
 import {
   CoordinationSignalResolutionSchema,
@@ -406,6 +407,8 @@ export const MutableDaemonConfigSchema = z
     providers: z.record(z.string(), MutableDaemonProviderConfigSchema).default({}),
     // COMPAT(roleProfiles): optional so current clients can still read older daemons.
     roleProfiles: RoleProfilePreferencesMapSchema.optional(),
+    // COMPAT(externalEffectCatalog): optional so current clients can still read older daemons.
+    externalEffectCatalog: ExternalEffectCatalogSchema.optional(),
     // COMPAT(peerDelegation): absent/disabled or an empty allowlist denies new
     // Lead-to-Peer creation. Enabled routes are exact provider/model grants.
     peerDelegation: MutablePeerDelegationConfigSchema.optional(),
@@ -446,6 +449,8 @@ export const MutableDaemonConfigPatchSchema = z
     removeProviders: z.array(z.string().min(1)).optional(),
     roleProfiles: RoleProfilePreferencesMapSchema.optional(),
     resetRoleProfiles: z.array(PaseoRoleIdSchema).optional(),
+    // Whole-list replace: the catalog is small and edited as one document in host settings.
+    externalEffectCatalog: ExternalEffectCatalogSchema.optional(),
     peerDelegation: MutablePeerDelegationConfigSchema.partial().optional(),
     peerDelegationProfileIds: z.array(z.string().trim().min(1)).optional(),
     peerDelegationProviderPriority: z.array(z.string().trim().min(1)).optional(),
@@ -3761,6 +3766,8 @@ export const ServerInfoStatusPayloadSchema = z
         providersSnapshot: z.boolean().optional(),
         // COMPAT(roleProfiles): host-owned role profile editor and catalog RPC.
         roleProfiles: z.boolean().optional(),
+        // COMPAT(externalEffectCatalog): host-owned external access catalog in daemon config.
+        externalEffectCatalog: z.boolean().optional(),
         // COMPAT(attentionQuestions): added in v0.6.0-paseo.46; old daemons do not
         // understand the continuity-attention question request branch.
         attentionQuestions: z.boolean().optional(),
