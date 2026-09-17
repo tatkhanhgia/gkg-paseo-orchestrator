@@ -21,6 +21,7 @@ import {
   TerminalProfileSchema,
 } from "@getpaseo/protocol/messages";
 import { PaseoServicePortAllocationSchema } from "@getpaseo/protocol/paseo-config-schema";
+import { ExternalEffectCatalogSchema } from "@getpaseo/protocol/external-effect-catalog";
 import { AgentProviderSchema } from "@getpaseo/protocol/provider-manifest";
 import { RoleProfilePreferencesMapSchema } from "@getpaseo/protocol/role-profile";
 
@@ -286,6 +287,7 @@ export const PersistedConfigSchema = z
         enableTerminalAgentHooks: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),
         roleProfiles: RoleProfilePreferencesMapSchema.optional(),
+        externalEffectCatalog: ExternalEffectCatalogSchema.optional(),
         peerDelegation: z
           .object({
             enabled: z.boolean(),

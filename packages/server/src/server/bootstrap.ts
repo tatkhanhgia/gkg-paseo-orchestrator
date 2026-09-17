@@ -223,6 +223,7 @@ import type {
   AgentProviderRuntimeSettingsMap,
   ProviderOverride,
 } from "./agent/provider-launch-config.js";
+import type { ExternalEffectCatalog } from "@getpaseo/protocol/external-effect-catalog";
 import type { RoleProfilePreferencesMap } from "@getpaseo/protocol/role-profile";
 import { loadPersistedConfig, type PersistedConfig } from "./persisted-config.js";
 import { createServiceProxySubsystem, type ServiceProxySubsystem } from "./service-proxy.js";
@@ -447,6 +448,7 @@ export interface PaseoDaemonConfig {
   enableTerminalAgentHooks?: boolean;
   appendSystemPrompt?: string;
   roleProfiles?: RoleProfilePreferencesMap;
+  externalEffectCatalog?: ExternalEffectCatalog;
   peerDelegation?: MutableDaemonConfig["peerDelegation"];
   peerDelegationProfileIds?: MutableDaemonConfig["peerDelegationProfileIds"];
   peerDelegationProviderPriority?: MutableDaemonConfig["peerDelegationProviderPriority"];
@@ -654,6 +656,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     },
     providers,
     roleProfiles: config.roleProfiles ?? {},
+    externalEffectCatalog: config.externalEffectCatalog ?? [],
     ...(config.peerDelegation !== undefined ? { peerDelegation: config.peerDelegation } : {}),
     metadataGeneration: {
       providers: config.metadataGeneration?.providers ?? [],

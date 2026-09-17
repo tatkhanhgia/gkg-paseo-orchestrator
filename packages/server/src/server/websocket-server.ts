@@ -1743,6 +1743,8 @@ export class VoiceAssistantWebSocketServer {
         providersSnapshot: true,
         // COMPAT(roleProfiles): host-owned role profile editor and catalog RPC.
         roleProfiles: true,
+        // COMPAT(externalEffectCatalog): host-owned external access catalog in daemon config.
+        externalEffectCatalog: true,
         // COMPAT(attentionQuestions): added in v0.6.0-paseo.46; clients gate the
         // additive request branch when connected to older daemons.
         attentionQuestions: true,

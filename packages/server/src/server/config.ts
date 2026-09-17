@@ -507,6 +507,10 @@ function resolveRoleProfiles(persisted: ReturnType<typeof loadPersistedConfig>) 
   return persisted.daemon?.roleProfiles ?? {};
 }
 
+function resolveExternalEffectCatalog(persisted: ReturnType<typeof loadPersistedConfig>) {
+  return persisted.daemon?.externalEffectCatalog ?? [];
+}
+
 function resolveBrowserToolsEnabled(persisted: ReturnType<typeof loadPersistedConfig>): boolean {
   return persisted.daemon?.browserTools?.enabled ?? false;
 }
@@ -558,6 +562,7 @@ function resolveStaticLoadConfigSettings(
     autoArchiveAfterMerge: persisted.daemon?.autoArchiveAfterMerge ?? false,
     appendSystemPrompt: resolveAppendSystemPrompt(persisted),
     roleProfiles: resolveRoleProfiles(persisted),
+    externalEffectCatalog: resolveExternalEffectCatalog(persisted),
     ...resolvePeerDelegationSettings(persisted),
     ...resolveProfileLists(persisted),
     hostnames: mergeHostnames([
@@ -596,6 +601,7 @@ export function resolveConfigFromPersisted(
     autoArchiveAfterMerge,
     appendSystemPrompt,
     roleProfiles,
+    externalEffectCatalog,
     peerDelegation,
     peerDelegationProfileIds,
     peerDelegationProviderPriority,
@@ -647,6 +653,7 @@ export function resolveConfigFromPersisted(
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
     appendSystemPrompt,
     roleProfiles,
+    externalEffectCatalog,
     peerDelegation,
     peerDelegationProfileIds,
     peerDelegationProviderPriority,

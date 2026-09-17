@@ -39,6 +39,7 @@ interface SupportedMutableConfigPatch {
   peerDelegationDefaultSubrole?: MutableDaemonConfig["peerDelegationDefaultSubrole"];
   terminalProfiles?: MutableDaemonConfig["terminalProfiles"];
   agentProfiles?: MutableDaemonConfig["agentProfiles"];
+  externalEffectCatalog?: MutableDaemonConfig["externalEffectCatalog"];
   skills?: MutableDaemonConfig["skills"];
   pluginsEnabled?: boolean;
   plugins?: MutableDaemonConfig["plugins"];
@@ -224,6 +225,7 @@ const RELOADABLE_PATHS = [
   "daemon.peerDelegationDefaultSubrole",
   "daemon.terminalProfiles",
   "daemon.agentProfiles",
+  "daemon.externalEffectCatalog",
   "app.baseUrl",
   "agents.providers",
   "agents.catalogRefreshTimeoutMs",
@@ -253,6 +255,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.peerDelegationDefaultSubrole", "peerDelegationDefaultSubrole"],
   ["daemon.terminalProfiles", "terminalProfiles"],
   ["daemon.agentProfiles", "agentProfiles"],
+  ["daemon.externalEffectCatalog", "externalEffectCatalog"],
   ["app.baseUrl", "app.baseUrl"],
   ["agents.providers", "providers"],
   ["agents.catalogRefreshTimeoutMs", "catalogRefreshTimeoutMs"],
@@ -409,6 +412,9 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
       : {}),
     ...(patch.terminalProfiles !== undefined ? { terminalProfiles: patch.terminalProfiles } : {}),
     ...(patch.agentProfiles !== undefined ? { agentProfiles: patch.agentProfiles } : {}),
+    ...(patch.externalEffectCatalog !== undefined
+      ? { externalEffectCatalog: patch.externalEffectCatalog }
+      : {}),
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
   };
@@ -829,6 +835,9 @@ function mergeMutableDaemonPatch(
   }
   if (patch.terminalProfiles !== undefined) next.terminalProfiles = patch.terminalProfiles;
   if (patch.agentProfiles !== undefined) next.agentProfiles = patch.agentProfiles;
+  if (patch.externalEffectCatalog !== undefined) {
+    next.externalEffectCatalog = patch.externalEffectCatalog;
+  }
   return Object.keys(next).length > 0 ? next : undefined;
 }
 

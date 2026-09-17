@@ -189,6 +189,45 @@ describe("DaemonConfigStore", () => {
     expect(loadPersistedConfig(paseoHome).daemon?.roleProfiles?.peer).toBeUndefined();
   });
 
+  test("replaces the external effect catalog wholesale instead of merging by index", () => {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-effect-catalog-"));
+    tempDirs.push(paseoHome);
+    const store = new DaemonConfigStore(paseoHome, {
+      relay: { enabled: false },
+      mcp: { injectIntoAgents: false },
+      browserTools: { enabled: false },
+      providers: {},
+      externalEffectCatalog: [],
+      metadataGeneration: { providers: [] },
+      autoArchiveAfterMerge: false,
+      enableTerminalAgentHooks: false,
+      appendSystemPrompt: "",
+    });
+
+    store.patch({
+      externalEffectCatalog: [
+        { id: "postgres-prddev", label: "Postgres prddev", grant: "read/write prddev" },
+        { id: "build-box", label: "Build box", grant: "ssh build-01" },
+      ],
+    });
+    store.patch({
+      externalEffectCatalog: [{ id: "build-box", label: "Build box", grant: "ssh build-02" }],
+    });
+
+    expect(store.get().externalEffectCatalog).toEqual([
+      { id: "build-box", label: "Build box", grant: "ssh build-02" },
+    ]);
+    expect(loadPersistedConfig(paseoHome).daemon?.externalEffectCatalog).toEqual([
+      { id: "build-box", label: "Build box", grant: "ssh build-02" },
+    ]);
+
+    store.patch({ relay: { enabled: true } });
+
+    expect(store.get().externalEffectCatalog).toEqual([
+      { id: "build-box", label: "Build box", grant: "ssh build-02" },
+    ]);
+  });
+
   test("persists Peer Agent Profile policy and keeps the legacy model mirror synchronized", () => {
     const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-peer-policy-"));
     tempDirs.push(paseoHome);
