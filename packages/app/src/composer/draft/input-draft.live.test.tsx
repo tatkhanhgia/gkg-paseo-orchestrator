@@ -310,7 +310,10 @@ describe("useAgentInputDraft live contract", () => {
 
     await act(async () => getComposerState().setRoleFromUser("lead"));
     expect(getComposerState().agentControls.draftTextFeatures).toEqual([
-      expect.objectContaining({ id: "foundation_external_effects_grant" }),
+      expect.objectContaining({
+        id: "foundation_external_effects_grant",
+        summary: "No external access",
+      }),
     ]);
 
     // Doctrine's authority model defaults a Peer to "mutating", which permits a
@@ -347,6 +350,26 @@ describe("useAgentInputDraft live contract", () => {
       "read/write dev Postgres",
       "staging API",
     ]);
+    expect(getComposerState().agentControls.draftTextFeatures).toEqual([
+      expect.objectContaining({ summary: "2 external grants" }),
+    ]);
+
+    await act(async () => {
+      getComposerState().agentControls.onSetFeature?.(
+        "foundation_external_effects_grant",
+        "read/write dev Postgres",
+      );
+    });
+    expect(getComposerState().agentControls.draftTextFeatures).toEqual([
+      expect.objectContaining({ summary: "read/write dev Postgres" }),
+    ]);
+
+    await act(async () => {
+      getComposerState().agentControls.onSetFeature?.(
+        "foundation_external_effects_grant",
+        " read/write dev Postgres \n\n staging API\nread/write dev Postgres ",
+      );
+    });
     expect(
       buildAssignmentEnvelope({
         roleId: "peer",

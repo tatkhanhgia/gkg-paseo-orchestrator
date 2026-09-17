@@ -45,6 +45,7 @@ import {
   type AgentModeControlValue,
 } from "@/composer/agent-controls/mode-control";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   AgentFeature,
@@ -104,12 +105,28 @@ interface AgentControlOption {
   description?: string;
 }
 
+/**
+ * A preset the Human curated on the host. `toggleValue` is the whole feature value to apply when
+ * the row is switched, so this control never has to interpret what the preset means.
+ */
+export interface DraftAgentTextFeatureOption {
+  id: string;
+  label: string;
+  description?: string;
+  selected: boolean;
+  toggleValue: string;
+}
+
 export interface DraftAgentTextFeature {
   type: "text";
   id: string;
   label: string;
   description: string;
   value: string;
+  /** Toolbar text describing the current value. Falls back to `label` when absent. */
+  summary?: string;
+  /** Host-curated presets shown above the free-text box. Absent or empty renders text only. */
+  options?: DraftAgentTextFeatureOption[];
 }
 
 type AgentControlSelector =
@@ -1287,6 +1304,18 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
   );
 }
 
+/** Toolbar chip text for the draft text features. A lone feature names itself; several share the generic label. */
+function describeDraftTextFeatures(
+  features: DraftAgentTextFeature[] | undefined,
+  fallbackLabel: string,
+): { label: string; value: string } {
+  const single = features?.length === 1 ? features[0] : undefined;
+  if (!single) {
+    return { label: fallbackLabel, value: fallbackLabel };
+  }
+  return { label: single.label, value: single.summary ?? single.label };
+}
+
 function DesktopFeatureControls({
   aggregateFeatures,
   features,
@@ -1325,6 +1354,10 @@ function DesktopFeatureControls({
   const openFeatures = useCallback(() => handleOpenSheet("features"), [handleOpenSheet]);
   const hasAggregatedFeatures = aggregateFeatures && Boolean(features?.length);
   const hasTextFeatures = Boolean(draftTextFeatures?.length);
+  const { label: textFeatureLabel, value: textFeatureValue } = describeDraftTextFeatures(
+    draftTextFeatures,
+    t("agentControls.features.title"),
+  );
 
   if (hasAggregatedFeatures || (aggregateFeatures && hasTextFeatures)) {
     return (
@@ -1385,18 +1418,17 @@ function DesktopFeatureControls({
       ))}
       {hasTextFeatures ? (
         <>
-          <Pressable
-            onPress={openFeatures}
+          <AgentControlTrigger
+            icon={Settings2}
+            surface="toolbar"
+            label={textFeatureLabel}
+            value={textFeatureValue}
             disabled={disabled}
-            style={styles.modeIconBadge}
-            accessibilityRole="button"
-            accessibilityLabel={draftTextFeatures?.[0]?.label}
+            open={activeSheet === "features"}
+            onPress={openFeatures}
+            accessibilityLabel={`${textFeatureLabel}: ${textFeatureValue}`}
             testID="agent-controls-text-features"
-          >
-            <ComposerToolbarGlyph size={glyphSize}>
-              <Settings2 size={glyphSize} color={theme.colors.foregroundMuted} />
-            </ComposerToolbarGlyph>
-          </Pressable>
+          />
           <AdaptiveModalSheet
             header={featuresSheetHeader}
             visible={activeSheet === "features"}
@@ -1777,6 +1809,43 @@ function DesktopFeatureItem({
   return null;
 }
 
+function DraftTextFeatureOptionRow({
+  featureId,
+  option,
+  disabled,
+  onSetFeature,
+}: {
+  featureId: string;
+  option: DraftAgentTextFeatureOption;
+  disabled: boolean;
+  onSetFeature?: (featureId: string, value: unknown) => void;
+}) {
+  const handleValueChange = useCallback(
+    () => onSetFeature?.(featureId, option.toggleValue),
+    [featureId, onSetFeature, option.toggleValue],
+  );
+
+  return (
+    <View style={styles.textFeatureOptionRow} testID={`agent-feature-${featureId}-${option.id}`}>
+      <View style={styles.textFeatureOptionText}>
+        <Text style={styles.textFeatureOptionLabel}>{option.label}</Text>
+        {option.description ? (
+          <Text style={styles.textFeatureOptionHint} numberOfLines={2}>
+            {option.description}
+          </Text>
+        ) : null}
+      </View>
+      <Switch
+        value={option.selected}
+        onValueChange={handleValueChange}
+        disabled={disabled}
+        accessibilityLabel={option.label}
+        testID={`agent-feature-${featureId}-${option.id}-switch`}
+      />
+    </View>
+  );
+}
+
 function DraftTextFeatureField({
   feature,
   disabled,
@@ -1794,6 +1863,19 @@ function DraftTextFeatureField({
 
   return (
     <Field label={feature.label} hint={feature.description} testID={`agent-feature-${feature.id}`}>
+      {feature.options?.length ? (
+        <View style={styles.textFeatureOptions}>
+          {feature.options.map((option) => (
+            <DraftTextFeatureOptionRow
+              key={`${feature.id}-${option.id}`}
+              featureId={feature.id}
+              option={option}
+              disabled={disabled}
+              onSetFeature={onSetFeature}
+            />
+          ))}
+        </View>
+      ) : null}
       <FormTextInput
         size={isCompact ? "md" : "sm"}
         initialValue={feature.value}
@@ -2452,5 +2534,27 @@ const styles = StyleSheet.create((theme) => ({
   },
   multilineInput: {
     minHeight: 96,
+  },
+  textFeatureOptions: {
+    gap: theme.spacing[1],
+    paddingBottom: theme.spacing[2],
+  },
+  textFeatureOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[3],
+  },
+  textFeatureOptionText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  textFeatureOptionLabel: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  textFeatureOptionHint: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
   },
 }));

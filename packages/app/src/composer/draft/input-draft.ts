@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { UserComposerAttachment } from "@/attachments/types";
 import type { TextReplacement } from "@/composer/types";
 import type { DraftAgentControlsProps, DraftAgentTextFeature } from "@/composer/agent-controls";
+import type { ExternalEffectCatalogEntry } from "@getpaseo/protocol/external-effect-catalog";
 import type { DraftCommandConfig } from "@/hooks/use-agent-commands-query";
 import {
   useAgentFormState,
@@ -10,7 +11,13 @@ import {
   type UseAgentFormStateResult,
 } from "@/hooks/use-agent-form-state";
 import { useDraftAgentFeatures } from "@/hooks/use-draft-agent-features";
+import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useRoleProfiles } from "@/hooks/use-role-profiles";
+import {
+  buildExternalEffectOptions,
+  parseExternalEffects,
+  summarizeExternalEffects,
+} from "@/composer/draft/external-effects";
 import {
   buildDraftAgentControls,
   hasDraftContent,
@@ -47,6 +54,14 @@ import {
   ordinaryAssignmentAuthorityOptionsForRole,
 } from "@/workspace-protocol/assignment-authority";
 import { resolveRoleOptions } from "@/workspace-protocol/legacy-role-options";
+
+/** Stable identity keeps the feature memo from re-running on every render of a catalog-less host. */
+const EMPTY_EXTERNAL_EFFECT_CATALOG: readonly ExternalEffectCatalogEntry[] = [];
+
+function useExternalEffectCatalog(serverId: string | null): readonly ExternalEffectCatalogEntry[] {
+  const { config } = useDaemonConfig(serverId);
+  return config?.externalEffectCatalog ?? EMPTY_EXTERNAL_EFFECT_CATALOG;
+}
 
 const ASSIGNMENT_EFFECT_FEATURE_ID = "foundation_assignment_effect";
 const BEADS_ISSUE_GRANT_FEATURE_ID = "foundation_beads_issue_grant";
@@ -211,25 +226,16 @@ function useBeadsIssueGrantControl(
   };
 }
 
-function parseExternalEffects(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .split("\n")
-        .map((grant) => grant.trim())
-        .filter(Boolean),
-    ),
-  );
-}
-
 function useExternalEffectsGrantControl(
   selectedRole: PaseoRoleId | null,
   selectedAssignmentEffect: AssignmentEffectClass,
+  catalog: readonly ExternalEffectCatalogEntry[],
 ) {
   const [value, setValue] = useState("");
   const isAvailable = selectedRole
     ? assignmentExternalEffectBoundaryFor(selectedRole, selectedAssignmentEffect).mode === "bounded"
     : false;
+  const selectedExternalEffects = useMemo(() => parseExternalEffects(value), [value]);
   const feature = useMemo<DraftAgentTextFeature | null>(
     () =>
       isAvailable
@@ -240,11 +246,12 @@ function useExternalEffectsGrantControl(
             description:
               "Outside-workspace resources this assignment may touch (DB, API, service). One per line.",
             value,
+            summary: summarizeExternalEffects(selectedExternalEffects),
+            options: buildExternalEffectOptions(catalog, value),
           }
         : null,
-    [isAvailable, value],
+    [catalog, isAvailable, selectedExternalEffects, value],
   );
-  const selectedExternalEffects = useMemo(() => parseExternalEffects(value), [value]);
 
   const setFromFeatureValue = useCallback((nextValue: unknown) => {
     setValue(typeof nextValue === "string" ? nextValue : "");
@@ -266,6 +273,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     onlineServerIds: composerOptions?.onlineServerIds ?? [],
   });
   const roleProfiles = useRoleProfiles(formState.selectedServerId);
+  const externalEffectCatalog = useExternalEffectCatalog(formState.selectedServerId);
   const draftKey = useMemo(
     () =>
       resolveDraftKey({
@@ -293,6 +301,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
   const externalEffectsGrant = useExternalEffectsGrantControl(
     selectedRole,
     selectedAssignmentEffect,
+    externalEffectCatalog,
   );
   const text = draft?.text ?? "";
   const attachments = draft?.attachments ?? [];
