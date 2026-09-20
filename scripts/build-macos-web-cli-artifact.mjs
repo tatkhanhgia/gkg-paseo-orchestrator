@@ -556,6 +556,15 @@ cat > "$PLIST" <<PLIST
 </dict></plist>
 PLIST
   plutil -lint "$PLIST" >/dev/null
+else
+  # An existing plist keeps the operator's --listen, --relay/--no-relay, node, and PATH choices.
+  # Releases that predate the bundled Beads Central sidecar wrote a plist without these two
+  # variables, so patch them in; the daemon refuses to start its tracker without them.
+  plutil -extract EnvironmentVariables xml1 -o /dev/null "$PLIST" >/dev/null 2>&1 ||
+    plutil -insert EnvironmentVariables -dictionary "$PLIST"
+  plutil -replace EnvironmentVariables.PASEO_BEADS_CENTRAL_SIDECAR -string "$CURRENT_LINK/components/beads-central/beads-central" "$PLIST"
+  plutil -replace EnvironmentVariables.PASEO_BEADS_CENTRAL_BD_BIN -string "$CURRENT_LINK/components/beads-central/bin/bd" "$PLIST"
+  plutil -lint "$PLIST" >/dev/null
 fi
 
 if [ "$START" -eq 1 ]; then

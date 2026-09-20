@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { installerScript } from "./build-macos-web-cli-artifact.mjs";
 
 const repoRoot = join(import.meta.dirname, "..");
 
@@ -108,6 +109,38 @@ test("every executable daemon entrypoint enters the supervisor", async () => {
   assert.match(nixFlake, /inherit beadsCentral/);
   assert.match(nixBeadsCentral, /buildGo126Module/);
   assert.match(nixBeadsCentral, /go_1_26\.overrideAttrs/);
+});
+
+test("macOS installer patches the Beads Central sidecar env into an existing plist", () => {
+  const source = installerScript();
+  const freshWrite = source.indexOf('if [ ! -f "$PLIST" ]; then');
+  const upgradePatch = source.indexOf("\nelse\n", freshWrite);
+  const upgradeEnd = source.indexOf("\nfi\n", upgradePatch);
+  assert.notEqual(freshWrite, -1, "installer must keep the fresh-plist write branch");
+  assert.notEqual(upgradePatch, -1, "installer must handle an existing plist in an else branch");
+  const freshBranch = source.slice(freshWrite, upgradePatch);
+  const upgradeBranch = source
+    .slice(upgradePatch, upgradeEnd)
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+
+  for (const key of ["PASEO_BEADS_CENTRAL_SIDECAR", "PASEO_BEADS_CENTRAL_BD_BIN"]) {
+    assert.match(freshBranch, new RegExp(`<key>${key}</key>`), `fresh plist must set ${key}`);
+    assert.match(
+      upgradeBranch,
+      new RegExp(
+        `plutil -replace EnvironmentVariables\\.${key} -string "\\$CURRENT_LINK/components/beads-central/`,
+      ),
+      `existing plist must be patched with ${key}`,
+    );
+  }
+  assert.match(upgradeBranch, /plutil -insert EnvironmentVariables -dictionary/);
+  // The upgrade branch must never rewrite the operator's relay or listen choice.
+  assert.doesNotMatch(
+    upgradeBranch,
+    /--relay|--no-relay|--listen|ProgramArguments|cat > "\$PLIST"/,
+  );
 });
 
 test("trace-daemon closure lists both Foundation workspace-protocol JSON assets", async () => {

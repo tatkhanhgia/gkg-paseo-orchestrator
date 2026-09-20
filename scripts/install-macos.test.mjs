@@ -147,7 +147,7 @@ exit 0
 }
 
 function runArtifactFixture(fixture, args, extraEnv = {}) {
-  mkdirSync(fixture.home);
+  mkdirSync(fixture.home, { recursive: true });
   return spawnSync("/bin/sh", [path.join(fixture.bundle, "install.sh"), ...args], {
     encoding: "utf8",
     env: {
@@ -407,6 +407,108 @@ esac
       ),
     );
     assert.doesNotMatch(plist, /PASEO_BEADS_BINARY/u);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+const LEGACY_RELAY_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.paseo.web-cli</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/local/bin/node</string><string>/legacy/current/app/node_modules/@getpaseo/cli/dist/index.js</string>
+    <string>daemon</string><string>start</string>
+    <string>--foreground</string><string>--listen</string><string>127.0.0.1:7777</string>
+    <string>--web-ui</string><string>--relay</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>/legacy/home</string>
+    <key>PATH</key><string>/legacy/bin:/usr/bin</string>
+    <key>PASEO_DICTATION_ENABLED</key><string>0</string>
+  </dict>
+  <key>KeepAlive</key><true/><key>RunAtLoad</key><true/>
+</dict></plist>
+`;
+
+function installOverLegacyPlist(fixture, legacyPlist) {
+  const launchAgents = path.join(fixture.home, "Library", "LaunchAgents");
+  mkdirSync(launchAgents, { recursive: true });
+  const plistPath = path.join(launchAgents, "com.paseo.web-cli.plist");
+  writeFileSync(plistPath, legacyPlist);
+  const result = runArtifactFixture(fixture, [
+    "--prefix",
+    fixture.prefix,
+    "--bin-dir",
+    fixture.binDir,
+    "--no-start",
+    "--skip-foundation",
+  ]);
+  return { result, plistPath };
+}
+
+test("artifact installer adds Beads Central sidecar env to a legacy plist and keeps relay and listen", () => {
+  const fixture = createArtifactFixture("#!/bin/sh\nexit 99\n");
+  const bundledNode = path.join(fixture.bundle, "runtime", "bin", "node");
+  rmSync(bundledNode);
+  symlinkSync(process.execPath, bundledNode);
+  try {
+    const { result, plistPath } = installOverLegacyPlist(fixture, LEGACY_RELAY_PLIST);
+    assert.equal(result.status, 0, result.stderr);
+    const plist = readFileSync(plistPath, "utf8");
+    assert.match(plist, /<string>--relay<\/string>/);
+    assert.doesNotMatch(plist, /--no-relay/);
+    assert.match(plist, /<string>127\.0\.0\.1:7777<\/string>/);
+    assert.match(plist, /<string>\/legacy\/current\/app\/node_modules/);
+    assert.match(plist, /<string>\/legacy\/bin:\/usr\/bin<\/string>/);
+    const sidecarDir = `${fixture.prefix}/current/components/beads-central`;
+    const values = JSON.parse(
+      execFileSync(
+        "/usr/bin/plutil",
+        ["-extract", "EnvironmentVariables", "json", "-o", "-", plistPath],
+        {
+          encoding: "utf8",
+        },
+      ),
+    );
+    assert.equal(values.PASEO_BEADS_CENTRAL_SIDECAR, `${sidecarDir}/beads-central`);
+    assert.equal(values.PASEO_BEADS_CENTRAL_BD_BIN, `${sidecarDir}/bin/bd`);
+    assert.equal(values.HOME, "/legacy/home");
+    assert.equal(values.PASEO_DICTATION_ENABLED, "0");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("artifact installer repoints stale sidecar env and creates a missing env dict in an existing plist", () => {
+  const fixture = createArtifactFixture("#!/bin/sh\nexit 99\n");
+  const bundledNode = path.join(fixture.bundle, "runtime", "bin", "node");
+  rmSync(bundledNode);
+  symlinkSync(process.execPath, bundledNode);
+  try {
+    const stale = LEGACY_RELAY_PLIST.replace(
+      "<key>PASEO_DICTATION_ENABLED</key>",
+      "<key>PASEO_BEADS_CENTRAL_SIDECAR</key><string>/old/release/beads-central</string>\n    <key>PASEO_DICTATION_ENABLED</key>",
+    );
+    const first = installOverLegacyPlist(fixture, stale);
+    assert.equal(first.result.status, 0, first.result.stderr);
+    const repointed = readFileSync(first.plistPath, "utf8");
+    assert.doesNotMatch(repointed, /\/old\/release/);
+    assert.equal((repointed.match(/PASEO_BEADS_CENTRAL_SIDECAR/g) ?? []).length, 1);
+
+    const noEnv = LEGACY_RELAY_PLIST.replace(
+      /<key>EnvironmentVariables<\/key><dict>[\s\S]*?<\/dict>\n/,
+      "",
+    );
+    assert.doesNotMatch(noEnv, /EnvironmentVariables/);
+    rmSync(path.join(fixture.prefix, "current"), { force: true });
+    rmSync(path.join(fixture.prefix, "releases"), { recursive: true, force: true });
+    const second = installOverLegacyPlist(fixture, noEnv);
+    assert.equal(second.result.status, 0, second.result.stderr);
+    const rebuilt = readFileSync(second.plistPath, "utf8");
+    assert.match(rebuilt, /PASEO_BEADS_CENTRAL_SIDECAR/);
+    assert.match(rebuilt, /PASEO_BEADS_CENTRAL_BD_BIN/);
+    assert.match(rebuilt, /<string>--relay<\/string>/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
