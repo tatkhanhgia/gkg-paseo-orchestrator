@@ -336,6 +336,111 @@ exit 0
   }
 });
 
+function setupRollbackRestartFixture(previousDaemonStatusJson) {
+  // A post-switch failure with the daemon running: the forward path activates the new release, then
+  // Foundation install fails, so rollback must repoint the symlink AND bring the daemon back up on
+  // the restored release. The existing plist keeps PLIST_EXISTED=1 so the fresh-write branch is not
+  // exercised here.
+  const fixture = createArtifactFixture(
+    `#!/bin/sh
+case "$1 $2" in
+  'daemon status')
+    if [ -f "$LAUNCHD_BOOTED_OUT" ]; then echo '{"localDaemon":"stopped"}'; else echo '{"localDaemon":"running"}'; fi ;;
+  'ls --global') echo '[]' ;;
+  'workspace ls') echo '[]' ;;
+  *) exit 2 ;;
+esac
+exit 0
+`,
+  );
+  const bundledNode = path.join(fixture.bundle, "runtime", "bin", "node");
+  rmSync(bundledNode);
+  symlinkSync(process.execPath, bundledNode);
+  // Foundation install fails after the switch to trigger rollback.
+  writeExecutable(
+    path.join(fixture.bundle, "bin", "paseo-foundation"),
+    '#!/bin/sh\ncase "${1:-}" in inspect) echo \'{"status":"inactive"}\' ;; install) exit 17 ;; esac\nexit 0\n',
+  );
+  const launchAgents = path.join(fixture.home, "Library", "LaunchAgents");
+  mkdirSync(launchAgents, { recursive: true });
+  const plistPath = path.join(launchAgents, "com.paseo.web-cli.plist");
+  writeFileSync(plistPath, LEGACY_RELAY_PLIST);
+  // The restored release carries its own working CLI so the rollback readback can probe it.
+  const previous = path.join(fixture.prefix, "releases", "0.5.0-paseo.37");
+  mkdirSync(path.join(previous, "bin"), { recursive: true });
+  const rollbackMarker = path.join(fixture.root, "rollback-paseo.log");
+  writeExecutable(
+    path.join(previous, "bin", "paseo"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$ROLLBACK_PASEO_MARKER"\necho '${previousDaemonStatusJson}'\nexit 0\n`,
+  );
+  mkdirSync(path.join(fixture.prefix, "releases"), { recursive: true });
+  symlinkSync(previous, path.join(fixture.prefix, "current"));
+  const launchctlLog = path.join(fixture.root, "launchctl.log");
+  const bootedOut = path.join(fixture.root, "launchd-booted-out");
+  writeExecutable(
+    path.join(fixture.oldBin, "launchctl"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$LAUNCHCTL_LOG"\ncase "$1" in print) exit 0 ;; bootout) : > "$LAUNCHD_BOOTED_OUT"; exit 0 ;; bootstrap|kickstart) exit 0 ;; *) exit 2 ;; esac\n`,
+  );
+  // A fast sleep keeps the fail-loud readback loop from waiting real seconds.
+  writeExecutable(path.join(fixture.oldBin, "sleep"), "#!/bin/sh\nexit 0\n");
+  return {
+    fixture,
+    previous,
+    plistPath,
+    rollbackMarker,
+    launchctlLog,
+    env: { LAUNCHD_BOOTED_OUT: bootedOut },
+  };
+}
+
+test("artifact installer restarts the daemon on the restored release after a rollback", () => {
+  const { fixture, previous, rollbackMarker, launchctlLog, env } = setupRollbackRestartFixture(
+    '{"localDaemon":"running","connectedDaemon":"reachable"}',
+  );
+  try {
+    const result = runArtifactFixture(
+      fixture,
+      ["--prefix", fixture.prefix, "--bin-dir", fixture.binDir],
+      { ROLLBACK_PASEO_MARKER: rollbackMarker, LAUNCHCTL_LOG: launchctlLog, ...env },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /restoring the previous Paseo release/);
+    assert.doesNotMatch(result.stderr, /did not report a running readback/);
+    assert.equal(readlinkSync(path.join(fixture.prefix, "current")), previous);
+    // The rollback probed the restored release's CLI and it reported running.
+    assert.match(readFileSync(rollbackMarker, "utf8"), /daemon status/);
+    const launchctlCalls = readFileSync(launchctlLog, "utf8").trim().split("\n");
+    assert.equal(launchctlCalls.filter((line) => line.startsWith("bootstrap ")).length >= 2, true);
+    assert.equal(
+      launchctlCalls.some((line) => line.startsWith("kickstart -k ")),
+      true,
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("artifact installer fails loud when the rolled-back daemon never reports running", () => {
+  const { fixture, previous, rollbackMarker, launchctlLog, env } = setupRollbackRestartFixture(
+    '{"localDaemon":"stopped","connectedDaemon":"unreachable"}',
+  );
+  try {
+    const result = runArtifactFixture(
+      fixture,
+      ["--prefix", fixture.prefix, "--bin-dir", fixture.binDir],
+      { ROLLBACK_PASEO_MARKER: rollbackMarker, LAUNCHCTL_LOG: launchctlLog, ...env },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /restoring the previous Paseo release/);
+    // The daemon never came back, so the operator gets a loud manual-restart instruction.
+    assert.match(result.stderr, /did not report a running readback/);
+    assert.match(result.stderr, /launchctl kickstart -k/);
+    assert.equal(readlinkSync(path.join(fixture.prefix, "current")), previous);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("all generated platform installers preserve service config and gate the transaction", () => {
   const macos = renderArtifactInstaller();
   const linux = linuxInstallerScript();
@@ -358,6 +463,41 @@ test("all generated platform installers preserve service config and gate the tra
   assert.match(
     windows,
     /if \(-not \$Healthy\) \{ throw "Installed release failed health, WebUI, or Beads Central readback\." \}/,
+  );
+
+  // Defect 2: every platform injects the Beads Central sidecar env on a fresh install AND into an
+  // existing service on upgrade, mirroring the macOS plist patch.
+  for (const source of [macos, linux, windows]) {
+    assert.match(source, /PASEO_BEADS_CENTRAL_SIDECAR/);
+    assert.match(source, /PASEO_BEADS_CENTRAL_BD_BIN/);
+  }
+  // Linux fresh unit sets the env directly; an existing unit gets a systemd drop-in.
+  assert.match(
+    linux,
+    /Environment="PASEO_BEADS_CENTRAL_SIDECAR=\$CURRENT_LINK\/components\/beads-central\/beads-central"/,
+  );
+  assert.match(linux, /\$SERVICE_NAME\.d/);
+  assert.match(linux, /cat > "\$DROPIN" <<DROPIN[\s\S]*PASEO_BEADS_CENTRAL_SIDECAR/);
+  // Windows fresh run-daemon.ps1 sets the env; an existing one is spliced in ahead of the launch.
+  assert.match(
+    windows,
+    /\$BeadsSidecar = Join-Path \$Current "components\\beads-central\\beads-central\.exe"/,
+  );
+  assert.match(windows, /\$RunDaemonContent -notmatch "PASEO_BEADS_CENTRAL_SIDECAR"/);
+
+  // Defect 1: rollback restarts the restored release with a readback and fails loud, not a bare
+  // best-effort restart, on every platform.
+  for (const source of [macos, linux]) {
+    assert.match(source, /ROLLBACK_READY=0[\s\S]*"connectedDaemon"[\s\S]*ROLLBACK_READY=1/);
+    assert.match(
+      source,
+      /Rollback restored the previous release but the daemon did not report a running readback/,
+    );
+  }
+  assert.match(windows, /\$RollbackReady = \$false[\s\S]*connectedDaemon -eq "reachable"/);
+  assert.match(
+    windows,
+    /Rollback restored the previous release but the daemon did not report a running readback/,
   );
 });
 

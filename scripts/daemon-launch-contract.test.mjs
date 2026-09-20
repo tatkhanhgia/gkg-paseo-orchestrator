@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { installerScript } from "./build-macos-web-cli-artifact.mjs";
+import {
+  installerScript,
+  linuxInstallerScript,
+  windowsInstallerScript,
+} from "./build-macos-web-cli-artifact.mjs";
 
 const repoRoot = join(import.meta.dirname, "..");
 
@@ -141,6 +145,60 @@ test("macOS installer patches the Beads Central sidecar env into an existing pli
     upgradeBranch,
     /--relay|--no-relay|--listen|ProgramArguments|cat > "\$PLIST"/,
   );
+});
+
+test("linux installer injects the Beads Central sidecar env into an existing systemd unit", () => {
+  const source = linuxInstallerScript();
+  const freshWrite = source.indexOf('if [ ! -f "$UNIT" ]; then');
+  assert.notEqual(freshWrite, -1, "installer must keep the fresh-unit write branch");
+  const upgradePatch = source.indexOf("\nelse\n", freshWrite);
+  const upgradeEnd = source.indexOf("\nfi\n", upgradePatch);
+  assert.notEqual(upgradePatch, -1, "installer must handle an existing unit in an else branch");
+  const freshBranch = source.slice(freshWrite, upgradePatch);
+  const upgradeBranch = source
+    .slice(upgradePatch, upgradeEnd)
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+
+  for (const key of ["PASEO_BEADS_CENTRAL_SIDECAR", "PASEO_BEADS_CENTRAL_BD_BIN"]) {
+    assert.match(
+      freshBranch,
+      new RegExp(`Environment="${key}=\\$CURRENT_LINK/components/beads-central/`),
+      `fresh unit must set ${key}`,
+    );
+    assert.match(
+      upgradeBranch,
+      new RegExp(`Environment="${key}=\\$CURRENT_LINK/components/beads-central/`),
+      `drop-in must set ${key}`,
+    );
+  }
+  // The drop-in only injects env; it must never rewrite the operator's ExecStart/listen/relay.
+  assert.match(upgradeBranch, /cat > "\$DROPIN" <<DROPIN/);
+  assert.doesNotMatch(upgradeBranch, /ExecStart|--listen|--relay|--no-relay|cat > "\$UNIT"/);
+});
+
+test("windows installer splices the Beads Central sidecar env into an existing run-daemon.ps1", () => {
+  const source = windowsInstallerScript();
+  const freshWrite = source.indexOf("if (-not $RunDaemonExisted) {");
+  assert.notEqual(freshWrite, -1, "installer must keep the fresh run-daemon write branch");
+  const upgradePatch = source.indexOf("} else {", freshWrite);
+  assert.notEqual(
+    upgradePatch,
+    -1,
+    "installer must handle an existing run-daemon in an else branch",
+  );
+  const upgradeBranch = source
+    .slice(upgradePatch, source.indexOf("\nif (-not $NoStart)", upgradePatch))
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+
+  assert.match(upgradeBranch, /\$RunDaemonContent -notmatch "PASEO_BEADS_CENTRAL_SIDECAR"/);
+  assert.match(upgradeBranch, /PASEO_BEADS_CENTRAL_SIDECAR = `"\$BeadsSidecar`"/);
+  assert.match(upgradeBranch, /PASEO_BEADS_CENTRAL_BD_BIN = `"\$BeadsBd`"/);
+  // The splice prepends env only; it must not rewrite the operator's launch line or listen choice.
+  assert.doesNotMatch(upgradeBranch, /daemon start|--listen|--relay|--no-relay/);
 });
 
 test("trace-daemon closure lists both Foundation workspace-protocol JSON assets", async () => {

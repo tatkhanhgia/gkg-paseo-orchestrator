@@ -476,8 +476,29 @@ rollback_install() {
     if [ -n "$PREVIOUS_RELEASE" ]; then
       ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
       if [ "$START" -eq 1 ] && [ -f "$PLIST" ]; then
-        launchctl bootstrap "gui/$USER_ID" "$PLIST" >/dev/null 2>&1 || true
+        # Restart the restored release with the same retry+readback the forward path uses. A single
+        # best-effort bootstrap loses the launchd bootout/bootstrap race and leaves the daemon dead
+        # with the failure swallowed by \`|| true\`; retry the load, then prove it is running or fail loud.
+        for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+          launchctl bootstrap "gui/$USER_ID" "$PLIST" >/dev/null 2>&1 && break
+          launchctl print "gui/$USER_ID/$LABEL" >/dev/null 2>&1 && break
+          sleep 1
+        done
         launchctl kickstart -k "gui/$USER_ID/$LABEL" >/dev/null 2>&1 || true
+        ROLLBACK_READY=0
+        for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+          if PASEO_HOST= "$CURRENT_LINK/bin/paseo" daemon status --json > "$PREFIX/rollback-readback.json" 2>/dev/null &&
+             grep -Eq '"localDaemon"[[:space:]]*:[[:space:]]*"running"' "$PREFIX/rollback-readback.json" &&
+             grep -Eq '"connectedDaemon"[[:space:]]*:[[:space:]]*"reachable"' "$PREFIX/rollback-readback.json"; then
+            ROLLBACK_READY=1
+            break
+          fi
+          sleep 1
+        done
+        rm -f "$PREFIX/rollback-readback.json"
+        if [ "$ROLLBACK_READY" -ne 1 ]; then
+          echo "Rollback restored the previous release but the daemon did not report a running readback; restart it manually with: launchctl kickstart -k gui/$USER_ID/$LABEL" >&2
+        fi
       fi
     else
       rm -f "$CURRENT_LINK"
@@ -705,6 +726,8 @@ CURRENT_LINK="$PREFIX/current"
 UNIT="$SERVICE_DIR/$SERVICE_NAME"
 UNIT_EXISTED=0
 if [ -f "$UNIT" ]; then UNIT_EXISTED=1; fi
+DROPIN_DIR="$SERVICE_DIR/$SERVICE_NAME.d"
+DROPIN="$DROPIN_DIR/paseo-beads-central.conf"
 INSTALL_CONFIG="$PREFIX/install-config.json"
 INSTALL_CONFIG_EXISTED=0
 if [ -f "$INSTALL_CONFIG" ]; then INSTALL_CONFIG_EXISTED=1; fi
@@ -805,7 +828,26 @@ rollback_install() {
     systemctl --user stop "$SERVICE_NAME" >/dev/null 2>&1 || true
     if [ -n "$PREVIOUS_RELEASE" ]; then
       ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
-      if [ "$START" -eq 1 ]; then systemctl --user start "$SERVICE_NAME" >/dev/null 2>&1 || true; fi
+      if [ "$START" -eq 1 ]; then
+        # Restart the restored release and prove it is running, mirroring the forward path. A single
+        # best-effort start swallowed by \`|| true\` is what left the production daemon dead on a
+        # failed upgrade; retry then read back, and fail loud if it never reports running.
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        systemctl --user start "$SERVICE_NAME" >/dev/null 2>&1 || true
+        ROLLBACK_READY=0
+        for _attempt in $(seq 1 30); do
+          if PASEO_HOST= "$CURRENT_LINK/bin/paseo" daemon status --json > "$PREFIX/rollback-readback.json" 2>/dev/null &&
+             grep -Eq '"localDaemon"[[:space:]]*:[[:space:]]*"running"' "$PREFIX/rollback-readback.json" &&
+             grep -Eq '"connectedDaemon"[[:space:]]*:[[:space:]]*"reachable"' "$PREFIX/rollback-readback.json"; then
+            ROLLBACK_READY=1; break
+          fi
+          sleep 1
+        done
+        rm -f "$PREFIX/rollback-readback.json"
+        if [ "$ROLLBACK_READY" -ne 1 ]; then
+          echo "Rollback restored the previous release but the daemon did not report a running readback; restart it manually with: systemctl --user restart $SERVICE_NAME" >&2
+        fi
+      fi
     else
       rm -f "$CURRENT_LINK"
     fi
@@ -848,6 +890,8 @@ Restart=on-failure
 RestartSec=3
 Environment="HOME=$HOME"
 Environment="PATH=$BIN_DIR:/usr/local/bin:/usr/bin:/bin"
+Environment="PASEO_BEADS_CENTRAL_SIDECAR=$CURRENT_LINK/components/beads-central/beads-central"
+Environment="PASEO_BEADS_CENTRAL_BD_BIN=$CURRENT_LINK/components/beads-central/bin/bd"
 Environment=PASEO_DICTATION_ENABLED=0
 Environment=PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD=0
 Environment=PASEO_VOICE_MODE_ENABLED=0
@@ -855,6 +899,17 @@ Environment=PASEO_VOICE_MODE_ENABLED=0
 [Install]
 WantedBy=default.target
 UNIT
+else
+  # An existing unit keeps the operator's ExecStart (--listen/--relay), PATH, and Restart choices.
+  # Releases that predate the bundled Beads Central sidecar wrote a unit without these two
+  # variables, so inject them through a drop-in; the daemon refuses to start its tracker without
+  # them. The paths resolve through $CURRENT_LINK so a later rollback repoints them automatically.
+  mkdir -p "$DROPIN_DIR"
+cat > "$DROPIN" <<DROPIN
+[Service]
+Environment="PASEO_BEADS_CENTRAL_SIDECAR=$CURRENT_LINK/components/beads-central/beads-central"
+Environment="PASEO_BEADS_CENTRAL_BD_BIN=$CURRENT_LINK/components/beads-central/bin/bd"
+DROPIN
 fi
 
 if [ "$START" -eq 1 ]; then
@@ -927,6 +982,7 @@ case "\${1:-}" in
 esac
 systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
 rm -f "$SERVICE_DIR/$SERVICE_NAME"
+rm -rf "$SERVICE_DIR/$SERVICE_NAME.d"
 systemctl --user daemon-reload >/dev/null 2>&1 || true
 if [ "$PURGE_FOUNDATION" -eq 1 ] && [ -x "$PREFIX/current/bin/paseo-foundation" ]; then
   "$PREFIX/current/bin/paseo-foundation" uninstall
@@ -1124,6 +1180,8 @@ $Switched = $true
 $PaseoEntry = Join-Path $Current "app\\node_modules\\@getpaseo\\cli\\dist\\index.js"
 $FoundationEntry = Join-Path $Current "app\\node_modules\\@getpaseo\\foundation-cli\\dist\\index.js"
 $Node = Join-Path $Current "runtime\\node.exe"
+$BeadsSidecar = Join-Path $Current "components\\beads-central\\beads-central.exe"
+$BeadsBd = Join-Path $Current "components\\beads-central\\bin\\bd.exe"
 Set-Content -Encoding Ascii -Path $PaseoCmd -Value "@echo off\`r\`n\`"$Node\`" \`"$PaseoEntry\`" %*"
 Set-Content -Encoding Ascii -Path $FoundationCmd -Value "@echo off\`r\`n\`"$Node\`" \`"$FoundationEntry\`" %*"
 
@@ -1139,6 +1197,8 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $DaemonLog = Join-Path $LogDir "daemon.log"
 if (-not $RunDaemonExisted) {
   $DaemonScript = @(
+    "\`$env:PASEO_BEADS_CENTRAL_SIDECAR = \`"$BeadsSidecar\`""
+    "\`$env:PASEO_BEADS_CENTRAL_BD_BIN = \`"$BeadsBd\`""
     '$env:PASEO_DICTATION_ENABLED = "0"'
     '$env:PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD = "0"'
     '$env:PASEO_VOICE_MODE_ENABLED = "0"'
@@ -1146,6 +1206,19 @@ if (-not $RunDaemonExisted) {
     'exit $LASTEXITCODE'
   )
   Set-Content -Encoding UTF8 -Path $RunDaemon -Value $DaemonScript
+} else {
+  # An existing run-daemon.ps1 keeps the operator's --listen/--relay choice baked into its launch
+  # line. Releases that predate the bundled Beads Central sidecar wrote it without these two
+  # variables, so splice them in ahead of the launch; the daemon refuses to start its tracker
+  # without them. The paths resolve through $Current so a later rollback repoints them.
+  $RunDaemonContent = Get-Content -Raw -Path $RunDaemon
+  if ($RunDaemonContent -notmatch "PASEO_BEADS_CENTRAL_SIDECAR") {
+    $DaemonEnvInjection = @(
+      "\`$env:PASEO_BEADS_CENTRAL_SIDECAR = \`"$BeadsSidecar\`""
+      "\`$env:PASEO_BEADS_CENTRAL_BD_BIN = \`"$BeadsBd\`""
+    )
+    Set-Content -Encoding UTF8 -Path $RunDaemon -Value ($DaemonEnvInjection + @(Get-Content -Path $RunDaemon))
+  }
 }
 
 if (-not $NoStart) {
@@ -1217,7 +1290,23 @@ Write-Output "WebUI: http://$Listen"
     if (Test-Path $Current) { [IO.Directory]::Delete($Current) }
     if ($PreviousRelease) {
       New-Item -ItemType Junction -Path $Current -Target $PreviousRelease | Out-Null
-      if (-not $NoStart -and $TaskExisted) { Start-ScheduledTask -TaskName $TaskName }
+      if (-not $NoStart -and $TaskExisted) {
+        # Restart the restored release and prove it is running, mirroring the forward path. A single
+        # best-effort Start-ScheduledTask with no readback is what left the daemon dead on a failed
+        # upgrade; read back and warn loudly if it never reports running.
+        Start-ScheduledTask -TaskName $TaskName
+        $RollbackReady = $false
+        foreach ($attempt in 1..30) {
+          Start-Sleep -Seconds 1
+          try {
+            $rollbackReadback = & $PaseoCmd daemon status --json | ConvertFrom-Json
+            if ($rollbackReadback.localDaemon -eq "running" -and $rollbackReadback.connectedDaemon -eq "reachable") { $RollbackReady = $true; break }
+          } catch {}
+        }
+        if (-not $RollbackReady) {
+          Write-Warning "Rollback restored the previous release but the daemon did not report a running readback; restart it manually with: Start-ScheduledTask -TaskName '$TaskName'"
+        }
+      }
     }
     if (-not $TaskExisted) {
       Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
