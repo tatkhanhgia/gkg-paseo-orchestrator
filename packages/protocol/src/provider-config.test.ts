@@ -12,7 +12,12 @@ describe("provider Paseo-tool policy", () => {
   test("allows custom Codex routes without letting unsupported builtins spoof inheritance", () => {
     expect(isPaseoSupportedProvider("codex-proxy", { extends: "codex" })).toBe(true);
     expect(isPaseoSupportedProvider("opencode", { extends: "codex" })).toBe(false);
-    expect(isPaseoSupportedProvider("pi", { extends: "codex" })).toBe(false);
+  });
+
+  test("treats Pi as a first-class supported builtin", () => {
+    expect(isPaseoSupportedProvider("pi")).toBe(true);
+    // Support comes from the builtin allowlist, not from spoofing Codex inheritance.
+    expect(isPaseoSupportedProvider("pi", { extends: "codex" })).toBe(true);
   });
 
   test("accepts native Antigravity as a builtin provider without ACP inheritance", () => {

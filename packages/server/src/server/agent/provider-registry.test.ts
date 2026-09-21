@@ -748,6 +748,19 @@ test("unsupported built-ins remain disabled even when legacy config enables them
   expect(registry.omp.enabled).toBe(false);
 });
 
+test("Pi is a supported built-in and honors the enabled override", () => {
+  // Pi ships with enabledByDefault: false, so with no override it stays disabled.
+  const withoutOverride = buildProviderRegistry(logger, { providerOverrides: {} });
+  expect(withoutOverride.pi.enabled).toBe(false);
+
+  // Now that Pi is on the support allowlist, enabling it in config actually takes
+  // effect instead of being hard-forced to false like an unsupported built-in.
+  const enabled = buildProviderRegistry(logger, {
+    providerOverrides: { pi: { enabled: true } },
+  });
+  expect(enabled.pi.enabled).toBe(true);
+});
+
 test("exposes only supported native providers plus custom Codex routes", () => {
   const registry = buildProviderRegistry(logger, {
     providerOverrides: {

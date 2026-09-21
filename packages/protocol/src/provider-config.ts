@@ -174,13 +174,21 @@ export type AgentProviderRuntimeSettingsMap = Partial<
   Record<AgentProvider, ProviderRuntimeSettings>
 >;
 
-const PASEO_SUPPORTED_PROVIDER_IDS = new Set(["claude", "codex", "cursor", "gemini-antigravity"]);
+const PASEO_SUPPORTED_PROVIDER_IDS = new Set([
+  "claude",
+  "codex",
+  "cursor",
+  "gemini-antigravity",
+  "pi",
+]);
 
 /**
  * Product support policy. Paseo currently exposes the native Claude, Codex,
- * Cursor and Antigravity routes, plus user-defined routes derived from Codex.
+ * Cursor, Antigravity and Pi routes, plus user-defined routes derived from Codex.
  * Other adapters remain in source for compatibility and development fixtures,
- * but cannot be enabled in the shipped runtime.
+ * but cannot be enabled in the shipped runtime. Being on this list only lifts the
+ * hard block; a provider whose definition sets enabledByDefault: false (such as Pi)
+ * still needs providers.<id>.enabled = true in daemon config before it resolves enabled.
  */
 export function isPaseoSupportedProvider(
   providerId: string,
