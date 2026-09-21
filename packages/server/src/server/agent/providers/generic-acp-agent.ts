@@ -55,6 +55,7 @@ interface GenericACPAgentClientOptions {
   catalogModelResolver?: ACPCatalogModelResolver;
   sessionResponseTransformer?: (response: SessionStateResponse) => SessionStateResponse;
   toolSnapshotTransformer?: (snapshot: ACPToolSnapshot) => ACPToolSnapshot;
+  now?: () => number;
 }
 
 export class GenericACPAgentClient extends ACPAgentClient {
@@ -82,6 +83,7 @@ export class GenericACPAgentClient extends ACPAgentClient {
       catalogModelResolver: options.catalogModelResolver,
       sessionResponseTransformer: options.sessionResponseTransformer,
       toolSnapshotTransformer: options.toolSnapshotTransformer,
+      now: options.now,
     });
 
     this.command = options.command;

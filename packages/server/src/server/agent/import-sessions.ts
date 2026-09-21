@@ -26,6 +26,7 @@ type ImportAgentRequestMessage = z.infer<typeof ImportAgentRequestMessageSchema>
 
 const METADATA_GENERATION_PROMPT_PREFIX =
   "Generate metadata for a coding agent based on the user prompt.";
+const IMPORT_SESSION_SEARCH_SCAN_LIMIT = 500;
 export type ImportSessionAgentManager = AgentLoaderManager &
   Pick<
     AgentManager,
@@ -71,6 +72,7 @@ export interface ListImportableProviderSessionsInput {
 export interface ListImportableProviderSessionsResult {
   entries: RecentProviderSessionDescriptorPayload[];
   filteredAlreadyImportedCount: number;
+  providerErrors: Array<{ provider: string; message: string }>;
 }
 
 export interface ImportProviderSessionInput {
@@ -136,16 +138,20 @@ export async function listImportableProviderSessions(
     providerFilter,
   );
   const importedHandles = importedSessions.handles;
+  const query = normalizeImportSessionQuery(request.query);
+  const listingLimit = query ? IMPORT_SESSION_SEARCH_SCAN_LIMIT : limit + importedSessions.count;
 
-  const sessions = await agentManager.listImportableSessions({
-    limit: limit + importedSessions.count,
+  const listing = await agentManager.listImportableSessions({
+    limit: listingLimit,
+    ...(query ? { query } : {}),
+    ...(query ? { scanLimit: IMPORT_SESSION_SEARCH_SCAN_LIMIT } : {}),
     providerFilter,
     cwd: request.cwd,
   });
   let filteredAlreadyImportedCount = 0;
   const candidates: ManagedImportableProviderSession[] = [];
   const matchesRequestCwd = request.cwd ? createRealpathAwarePathMatcher(request.cwd) : null;
-  for (const session of sessions) {
+  for (const session of listing.sessions) {
     if (matchesRequestCwd && !matchesRequestCwd(session.cwd)) {
       continue;
     }
@@ -173,7 +179,16 @@ export async function listImportableProviderSessions(
       }),
     );
 
-  return { entries, filteredAlreadyImportedCount };
+  return {
+    entries,
+    filteredAlreadyImportedCount,
+    providerErrors: listing.providerErrors,
+  };
+}
+
+function normalizeImportSessionQuery(query: string | undefined): string | null {
+  const normalized = query?.trim().toLowerCase();
+  return normalized ? normalized : null;
 }
 
 export async function importProviderSession(

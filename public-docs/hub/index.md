@@ -26,7 +26,7 @@ A daemon runs agents on one machine, for you. Paseo Hub is the layer above your 
 What that gives you today:
 
 - Agents that start on their own, from activity in GitHub, Slack, and Discord.
-- Configuration that lives in a repository and deploys when you push.
+- Triggers you can keep in a repository and deploy from the CLI.
 - A record of everything that arrived, what it matched, and what ran.
 - One place for your team to see all of it.
 
@@ -34,17 +34,16 @@ Your daemons keep running agents where they always did. Hub decides when to ask 
 
 ## What lives in your repository
 
-Upstream v0.5.0 guided setup would create a project resource file for environments and agents, plus one starter workflow:
+Upstream v0.8 `paseo hub init` would create one self-contained starter trigger:
 
 ```text
 .paseo/
-├── hub.yml
-└── workflows/
+└── triggers/
     └── slack-help.yml
 ```
 
-This downstream keeps that shape documented as an adaptation target, but does not deploy it until
-Hub and daemon negotiate the Foundation authority contract. The [generated starter bundle](/docs/hub/configuration#generated-starter-bundle)
+This downstream keeps that shape documented as an adaptation target, but does not write or deploy it
+until Hub and daemon negotiate the Foundation authority contract. The [generated starter trigger](/docs/hub/configuration#generated-starter-trigger)
 shows the deferred upstream shape, while [Workflows](/docs/hub/workflows) covers manual routing,
 prompt partials, and provider-specific replies.
 
@@ -65,4 +64,4 @@ If a workflow accepts requests from GitHub, Slack, Discord, or the API, read [Hu
 
 Start on your machine with the embedded database, then add PostgreSQL or a public deployment only when you need them. [Self-hosting](/docs/hub/self-hosting) covers each step.
 
-[Hosted Hub](/docs/hub/hosted) uses the same projects, workflows, daemons, and activity model. New account registration is currently closed.
+[Hosted Hub](/docs/hub/hosted) uses the same triggers, daemons, and activity model. [Sign in to start a free trial](https://hub.paseo.sh).

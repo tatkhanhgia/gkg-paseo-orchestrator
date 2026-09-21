@@ -10,10 +10,12 @@ export const ru: TranslationResources = {
       cancel: "Отмена",
       close: "Закрыть",
       copy: "Копировать",
+      copyLine: "Копировать строку",
       dismiss: "Отклонить",
       retry: "Повторить",
       search: "Поиск",
       select: "Выбрать",
+      selectAll: "Выбрать все",
     },
     placeholders: {
       search: "Поиск...",
@@ -33,6 +35,7 @@ export const ru: TranslationResources = {
     errors: {
       error: "Ошибка",
       unableToSave: "Не удалось сохранить",
+      unableToCopy: "Не удалось скопировать",
       nameRequired: "Требуется имя",
       daemonUnavailable: "Daemon недоступен",
       daemonClientUnavailable: "Daemon клиента недоступен",
@@ -339,6 +342,7 @@ export const ru: TranslationResources = {
       zoomIn: "Увеличить масштаб",
       zoomOut: "Уменьшить масштаб",
       resetZoom: "Сбросить масштаб",
+      fullscreen: "Полноэкранный режим",
       viewSource: "Показать исходный код",
       viewDiagram: "Показать диаграмму",
     },
@@ -410,7 +414,13 @@ export const ru: TranslationResources = {
     },
   },
   importSession: {
+    chooseHostTitle: en.importSession.chooseHostTitle,
     title: "Импортировать сессию",
+    searchPlaceholder: "Поиск сессий...",
+    scope: {
+      host: "Сессии на {{host}}",
+      workspace: "Это рабочее пространство",
+    },
     filters: {
       all: "Все",
     },
@@ -419,12 +429,13 @@ export const ru: TranslationResources = {
       updateHost: "Обновите хост, чтобы импортировать сессии.",
       noProviders: "Нет включённых провайдеров с поддержкой импорта.",
       loading: "Загрузка недавних сессий...",
-      failedAll: "Не удалось загрузить недавние сессии.",
-      failedProviders: "Не удалось загрузить сессии следующих провайдеров: {{providers}}.",
+      failedProvider: "Не удалось загрузить сессии провайдера {{provider}}",
       failedImport: "Не удалось импортировать выбранную сессию.",
     },
     actions: {
       refresh: "Обновить список сессий",
+      showAll: "Показать все",
+      loadMore: "Загрузить ещё",
     },
     preview: {
       untitledSession: "Сессия без названия",
@@ -432,6 +443,7 @@ export const ru: TranslationResources = {
     },
     empty: {
       noRecent: "Нет недавних сессий для импорта.",
+      noMatches: "Нет сессий, соответствующих запросу.",
       alreadyImported: "Все недавние сессии уже импортированы.",
       noProviderSessions: "Сессии провайдера {{provider}} не найдены.",
     },
@@ -545,14 +557,23 @@ export const ru: TranslationResources = {
         completed: "Настройка завершена",
         failed: "Настройка не удалась",
         workspace: "Настройка рабочего пространства",
+        blocked: "Настройка заблокирована",
       },
       status: {
         running: "Выполняется",
         completed: "Завершено",
         failed: "Завершено с ошибкой",
         waiting: "Ожидание вывода команд настройки",
+        blocked: "Заблокировано",
       },
       waiting: "Настройка рабочего пространства...",
+      blocked: {
+        title: "Настройка не запускалась",
+        description:
+          "Этот PR поступил из другого репозитория — {{repository}}. Его настройка и скрипты могут выполнить код, который вы не проверяли.",
+        run: "Запустить настройку",
+        runFailed: "Не удалось запустить настройку рабочего пространства",
+      },
       empty: {
         noCommands: "Для этого рабочего пространства не выполнялись команды настройки.",
       },
@@ -946,11 +967,8 @@ export const ru: TranslationResources = {
         refresh: "Обновить",
         refreshState: "Обновить состояние Git и {{brand}}",
         failedRefresh: "Не удалось обновить состояние Git.",
-        emptyHiddenWhitespace: "После скрытия пробельных изменений видимых изменений нет",
-        emptyUncommitted: "Нет незафиксированных изменений",
         seeUncommittedChanges: "Показать незафиксированные изменения",
         seeCommittedChanges: "Показать зафиксированные изменения",
-        emptyAgainstBase: "Нет изменений относительно {{baseRef}}",
         checkingRepository: "Проверяем репозиторий...",
         notRepository: "Это не репозиторий Git",
         diffMode: "Режим диффа",
@@ -1090,6 +1108,16 @@ export const ru: TranslationResources = {
       updateHost: "Обновите этот хост для управления метками.",
     },
   },
+  changelog: {
+    title: "Что нового",
+    installed: "Установлена",
+    showMore: "Показать ещё",
+    openWebsite: "Полный список изменений",
+    error: {
+      title: "Не удалось загрузить список изменений",
+      description: "Проверьте подключение и попробуйте снова.",
+    },
+  },
   sidebar: {
     display: {
       trigger: "Настройки отображения",
@@ -1149,7 +1177,6 @@ export const ru: TranslationResources = {
       addProject: "Добавить проект",
       newWorkspace: "Новое рабочее пространство",
       hosts: "Хосты",
-      home: "Главная",
       settings: "Настройки",
       closeSidebar: "Закрыть боковую панель",
     },
@@ -1166,7 +1193,12 @@ export const ru: TranslationResources = {
     },
     sections: {
       sessions: "История",
+      search: "Поиск",
       schedules: "Расписания",
+      topology: "Топология проекта",
+      portfolios: "Портфели",
+      rooms: "Комнаты",
+      councils: "Советы",
     },
     worktreeSetup: {
       title: "Настроить скрипты worktree",
@@ -2152,6 +2184,7 @@ export const ru: TranslationResources = {
     about: {
       title: "О приложении",
       appVersion: "Версия приложения",
+      whatsNewHint: "Заметки о выпуске для каждой версии",
       thisDevice: "Это устройство",
       connectedHosts: "Подключенные хосты",
       offline: "Оффлайн",
@@ -2199,6 +2232,13 @@ export const ru: TranslationResources = {
       chatOutline: {
         title: "Оглавление чата",
         description: "Показывать оглавление для перехода между запросами",
+      },
+      sidebar: {
+        title: "Боковая панель",
+        description:
+          "Выберите, какие элементы отображаются вверху боковой панели и в каком порядке",
+        moveUp: "Переместить вверх",
+        moveDown: "Переместить вниз",
       },
       fonts: {
         title: "Шрифты",

@@ -1,3 +1,4 @@
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -14,7 +15,11 @@ import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import { useProjectIcon } from "@/projects/icons";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useHostFeature } from "@/runtime/host-features";
-import { normalizeWorkspaceDescriptor, useSessionStore } from "@/stores/session-store";
+import {
+  normalizeWorkspaceDescriptor,
+  useSessionStore,
+  type WorkspaceDescriptor,
+} from "@/stores/session-store";
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-workspaces";
@@ -69,25 +74,18 @@ function resolveWorkspaceTitle({
 
 function buildChatDraftComposerArgs({
   serverId,
-  isConnected,
   workspaceDirectory,
   sourceDirectory,
   pendingWorkspaceSetup,
 }: {
   serverId: string;
-  isConnected: boolean;
   workspaceDirectory: string | undefined;
   sourceDirectory: string;
   pendingWorkspaceSetup: { creationMethod: string } | null;
 }) {
   return {
     initialServerId: serverId || null,
-    initialValues:
-      workspaceDirectory || sourceDirectory
-        ? { workingDir: workspaceDirectory || sourceDirectory }
-        : undefined,
     isVisible: pendingWorkspaceSetup !== null,
-    onlineServerIds: isConnected && serverId ? [serverId] : [],
     lockedWorkingDir: workspaceDirectory || sourceDirectory || undefined,
   };
 }
@@ -189,9 +187,13 @@ export function WorkspaceSetupDialog() {
   const toast = useToast();
   const pendingWorkspaceSetup = useWorkspaceSetupStore((state) => state.pendingWorkspaceSetup);
   const clearWorkspaceSetup = useWorkspaceSetupStore((state) => state.clearWorkspaceSetup);
-  const mergeWorkspaces = useSessionStore((state) => state.mergeWorkspaces);
+  const mergeWorkspaces = useCallback(
+    (targetServerId: string, workspaces: Iterable<WorkspaceDescriptor>) => {
+      getHostRuntimeStore().acceptWorkspaceSnapshots(targetServerId, Array.from(workspaces));
+    },
+    [],
+  );
   const setHasHydratedWorkspaces = useSessionStore((state) => state.setHasHydratedWorkspaces);
-  const setAgents = useSessionStore((state) => state.setAgents);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [createdWorkspace, setCreatedWorkspace] = useState<ReturnType<
     typeof normalizeWorkspaceDescriptor
@@ -212,7 +214,6 @@ export function WorkspaceSetupDialog() {
     draftKey: `workspace-setup:${serverId}:${sourceDirectory}`,
     composer: buildChatDraftComposerArgs({
       serverId,
-      isConnected,
       workspaceDirectory: workspace?.workspaceDirectory,
       sourceDirectory,
       pendingWorkspaceSetup,
@@ -396,17 +397,13 @@ export function WorkspaceSetupDialog() {
           return;
         }
 
-        setAgents(serverId, (previous) => {
-          const next = new Map(previous);
-          next.set(
-            agent.id,
-            applyLegacyDaemonWorkspaceOwnership({
-              serverId,
-              agent: normalizeAgentSnapshot(agent, serverId),
-            }),
-          );
-          return next;
-        });
+        getHostRuntimeStore().acceptAgentSnapshot(
+          serverId,
+          applyLegacyDaemonWorkspaceOwnership({
+            serverId,
+            agent: normalizeAgentSnapshot(agent, serverId),
+          }),
+        );
         navigateAfterCreation(ensuredWorkspace.id, { kind: "agent", agentId: agent.id });
       } catch (error) {
         const message = toErrorMessage(error);
@@ -423,7 +420,6 @@ export function WorkspaceSetupDialog() {
       getIsStillActive,
       navigateAfterCreation,
       serverId,
-      setAgents,
       ensureWorkspace,
       t,
       toast,

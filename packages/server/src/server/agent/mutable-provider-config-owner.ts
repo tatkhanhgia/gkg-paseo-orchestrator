@@ -11,39 +11,41 @@ export function attachMutableProviderConfigOwner(options: {
   providerSnapshotManager: ProviderSnapshotManager;
   updateProviderRegistry: (state: AgentManagerProviderState) => void;
 }): () => void {
-  let publishPendingProviderChange: (() => void) | null = null;
+  let commitPendingProviderChange: (() => void) | null = null;
 
   const unsubscribeApply = options.store.onApply((config, previous, details) => {
     if (equal(config.providers, previous.providers)) return () => undefined;
 
     const previousAgentManagerState =
       options.providerSnapshotManager.getAgentManagerProviderState();
-    const staged = options.providerSnapshotManager.stageMutableProviderConfig(config.providers, {
-      removeProviders: details.removedProviders,
-      // The client-visible mutable config deliberately omits launch-only fields such as an
-      // ACP command. Merge mutable values onto the startup overrides so toggling one provider
-      // cannot make an unrelated custom provider invalid. Explicit removals still delete the
-      // complete provider definition.
-      replace: false,
-    });
+    const prepared = options.providerSnapshotManager.prepareMutableProviderConfig(
+      config.providers,
+      {
+        removeProviders: details.removedProviders,
+        // The client-visible mutable config deliberately omits launch-only fields such as an
+        // ACP command. Merge mutable values onto the startup overrides so toggling one provider
+        // cannot make an unrelated custom provider invalid. Explicit removals still delete the
+        // complete provider definition.
+        replace: false,
+      },
+    );
     try {
-      options.updateProviderRegistry(staged.agentManagerState);
+      options.updateProviderRegistry(prepared.agentManagerState);
     } catch (error) {
-      staged.rollback();
+      options.updateProviderRegistry(previousAgentManagerState);
       throw error;
     }
-    publishPendingProviderChange = staged.publish;
+    commitPendingProviderChange = prepared.commit;
 
     return () => {
-      publishPendingProviderChange = null;
-      staged.rollback();
+      commitPendingProviderChange = null;
       options.updateProviderRegistry(previousAgentManagerState);
     };
   });
   const unsubscribeChange = options.store.onChange(() => {
-    const publish = publishPendingProviderChange;
-    publishPendingProviderChange = null;
-    publish?.();
+    const commit = commitPendingProviderChange;
+    commitPendingProviderChange = null;
+    commit?.();
   });
 
   return () => {

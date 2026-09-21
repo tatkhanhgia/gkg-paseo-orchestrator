@@ -64,6 +64,13 @@ Repo dev commands use checkout-local state by default. In this checkout, `PASEO_
 
 See [docs/development.md](docs/development.md) for full setup, build sync requirements, and debugging.
 
+## Release branches
+
+When the user says "this goes to next", create or
+retarget the PR to `next` and preserve that destination through delivery. Follow
+[release branch discipline](docs/release.md#release-branch-discipline) for creating
+and updating `next`, integrating it after a release, and releasing a hotfix from a tag.
+
 ## Critical rules
 
 - **After daemon/runtime-facing changes, run the [Local completion gate](#local-completion-gate) without asking again.** `./scripts/local-stack.sh --apply` imports Foundation if the lock is behind, builds, refuses to restart unless fresh readback shows no agent running or starting, installs, and restarts. Preserve the existing home/listen/relay/WebUI settings unless the Human requests a change. If work is active or live state cannot be determined, it stops — report the blocker instead of forcing it.

@@ -64,8 +64,6 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.format != 'false') }}
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -85,8 +83,6 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.quality != 'false') }}
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -112,8 +108,6 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.quality != 'false') }}
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -142,8 +136,6 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps: &server_test_steps
       - uses: actions/checkout@v4
         with:
@@ -185,8 +177,6 @@ jobs:
     needs: changes
     if: false # GKG: disabled — Windows runner not configured for this fork
     runs-on: windows-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps: *server_test_steps
 
   app-tests:
@@ -194,8 +184,6 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.app != 'false') }}
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -222,8 +210,6 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.sdk != 'false') }}
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -237,6 +223,15 @@ jobs:
 
       - name: Build client dependencies
         run: npm run build:client
+
+      - name: Build plugin SDK
+        run: npm run build:plugin
+
+      - name: Run plugin SDK tests
+        run: npm run test --workspace=@getpaseo/plugin
+
+      - name: Typecheck plugin examples
+        run: npm run typecheck --workspace=@getpaseo/plugin
 
       - name: Run protocol tests
         run: npm run test --workspace=@getpaseo/protocol
@@ -369,8 +364,6 @@ jobs:
     needs: changes
     if: false # GKG: disabled — upstream release toolchain contracts not configured
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -394,7 +387,6 @@ jobs:
     if: false # GKG: disabled — CLI provider tests need agent CLIs and API keys
     runs-on: ubuntu-latest
     env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
       PASEO_DICTATION_ENABLED: "0"
       PASEO_VOICE_MODE_ENABLED: "0"
@@ -426,7 +418,6 @@ jobs:
     if: false # GKG: disabled — CLI provider tests need agent CLIs and API keys
     runs-on: ubuntu-latest
     env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
       PASEO_DICTATION_ENABLED: "0"
       PASEO_VOICE_MODE_ENABLED: "0"
@@ -440,7 +431,6 @@ jobs:
     if: false # GKG: disabled — CLI provider tests need agent CLIs and API keys
     runs-on: ubuntu-latest
     env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
       PASEO_DICTATION_ENABLED: "0"
       PASEO_VOICE_MODE_ENABLED: "0"

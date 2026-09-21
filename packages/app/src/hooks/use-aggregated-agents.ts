@@ -88,6 +88,7 @@ export function useAggregatedAgents(options?: {
           serverLabel,
           title: agent.title ?? null,
           status: agent.status,
+          turn: agent.turn,
           lastActivityAt: agent.lastActivityAt,
           cwd: agent.cwd,
           workspaceId: agent.workspaceId,
@@ -114,8 +115,8 @@ export function useAggregatedAgents(options?: {
 
     // Sort by: running agents first, then by most recent activity
     allAgents.sort((left, right) => {
-      const leftRunning = left.status === "running";
-      const rightRunning = right.status === "running";
+      const leftRunning = left.turn.phase === "open";
+      const rightRunning = right.turn.phase === "open";
       if (leftRunning && !rightRunning) {
         return -1;
       }

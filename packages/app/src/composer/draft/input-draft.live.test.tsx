@@ -1,8 +1,8 @@
+/** @vitest-environment jsdom */
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { JSDOM } from "jsdom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDraftStore } from "@/stores/draft-store";
 import type { AttachmentMetadata, ComposerAttachment } from "@/attachments/types";
 import { createWorkspaceFileAttachment } from "@/attachments/workspace-file";
@@ -72,8 +72,6 @@ vi.mock("@/hooks/use-role-profiles", () => ({
 vi.mock("@/hooks/use-agent-form-state", () => ({
   useAgentFormState: () => ({
     selectedServerId: "host-1",
-    setSelectedServerId: () => undefined,
-    setSelectedServerIdFromUser: () => undefined,
     selectedProvider: "codex",
     selectedMode: "auto",
     setModeFromUser: () => undefined,
@@ -82,8 +80,6 @@ vi.mock("@/hooks/use-agent-form-state", () => ({
     selectedThinkingOptionId: "",
     setThinkingOptionFromUser: () => undefined,
     workingDir: "/repo",
-    setWorkingDir: () => undefined,
-    setWorkingDirFromUser: () => undefined,
     allProviderEntries: [
       {
         provider: "codex",
@@ -191,27 +187,25 @@ vi.mock("@/hooks/use-agent-form-state", () => ({
   }),
 }));
 
+const mountedRoots = new Set<Root>();
+function createTestRoot(container: HTMLElement): Root {
+  const root = createRoot(container);
+  mountedRoots.add(root);
+  return root;
+}
+
+afterEach(async () => {
+  await act(async () => {
+    for (const root of mountedRoots) root.unmount();
+    mountedRoots.clear();
+  });
+});
+
 let useAgentInputDraft: typeof import("./input-draft").useAgentInputDraft;
 let resolveRolePinnedModeTransition: typeof import("./input-draft").resolveRolePinnedModeTransition;
 type DraftRecordForTest = ReturnType<typeof useDraftStore.getState>["drafts"][string];
 
 beforeAll(async () => {
-  const storage = new Map<string, string>();
-
-  Object.defineProperty(globalThis, "window", {
-    value: {
-      localStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          storage.set(key, value);
-        },
-        removeItem: (key: string) => {
-          storage.delete(key);
-        },
-      },
-    },
-    configurable: true,
-  });
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
     value: true,
     configurable: true,
@@ -223,18 +217,8 @@ beforeAll(async () => {
 describe("useAgentInputDraft live contract", () => {
   beforeEach(() => {
     asyncStorage.clear();
-    const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
-      url: "http://localhost",
-    });
-
-    Object.defineProperty(globalThis, "document", {
-      value: dom.window.document,
-      configurable: true,
-    });
-    Object.defineProperty(globalThis, "navigator", {
-      value: dom.window.navigator,
-      configurable: true,
-    });
+    document.body.innerHTML = "<div id='root'></div>";
+    localStorage.clear();
 
     useDraftStore.setState({
       drafts: {},
@@ -284,9 +268,7 @@ describe("useAgentInputDraft live contract", () => {
         draftKey: "draft:external-access",
         composer: {
           initialServerId: "host-1",
-          initialValues: { workingDir: "/repo" },
           isVisible: true,
-          onlineServerIds: ["host-1"],
           lockedWorkingDir: "/repo",
           beadsIssueOptions: [{ id: "ps123-abc", label: "ps123-abc — Fix tracker" }],
         },
@@ -424,9 +406,7 @@ describe("useAgentInputDraft live contract", () => {
         draftKey,
         composer: {
           initialServerId: "host-1",
-          initialValues: { workingDir: "/repo" },
           isVisible: true,
-          onlineServerIds: ["host-1"],
           lockedWorkingDir: "/repo",
           beadsIssueOptions: [{ id: "ps123-abc", label: "ps123-abc — Fix tracker" }],
         },
@@ -440,7 +420,7 @@ describe("useAgentInputDraft live contract", () => {
       throw new Error("Missing root container");
     }
 
-    let root: Root | null = createRoot(container);
+    let root: Root | null = createTestRoot(container);
     await act(async () => {
       root!.render(
         <QueryClientProvider client={queryClient}>
@@ -557,7 +537,7 @@ describe("useAgentInputDraft live contract", () => {
       root!.unmount();
     });
 
-    root = createRoot(container);
+    root = createTestRoot(container);
     await act(async () => {
       root!.render(
         <QueryClientProvider client={queryClient}>
@@ -577,9 +557,7 @@ describe("useAgentInputDraft live contract", () => {
         draftKey: "draft:role-handoff",
         composer: {
           initialServerId: "host-1",
-          initialValues: { workingDir: "/repo" },
           isVisible: true,
-          onlineServerIds: ["host-1"],
           lockedWorkingDir: "/repo",
           beadsIssueOptions: [{ id: "ps123-abc", label: "ps123-abc — Fix tracker" }],
           initialRoleId: "peer",
@@ -654,7 +632,7 @@ describe("useAgentInputDraft live contract", () => {
       throw new Error("Missing root container");
     }
 
-    const root = createRoot(container);
+    const root = createTestRoot(container);
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -720,7 +698,7 @@ describe("useAgentInputDraft live contract", () => {
       throw new Error("Missing root container");
     }
 
-    const root = createRoot(container);
+    const root = createTestRoot(container);
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -771,7 +749,7 @@ describe("useAgentInputDraft live contract", () => {
       throw new Error("Missing root container");
     }
 
-    const root = createRoot(container);
+    const root = createTestRoot(container);
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -786,9 +764,16 @@ describe("useAgentInputDraft live contract", () => {
     });
 
     expect(getLatest().attachments).toEqual([{ kind: "image", metadata: image }]);
-    expect(useDraftStore.getState().drafts["draft:attachments"]?.input).toEqual({
-      text: "with attachment",
-      attachments: [{ kind: "image", metadata: image }],
+    const readPersistedInput = () => useDraftStore.getState().drafts["draft:attachments"]?.input;
+    await act(async () => {
+      // Web text publication occurs after paint; attachments save immediately.
+      await expect.poll(readPersistedInput).toEqual({
+        text: "with attachment",
+        attachments: [{ kind: "image", metadata: image }],
+      });
+    });
+    await act(async () => {
+      root.unmount();
     });
   });
 
@@ -853,7 +838,7 @@ describe("useAgentInputDraft live contract", () => {
       throw new Error("Missing root container");
     }
 
-    const root = createRoot(container);
+    const root = createTestRoot(container);
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -907,7 +892,7 @@ describe("useAgentInputDraft live contract", () => {
       throw new Error("Missing root container");
     }
 
-    const root = createRoot(container);
+    const root = createTestRoot(container);
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>

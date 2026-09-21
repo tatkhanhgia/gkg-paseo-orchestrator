@@ -564,6 +564,10 @@ function summarizeTimelineItem(item: AgentTimelineItem): string {
       return "error activity observed";
     case "compaction":
       return `compaction activity status=${item.status}`;
+    case "notification":
+      return `notification activity observed level=${item.level}`;
+    case "plugin":
+      return `plugin row observed plugin=${item.pluginId} kind=${item.kind} (content omitted)`;
   }
 }
 
@@ -597,6 +601,11 @@ function timelineTextForClaimMatching(item: AgentTimelineItem): string {
       return item.items.map((entry) => entry.text).join(" ");
     case "compaction":
       return "compaction";
+    case "notification":
+      return item.message;
+    case "plugin":
+      // Plugin row data is plugin-owned and not an evidence source.
+      return "";
   }
 }
 

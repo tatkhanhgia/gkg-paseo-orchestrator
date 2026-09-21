@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0-paseo.1 - 2026-09-21
+
+### Đã hợp nhất
+
+- Merge upstream v0.8.0 vào downstream `0.7.2-paseo.65`; ghi chú phát hành upstream nằm tại
+  [Paseo 0.8.0](https://github.com/getpaseo/paseo/releases/tag/v0.8.0).
+- Giữ role binding, assignment envelope và Paseo tool policy của SLP; tool policy là hợp của
+  `allowedTools` Foundation với `disabledTools` mới của upstream.
+- Luồng tạo agent nền mới ở New workspace nay mang role và kiểm launch receipt như luồng tab.
+- Chuyển mục Topology, Portfolios, Rooms và Councils vào registry sidebar tuỳ biến của upstream.
+- `paseo hub init` vẫn fail closed với `HUB_FOUNDATION_ADMISSION_REQUIRED`; tài liệu Hub mô tả
+  trigger v0.8 như hình mẫu adaptation.
+
 ## 0.7.2-paseo.63 - 2026-09-08
 
 ### Đã hợp nhất

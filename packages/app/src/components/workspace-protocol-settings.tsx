@@ -13,8 +13,8 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
-import { SettingsGroup } from "@/screens/settings/settings-group";
-import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsGroup } from "@/components/settings/headings/settings-group";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { useToast } from "@/contexts/toast-context";
 import { useFetchQuery } from "@/data/query";
 
