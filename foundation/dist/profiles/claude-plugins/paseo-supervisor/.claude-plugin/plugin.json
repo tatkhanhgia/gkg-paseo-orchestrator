@@ -1,7 +1,7 @@
 {
   "name": "paseo-supervisor",
   "description": "Paseo supervisor role-bound skill projection",
-  "version": "0.1.0-dev.25",
+  "version": "0.1.0-dev.25-gkg.0",
   "author": {
     "name": "Paseo Foundation"
   }
