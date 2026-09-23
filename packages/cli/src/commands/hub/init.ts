@@ -20,24 +20,14 @@ import type { HubCredentialStore } from "./credentials.js";
 import type { HubDaemonConnection } from "./daemon-client.js";
 import { withHubDaemon } from "./daemon-client.js";
 import { HubCommandError } from "./error.js";
-import type {
-  HubConfigurationResources,
-  HubHttpClient,
-  HubProject,
-  HubSetupResources,
-} from "./hub-client/index.js";
+import type { HubConfigurationResources, HubHttpClient } from "./hub-client/index.js";
 import {
-  createHubInitBundle,
   createHubInitScaffold,
   hubLoginResumeCommand,
-  planHubInitOpening,
   resolveHubInitConnection,
-  resolveHubInitProjects,
 } from "./init-plan.js";
 import type { CliLoginFlow } from "./login-flow.js";
 import { runHubConnect } from "./connect.js";
-import { runHubDeployBundle } from "./deploy.js";
-import { runHubProjects } from "./projects.js";
 import type { HubReporter } from "./reporter.js";
 import { normalizeHubOrigin } from "./origin.js";
 import {
@@ -124,25 +114,19 @@ export async function runHubGuidedSetup(
 
   const cwd = environment.cwd();
   const activeLogin = environment.credentials.active();
-  const opening = planHubInitOpening({
-    loggedIn: activeLogin !== null,
-    paseoDirectoryExists: await pathExists(path.join(cwd, ".paseo")),
-  });
-  if (
-    opening.replaceExisting &&
-    !(await requiredConfirm(environment, "Replace the existing .paseo/ Hub bundle?", false))
-  ) {
-    throw new HubInitCancelledError("Existing .paseo/ bundle left unchanged.");
-  }
-
   const origin = state.origin ?? (await ensureLogin(activeLogin?.origin, environment));
   const daemonId = state.daemonId ?? (await ensureDaemonConnection(origin, environment));
-  const project = await chooseProject(origin, environment);
-  const resources = await loadSetupResources(origin, environment);
+  const resources = await loadConfigurationResources(origin, environment);
   const triggerConnections = await resolveStarterTriggerConnections(resources, cwd);
   reportStarterTriggerConnections(environment, triggerConnections);
   const trigger = await chooseStarterTriggerConnection(environment, triggerConnections);
-  const daemon = await loadDaemonResource(origin, daemonId, environment);
+  const daemon = resources.daemons.find(({ id }) => id === daemonId);
+  if (daemon === undefined) {
+    throw new HubCommandError(
+      "HUB_DAEMON_RESOURCE_MISSING",
+      "The connected daemon is not available in this Hub organization. Reconnect it and try again.",
+    );
+  }
   log.success(`Connected as ${daemon.slug}`);
   const agent = await chooseStarterAgentRuntime(environment, cwd);
   const providerFilters = await collectProviderIdentity(trigger, environment);
@@ -154,40 +138,40 @@ export async function runHubGuidedSetup(
     providerFilters,
   });
 
-  const bundle = createHubInitBundle(project.slug, scaffold);
+  const credential = resolveHubCredential({
+    options: { origin },
+    env: environment.env,
+    credentials: environment.credentials,
+    origin,
+  });
 
-  await withSpinner("Validating bundle", async () => {
-    await runHubDeployBundle({ project: project.slug, hub: origin, dryRun: true }, bundle, {
-      cwd,
-      env: environment.env,
-      credentials: environment.credentials,
-      hub: environment.hub,
-      reporter: { progress() {} },
-    });
+  await withSpinner("Validating trigger", async () => {
+    await environment.hub.validateTrigger(origin, credential, scaffold.trigger);
   });
   log.success("Dry run passed");
-  await writeScaffold(cwd, scaffold, opening.replaceExisting);
-  log.success(`Created .paseo/hub.yml and ${scaffold.workflowPath}`);
+  const triggerExists = await prepareScaffoldDestination(cwd, scaffold.triggerPath);
+  if (
+    triggerExists &&
+    !(await requiredConfirm(environment, `Replace the existing ${scaffold.triggerPath}?`, false))
+  ) {
+    throw new HubInitCancelledError(`${scaffold.triggerPath} left unchanged.`);
+  }
+  await writeScaffold(cwd, scaffold, triggerExists);
+  log.success(`Created ${scaffold.triggerPath}`);
 
   const deploy = state.deploy ?? (await requiredConfirm(environment, "Deploy now?", true));
   if (deploy) {
-    await withSpinner("Deploying bundle", async () => {
-      await runHubDeployBundle({ project: project.slug, hub: origin }, bundle, {
-        cwd,
-        env: environment.env,
-        credentials: environment.credentials,
-        hub: environment.hub,
-        reporter: { progress() {} },
-      });
+    await withSpinner("Deploying trigger", async () => {
+      await environment.hub.installTrigger(origin, credential, scaffold.trigger);
     });
     log.success("Deployed");
   } else {
-    reportMessage(environment, `Skipped deployment. Run: paseo hub deploy -p ${project.slug}`);
+    reportMessage(environment, "Skipped deployment. Run `paseo hub deploy` when ready.");
   }
 
-  const activityUrl = new URL(`/projects/${project.slug}/activity`, origin).toString();
-  note(`${scaffold.testAction}\nWatch it at ${activityUrl}`, "Test your workflow");
-  outro(deploy ? "Hub is ready" : "Hub bundle is ready");
+  const triggersUrl = new URL("/triggers", origin).toString();
+  note(`${scaffold.testAction}\nManage it at ${triggersUrl}`, "Test your trigger");
+  outro(deploy ? "Hub is ready" : "Hub trigger is ready");
 }
 
 export async function continueHubGuidedSetup(
@@ -325,7 +309,7 @@ async function ensureDaemonConnection(
       true,
     ))
   ) {
-    throw new HubInitCancelledError("A connected daemon is required to create the bundle.");
+    throw new HubInitCancelledError("A connected daemon is required to create the trigger.");
   }
   return connectDaemon(origin, environment, permissions);
 }
@@ -385,48 +369,8 @@ async function waitForDaemonReady(
   );
 }
 
-async function chooseProject(
-  origin: string,
-  environment: HubGuidedSetupEnvironment,
-): Promise<HubProject> {
-  const result = await runHubProjects(
-    { hub: origin },
-    {
-      env: environment.env,
-      credentials: environment.credentials,
-      hub: environment.hub,
-      reporter: { progress() {} },
-    },
-  );
-  const resolution = resolveHubInitProjects(result.data.projects);
-  if (resolution.kind === "none") {
-    throw new HubInitCancelledError(
-      `No Hub projects exist yet. Create one at ${new URL("/projects/new", origin).toString()}, then run paseo hub init again.`,
-    );
-  }
-  if (resolution.kind === "selected") {
-    return resolution.project;
-  }
-  const slug = await requiredSelect(environment, {
-    message: "Project",
-    options: resolution.projects.map((project) => ({
-      value: project.slug,
-      label: project.name,
-      hint: project.slug,
-    })),
-  });
-  const project = resolution.projects.find((candidate) => candidate.slug === slug);
-  if (project === undefined) {
-    throw new HubCommandError(
-      "HUB_PROJECT_SELECTION_INVALID",
-      "The selected Hub project is unavailable.",
-    );
-  }
-  return project;
-}
-
 async function resolveStarterTriggerConnections(
-  resources: HubSetupResources,
+  resources: HubConfigurationResources,
   cwd: string,
 ): Promise<HubStarterTriggerConnection[]> {
   const remote = await readCommandValue("git", ["remote", "get-url", "origin"], cwd);
@@ -434,7 +378,7 @@ async function resolveStarterTriggerConnections(
   const connections = availableStarterTriggerConnections(resources, repository);
   if (connections.length === 0) {
     throw new HubInitCancelledError(
-      "No Hub app connection is ready for this workflow.\nConnect GitHub, Slack, or Discord in Hub → Apps, then run `paseo hub init` again.",
+      "No Hub app connection is ready for this trigger.\nConnect GitHub, Slack, or Discord in Hub → Apps, then run `paseo hub init` again.",
     );
   }
   return connections;
@@ -446,10 +390,10 @@ function reportStarterTriggerConnections(
 ): void {
   const details = `${connections.map(({ label }) => label).join("\n")}\n\nOnly configured connections are shown. To add another, open Hub → Apps, then run \`paseo hub init\` again.`;
   if (environment.prompts === undefined) {
-    note(details, "Hub app connections ready for this workflow");
+    note(details, "Hub app connections ready for this trigger");
     return;
   }
-  environment.prompts.message(`Hub app connections ready for this workflow:\n${details}`);
+  environment.prompts.message(`Hub app connections ready for this trigger:\n${details}`);
 }
 
 async function chooseStarterTriggerConnection(
@@ -478,19 +422,19 @@ async function chooseStarterTriggerConnection(
 async function chooseStarterAgentRuntime(
   environment: HubGuidedSetupEnvironment,
   cwd: string,
-): Promise<HubStarterAgentRuntime> {
+): Promise<HubStarterAgentRuntime & { mode: string }> {
   const providers = await waitForStarterAgentProviders(environment, cwd);
   const provider = await chooseStarterAgentProvider(environment, providers);
   const model = await chooseStarterAgentModel(environment, provider);
   const mode = await chooseStarterAgentMode(environment, provider);
   const runtime = selectedStarterAgentRuntime(provider, model, mode);
-  if (runtime === undefined) {
+  if (runtime?.mode === undefined) {
     throw new HubCommandError(
       "HUB_AGENT_RUNTIME_SELECTION_INVALID",
       "The selected starter agent runtime is no longer available. Run paseo hub init again.",
     );
   }
-  return runtime;
+  return { ...runtime, mode: runtime.mode };
 }
 
 async function waitForStarterAgentProviders(
@@ -503,7 +447,14 @@ async function waitForStarterAgentProviders(
       while (true) {
         const snapshot = await daemon.getProvidersSnapshot({ cwd });
         const state = starterAgentProviderSnapshotState(snapshot.entries);
-        if (state.kind === "ready") return state.providers;
+        if (state.kind === "ready") {
+          const providers = state.providers.filter(({ modes }) => modes.length > 0);
+          if (providers.length > 0) return providers;
+          throw new HubCommandError(
+            "HUB_AGENT_RUNTIME_REQUIRED",
+            "No agent runtime with an execution mode is available from this daemon. Configure one, then run paseo hub init again.",
+          );
+        }
         if (state.kind === "unavailable") {
           throw new HubCommandError(
             "HUB_AGENT_RUNTIME_REQUIRED",
@@ -613,13 +564,13 @@ async function collectProviderIdentity(
   };
 }
 
-async function loadSetupResources(
+async function loadConfigurationResources(
   origin: string,
   environment: HubGuidedSetupEnvironment,
-): Promise<HubSetupResources> {
+): Promise<HubConfigurationResources> {
   try {
     return await withSpinner("Loading Hub connections", () =>
-      environment.hub.listSetupResources(
+      environment.hub.listConfigurationResources(
         origin,
         resolveHubCredential({
           options: { origin },
@@ -630,38 +581,17 @@ async function loadSetupResources(
       ),
     );
   } catch (error) {
-    if (error instanceof HubCommandError && error.code === "HUB_NOT_FOUND") {
+    if (
+      error instanceof HubCommandError &&
+      (error.code === "HUB_NOT_FOUND" || error.code === "HUB_INVALID_RESPONSE")
+    ) {
       throw new HubCommandError(
         "HUB_UPDATE_REQUIRED",
-        "This Hub needs an update before guided setup can use provider IDs. Update Hub and try again.",
+        "This Hub needs an update before guided setup can use organization triggers. Update Hub and try again.",
       );
     }
     throw error;
   }
-}
-
-async function loadDaemonResource(
-  origin: string,
-  daemonId: string,
-  environment: HubGuidedSetupEnvironment,
-): Promise<HubConfigurationResources["daemons"][number]> {
-  const resources = await environment.hub.listConfigurationResources(
-    origin,
-    resolveHubCredential({
-      options: { origin },
-      env: environment.env,
-      credentials: environment.credentials,
-      origin,
-    }),
-  );
-  const daemon = resources.daemons.find(({ id }) => id === daemonId);
-  if (daemon === undefined) {
-    throw new HubCommandError(
-      "HUB_DAEMON_RESOURCE_MISSING",
-      "The connected daemon is not available in this Hub organization. Reconnect it and try again.",
-    );
-  }
-  return daemon;
 }
 
 async function writeScaffold(
@@ -691,14 +621,40 @@ function foundationHubStarterAdmissionError(): HubCommandError {
   );
 }
 
-async function pathExists(target: string): Promise<boolean> {
+async function prepareScaffoldDestination(cwd: string, triggerPath: string): Promise<boolean> {
+  const root = path.resolve(cwd);
+  await requireSafeScaffoldDirectory(path.join(root, ".paseo"), ".paseo");
+  await requireSafeScaffoldDirectory(path.join(root, ".paseo", "triggers"), ".paseo/triggers");
+  const destination = path.join(root, triggerPath);
   try {
-    await lstat(target);
+    const stats = await lstat(destination);
+    if (stats.isSymbolicLink()) throw unsafeScaffoldPath(triggerPath);
     return true;
   } catch (error) {
     if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
+}
+
+async function requireSafeScaffoldDirectory(target: string, displayPath: string): Promise<void> {
+  try {
+    const stats = await lstat(target);
+    if (stats.isSymbolicLink()) throw unsafeScaffoldPath(displayPath);
+    if (!stats.isDirectory()) {
+      throw new HubCommandError(
+        "HUB_TRIGGER_DIRECTORY_INVALID",
+        `${displayPath} must be a directory.`,
+      );
+    }
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+    // Foundation keeps every scaffold write path closed; see writeScaffold.
+    throw foundationHubStarterAdmissionError();
+  }
+}
+
+function unsafeScaffoldPath(triggerPath: string): HubCommandError {
+  return new HubCommandError("HUB_TRIGGER_UNSAFE_PATH", `${triggerPath} must not use a symlink.`);
 }
 
 function errorCode(error: unknown): string | undefined {

@@ -34,7 +34,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { useProviderSettingsStore } from "@/stores/provider-settings-store";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { ProviderConnectionSheet } from "@/components/provider-connection-sheet";
@@ -143,6 +143,7 @@ function getProviderStatus(
 }
 
 interface ProviderRowProps {
+  serverId: string;
   def: ProviderDefinition;
   entry: ProviderEntry;
   enabled: boolean;
@@ -153,7 +154,6 @@ interface ProviderRowProps {
   isFirst: boolean;
   canConfigureTools: boolean;
   requiresConnectionQualification: boolean;
-  serverId: string;
   qualificationModel: string | null;
   supportsConnectionQualification: boolean;
   onPress: (providerId: string) => void;
@@ -264,6 +264,7 @@ function ProviderActionsMenu({
 }
 
 function ProviderRow({
+  serverId,
   def,
   entry,
   enabled,
@@ -274,7 +275,6 @@ function ProviderRow({
   isFirst,
   canConfigureTools,
   requiresConnectionQualification,
-  serverId,
   qualificationModel,
   supportsConnectionQualification,
   onPress,
@@ -285,7 +285,7 @@ function ProviderRow({
   const { t } = useTranslation();
   const { theme } = useUnistyles();
   const isCompact = useIsCompactFormFactor();
-  const ProviderIcon = getProviderIcon(def.id);
+  const ProviderIcon = getProviderIcon(def.id, serverId);
   const providerError =
     enabled &&
     entry.status === "error" &&
@@ -651,6 +651,7 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
               return (
                 <ProviderRow
                   key={def.id}
+                  serverId={serverId}
                   def={def}
                   entry={entry}
                   enabled={resolveProviderEnabledValue(def.id, entry.enabled, optimisticEnabled)}
@@ -660,7 +661,6 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
                   canRemove={supportsProviderRemoval && entry.source === "custom"}
                   isFirst={index === 0}
                   canConfigureTools={supportsPaseoToolPolicies}
-                  serverId={serverId}
                   qualificationModel={
                     entry.models?.find((model) => model.isDefault)?.id ??
                     entry.models?.[0]?.id ??

@@ -1,3 +1,5 @@
+import type { PluginLifecycle } from "../../plugins/lifecycle/index.js";
+import { describeHookWorkspace } from "../../plugins/lifecycle/index.js";
 import { basename, resolve } from "node:path";
 import type { Logger } from "pino";
 import {
@@ -21,6 +23,7 @@ import {
   isRealpathInsideRoot,
 } from "../../../utils/path.js";
 import { resolveRegisteredProjectForWorkspaceCwd } from "../../project/harness-binding-scope.js";
+import type { UntrustedWorkspaceSource } from "../../workspace-automation-gate.js";
 
 export interface ResolveOrCreateWorkspaceIdInput {
   createdWorktree: CreatePaseoWorktreeWorkflowResult | null;
@@ -49,6 +52,7 @@ export interface CreateWorktreeWorkspaceInput {
   baseBranch: string | null;
   title: string | null;
   expectsInitialAgent?: boolean;
+  untrustedSource?: UntrustedWorkspaceSource;
 }
 
 export interface ResolveProjectHarnessTargetInput {
@@ -112,6 +116,7 @@ export function createWorkspaceProvisioningService(deps: {
   projectRegistry: ProjectRegistry;
   workspaceGitService: Pick<WorkspaceGitService, "getCheckout" | "getSnapshot" | "peekSnapshot">;
   logger: Logger;
+  lifecycle?: PluginLifecycle;
 }): WorkspaceProvisioningService {
   const { serverId, workspaceRegistry, projectRegistry, workspaceGitService, logger } = deps;
 
@@ -137,18 +142,28 @@ export function createWorkspaceProvisioningService(deps: {
       };
     }
 
-    const projectsBeforeImport = await projectRegistry.list();
-    const workspace = await createWorkspaceForDirectory(input.cwd);
+    const [projectsBeforeImport, workspacesBeforeImport] = await Promise.all([
+      projectRegistry.list(),
+      workspaceRegistry.list(),
+    ]);
+    const workspace = await findOrCreateWorkspaceForDirectory(input.cwd);
+    const createdWorkspace = workspacesBeforeImport.some(
+      (candidate) => candidate.workspaceId === workspace.workspaceId,
+    )
+      ? null
+      : workspace;
     const previousProject =
       projectsBeforeImport.find((project) => project.projectId === workspace.projectId) ?? null;
 
     try {
       return {
         value: await operation(workspace),
-        createdWorkspace: workspace,
+        createdWorkspace,
       };
     } catch (error) {
-      await rollbackFailedImportWorkspace(workspace, previousProject);
+      if (createdWorkspace) {
+        await rollbackFailedImportWorkspace(createdWorkspace, previousProject);
+      }
       throw error;
     }
   }
@@ -271,6 +286,7 @@ export function createWorkspaceProvisioningService(deps: {
       updatedAt: timestamp,
     });
     await workspaceRegistry.upsert(workspace, context);
+    deps.lifecycle?.emit("workspace.created", { workspace: describeHookWorkspace(workspace) });
     return workspace;
   }
 
@@ -301,10 +317,12 @@ export function createWorkspaceProvisioningService(deps: {
       title: input.title,
       createdAt: timestamp,
       updatedAt: timestamp,
+      ...(input.untrustedSource ? { untrustedSource: input.untrustedSource } : {}),
     });
     await workspaceRegistry.upsert(workspace, {
       expectsInitialAgent: input.expectsInitialAgent,
     });
+    deps.lifecycle?.emit("workspace.created", { workspace: describeHookWorkspace(workspace) });
     return workspace;
   }
 

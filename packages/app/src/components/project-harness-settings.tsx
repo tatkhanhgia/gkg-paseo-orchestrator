@@ -21,8 +21,8 @@ import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useFetchQuery } from "@/data/query";
 import { useTranslation } from "react-i18next";
-import { SettingsGroup } from "@/screens/settings/settings-group";
-import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsGroup } from "@/components/settings/headings/settings-group";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
 import type { WorkspaceSummary } from "@/utils/projects";
 import {
   acceptProjectHarnessCommit,
