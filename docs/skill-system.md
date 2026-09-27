@@ -73,8 +73,10 @@ Lead và Peer còn nhận một standing test-proof mandate do SLP policy compos
 này vào assignment khi delegate việc có test. Daemon chỉ gọi tên skill, không bundle bytes — source of
 truth của `test-value` nằm ngoài Foundation. Supervisor không nhận mandate này vì đã có
 `test-proof-debt-audit` trong bundle; hai rubric song song sẽ cho hai bộ verdict khác nhau. Mandate
-nằm trong composed instructions nên chỉ agent được bind sau khi daemon chạy build mới nhận; agent resume
-giữ exact persisted instructions cũ.
+nằm trong composed instructions nên chỉ binding tạo sau khi daemon chạy build mới nhận. Binding đã
+persist là immutable: agent resume replay exact instructions cũ dưới owner cũ, kể cả khi rollback
+executable. Bảng mandate thuộc canonical SLP artifact nên đổi mandate là đổi generation identity; xem
+[retained pre-mandate generation](slp-bundled-policy-pack-audit.md#retained-pre-mandate-generation-080-paseo2-resume).
 
 ## Tại sao bundle theo role
 

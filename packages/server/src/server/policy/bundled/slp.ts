@@ -31,7 +31,11 @@ import {
   BundledPolicyPackRegistry,
   type BundledPolicyPackGeneration,
 } from "../bundled-policy-pack.js";
-import { SLP_ROLE_BINDING_POLICY } from "./slp/role-binding-policy.js";
+import {
+  SLP_ROLE_BINDING_POLICY,
+  SLP_ROLE_INSTRUCTION_MANDATES,
+  type SlpRoleInstructionMandates,
+} from "./slp/role-binding-policy.js";
 import { SLP_COUNCIL_POLICY, SLP_COUNCIL_POLICY_VERSION } from "./slp/council-policy.js";
 import {
   SLP_COORDINATION_POLICY,
@@ -48,7 +52,10 @@ import {
   SLP_LIFECYCLE_ATTENTION_POLICY_VERSION,
 } from "./slp/lifecycle-attention-policy.js";
 import { SLP_FINISH_NOTIFICATION_POLICY_VERSION } from "./slp/finish-notification-policy.js";
-import { registerRetainedSlpGenerations } from "./slp/retained-generations.js";
+import {
+  registerRetainedPreMandateSlpGeneration,
+  registerRetainedSlpGenerations,
+} from "./slp/retained-generations.js";
 import type { AgentEventPolicy } from "../../agent/event-policy-runtime.js";
 import type { TrustedPolicyContribution } from "../trusted-policy.js";
 import type { RoleBindingPolicyContribution } from "../role-binding-policy.js";
@@ -84,7 +91,17 @@ export interface SlpBundledPolicyContribution extends TrustedPolicyContribution 
   ): Promise<PersistedRoleBinding>;
 }
 
-function canonicalSlpArtifactBytes(overrides: { coordinationPolicyVersion?: string } = {}): string {
+interface CanonicalSlpArtifactOverrides {
+  coordinationPolicyVersion?: string;
+  /** `null` reproduces a generation that shipped before the mandate table existed. */
+  roleInstructionMandates?: SlpRoleInstructionMandates | null;
+}
+
+function canonicalSlpArtifactBytes(overrides: CanonicalSlpArtifactOverrides = {}): string {
+  const roleInstructionMandates =
+    overrides.roleInstructionMandates === null
+      ? undefined
+      : (overrides.roleInstructionMandates ?? SLP_ROLE_INSTRUCTION_MANDATES);
   return JSON.stringify({
     manifest: { id: "slp", abiVersion: 1, policyVersion: SLP_BUNDLED_POLICY_VERSION },
     roleContractVersion: PASEO_ROLE_CONTRACT_VERSION,
@@ -106,6 +123,8 @@ function canonicalSlpArtifactBytes(overrides: { coordinationPolicyVersion?: stri
     finishNotificationPolicyVersion: SLP_FINISH_NOTIFICATION_POLICY_VERSION,
     skills: buildFoundationSkillArtifactDescriptor(),
     harness: buildHarnessPackageArtifactDescriptor(),
+    // Last and omitted when undefined, so historical generations recompute their exact bytes.
+    roleInstructionMandates,
   });
 }
 
@@ -123,7 +142,17 @@ function canonicalSlpArtifactBytes(overrides: { coordinationPolicyVersion?: stri
 export function buildCanonicalSlpArtifactBytesForCoordinationVersion(
   coordinationPolicyVersion: string,
 ): string {
-  return canonicalSlpArtifactBytes({ coordinationPolicyVersion });
+  // .60 predates the role instruction mandate table.
+  return canonicalSlpArtifactBytes({ coordinationPolicyVersion, roleInstructionMandates: null });
+}
+
+/**
+ * Current source with the role instruction mandate table removed: the exact artifact of the
+ * generation that shipped before the `test-value` mandate (release 0.8.0-paseo.2). See
+ * `registerRetainedPreMandateSlpGeneration`.
+ */
+export function buildCanonicalSlpArtifactBytesWithoutRoleMandates(): string {
+  return canonicalSlpArtifactBytes({ roleInstructionMandates: null });
 }
 
 export interface CreateSlpBundledPolicyRegistryOptions {
@@ -141,22 +170,23 @@ export function createDefaultSlpBundledPolicyRegistry(
  * generation-pinned override (see retained-generations.ts) that must swap in a frozen
  * historical policy piece for exactly one field while keeping the rest identical.
  */
-export function buildDefaultSlpBundledPolicyContribution(): SlpBundledPolicyContribution {
+export function buildDefaultSlpBundledPolicyContribution(
+  roleBindingPolicy: RoleBindingPolicyContribution<string> = SLP_ROLE_BINDING_POLICY,
+): SlpBundledPolicyContribution {
   return {
-    roleBindingPolicy: SLP_ROLE_BINDING_POLICY,
+    roleBindingPolicy,
     councilPolicy: SLP_COUNCIL_POLICY,
     coordinationPolicy: SLP_COORDINATION_POLICY,
     checkpointPolicy: SLP_CHECKPOINT_POLICY,
     eventPolicies: [SLP_ATTENTION_EVENT_POLICY, SLP_LIFECYCLE_ATTENTION_EVENT_POLICY],
     executionProfilePolicy: SLP_EXECUTION_PROFILE_POLICY,
     buildRoleProfileCatalog,
-    workspaceProtocolReadership: (roleId) =>
-      SLP_ROLE_BINDING_POLICY.workspaceProtocolReadership(roleId),
+    workspaceProtocolReadership: (roleId) => roleBindingPolicy.workspaceProtocolReadership(roleId),
     preflightRoleBinding: (input) => {
       const executionProfileId = input.executionProfileId
         ? SLP_EXECUTION_PROFILE_POLICY.parseId(input.executionProfileId)
         : undefined;
-      return SLP_ROLE_BINDING_POLICY.preflight({
+      return roleBindingPolicy.preflight({
         roleId: input.roleId,
         assignment: input.assignment,
         ...(executionProfileId ? { executionProfileId } : {}),
@@ -173,7 +203,7 @@ export function buildDefaultSlpBundledPolicyContribution(): SlpBundledPolicyCont
               }
             : {}),
         },
-        SLP_ROLE_BINDING_POLICY,
+        roleBindingPolicy,
       ),
   };
 }
@@ -224,6 +254,11 @@ function populateSlpBundledPolicyRegistry(
     policyVersion: SLP_BUNDLED_POLICY_VERSION,
     buildDefaultContribution: buildDefaultSlpBundledPolicyContribution,
     buildArtifactBytesForCoordinationVersion: buildCanonicalSlpArtifactBytesForCoordinationVersion,
+  });
+  registerRetainedPreMandateSlpGeneration(registry, {
+    policyVersion: SLP_BUNDLED_POLICY_VERSION,
+    buildArtifactBytes: buildCanonicalSlpArtifactBytesWithoutRoleMandates,
+    buildContribution: buildDefaultSlpBundledPolicyContribution,
   });
   return registry;
 }
