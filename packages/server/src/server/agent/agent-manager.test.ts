@@ -12268,6 +12268,14 @@ test("onWorkspaceStateMayHaveChanged is not called for running shell tool calls"
   expect(onWorkspaceStateMayHaveChanged).not.toHaveBeenCalled();
 });
 
+// The standing test-proof mandate every spawned Lead and Peer must receive, clause by clause.
+const TEST_VALUE_MANDATE_CLAUSES = [
+  "load the `test-value` skill first and follow it",
+  "five gate answers for every added or changed test",
+  "Do not delete, merge, or demote tests outside the assigned scope",
+  "carry this requirement into the delegate's assignment",
+] as const;
+
 // oxlint-disable-next-line complexity -- This integration-style contract test intentionally covers one complete launch/reload boundary.
 test("role-bound create persists immutable binding and passes only launch instructions", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-role-binding-"));
@@ -12367,6 +12375,9 @@ test("role-bound create persists immutable binding and passes only launch instru
       roleId: "lead",
       instructions: expect.stringContaining("Role: Lead"),
     });
+    for (const clause of TEST_VALUE_MANDATE_CLAUSES) {
+      expect(client.launchContexts[0]?.roleBinding?.instructions).toContain(clause);
+    }
     expect(client.preRegistrationRoleIds[0]).toBe("lead");
     expect(preCatalogRoleIds[0]).toBe("lead");
     expect(client.launchConfigs[0]?.mcpServers?.paseo).toBeUndefined();
@@ -12928,6 +12939,9 @@ test("Council specialization persists exact bytes through create and resume", as
     expect(client.launchContexts[0]?.roleBinding?.instructions).toContain(
       "You are the Tech Team Solution Architect.",
     );
+    for (const clause of TEST_VALUE_MANDATE_CLAUSES) {
+      expect(client.launchContexts[0]?.roleBinding?.instructions).toContain(clause);
+    }
     const exactInstructions = created.roleBinding?.instructions;
     const stored = await storage.get(created.id);
     expect(stored?.roleBinding?.instructions).toBe(exactInstructions);

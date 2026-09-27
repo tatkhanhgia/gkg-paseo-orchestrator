@@ -81,6 +81,19 @@ function buildBeadsSkillAdmissionInstruction(
 }
 
 /**
+ * Standing test-proof mandate for the two roles that write and review tests. The skill itself stays
+ * user-global (single source of truth outside the Foundation bundle), so this names it without
+ * embedding its bytes. Supervisor is excluded: its Foundation bundle already carries
+ * `test-proof-debt-audit`, and a second proof rubric would give it two verdict vocabularies.
+ */
+const TEST_VALUE_MANDATE_ROLES: ReadonlySet<PaseoRoleId> = new Set(["lead", "peer"]);
+
+function buildTestValueMandateInstruction(roleId: PaseoRoleId): string | undefined {
+  if (!TEST_VALUE_MANDATE_ROLES.has(roleId)) return undefined;
+  return "Test proof mandate: when writing, changing, or reviewing tests, load the `test-value` skill first and follow it. The handback includes the skill's five gate answers for every added or changed test. Do not delete, merge, or demote tests outside the assigned scope. When delegating work that touches tests, carry this requirement into the delegate's assignment. If `test-value` is unavailable in this runtime, say so in the handback instead of substituting another rubric.";
+}
+
+/**
  * Mandatory Project Harness admission for EVERY SLP role, including Peer.
  * Unlike `buildBeadsSkillAdmissionInstruction`, this is never gated on
  * `roleProfile.allowedSkills` or any `roleProfilePreferences` opt-out — a
@@ -115,6 +128,7 @@ function composeInstructions(input: RoleBindingInstructionCompositionInput): str
     buildSlpAssignmentInstruction(input.assignmentContract),
     harnessInstruction,
     buildBeadsSkillAdmissionInstruction(input.definition.id, input.roleProfile),
+    buildTestValueMandateInstruction(input.definition.id),
   ]
     .filter((part): part is string => Boolean(part))
     .join("\n\n");

@@ -150,3 +150,14 @@ describe("mandatory Project Harness admission (H1)", () => {
     expect(fixtureInstructions).not.toContain("Mandatory Project Harness admission");
   });
 });
+
+// Lead and Peer delivery of the mandate is proven at the AgentManager launch boundary
+// (agent-manager.test.ts); this pins the one role deliberately left out.
+describe("test-value mandate role scope", () => {
+  test("Supervisor keeps its own proof rubric and is not given the test-value mandate", async () => {
+    const binding = await materialize("supervisor", "supervisor-test-value-scope-1");
+    expect(binding.instructions).toContain("Role: Supervisor");
+    // Backticked skill name: the bare word can appear in resource paths (e.g. a worktree name).
+    expect(binding.instructions).not.toContain("`test-value`");
+  });
+});

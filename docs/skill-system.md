@@ -67,6 +67,15 @@ admission map là
 instructions của cả ba role. Agent áp dụng package đã load này trực tiếp; không phụ thuộc global skill
 discovery hoặc một copy cũ trong provider home. Thiếu/invalid package block role materialization.
 
+Lead và Peer còn nhận một standing test-proof mandate do SLP policy compose
+(`policy/bundled/slp/role-binding-policy.ts`): viết, sửa hoặc review test thì load user-global skill
+`test-value` trước, ghi năm câu gate vào handback, không xoá/gộp/hạ test ngoài scope, và mang yêu cầu
+này vào assignment khi delegate việc có test. Daemon chỉ gọi tên skill, không bundle bytes — source of
+truth của `test-value` nằm ngoài Foundation. Supervisor không nhận mandate này vì đã có
+`test-proof-debt-audit` trong bundle; hai rubric song song sẽ cho hai bộ verdict khác nhau. Mandate
+nằm trong composed instructions nên chỉ agent được bind sau khi daemon chạy build mới nhận; agent resume
+giữ exact persisted instructions cũ.
+
 ## Tại sao bundle theo role
 
 Skill topology đi theo attention:
