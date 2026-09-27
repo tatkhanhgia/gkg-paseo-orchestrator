@@ -80,26 +80,6 @@ function buildBeadsSkillAdmissionInstruction(
   return "Role skill admission: `beads-issue-tracker` is active from the immutable Foundation bundle. Its assignment-start checkpoint, mutation boundary, and handback rule are projected in the Assignment Contract above; do not search for or load a second copy.";
 }
 
-/** Role-keyed standing instructions appended after the Beads skill admission. */
-export type SlpRoleInstructionMandates = Readonly<Partial<Record<PaseoRoleId, string>>>;
-
-const TEST_VALUE_MANDATE =
-  "Test proof mandate: when writing, changing, or reviewing tests, load the `test-value` skill first and follow it. The handback includes the skill's five gate answers for every added or changed test. Do not delete, merge, or demote tests outside the assigned scope. When delegating work that touches tests, carry this requirement into the delegate's assignment. If `test-value` is unavailable in this runtime, say so in the handback instead of substituting another rubric.";
-
-/**
- * Standing test-proof mandate for the two roles that write and review tests. The skill itself stays
- * user-global (single source of truth outside the Foundation bundle), so this names it without
- * embedding its bytes. Supervisor is excluded: its Foundation bundle already carries
- * `test-proof-debt-audit`, and a second proof rubric would give it two verdict vocabularies.
- *
- * This table is part of the canonical SLP artifact (see `canonicalSlpArtifactBytes` in slp.ts), so
- * editing any entry changes the generation identity instead of changing composition under an old one.
- */
-export const SLP_ROLE_INSTRUCTION_MANDATES: SlpRoleInstructionMandates = {
-  lead: TEST_VALUE_MANDATE,
-  peer: TEST_VALUE_MANDATE,
-};
-
 /**
  * Mandatory Project Harness admission for EVERY SLP role, including Peer.
  * Unlike `buildBeadsSkillAdmissionInstruction`, this is never gated on
@@ -124,44 +104,23 @@ function buildHarnessAdmissionInstruction(
   return `Mandatory Project Harness admission (package ${harnessBinding.package}, generation ${harnessBinding.generation}, artifact ${harnessBinding.artifactDigest}; project=${harnessBinding.projectId}, workspace=${harnessBinding.workspaceId}): read ${entryMap.path} before orchestration. Pinned resources: ${resourcePins}. This is a mandatory role minimum, not an optional skill — it cannot be declined via role-profile preferences.`;
 }
 
-function createComposeInstructions(
-  mandates: SlpRoleInstructionMandates,
-): (input: RoleBindingInstructionCompositionInput) => string {
-  return function composeInstructions(input) {
-    const harnessInstruction = input.harnessBinding
-      ? buildHarnessAdmissionInstruction(input.definition.id, input.harnessBinding)
-      : undefined;
-    return [
-      input.definition.instructions,
-      input.executionProfile?.instructions,
-      buildProtocolInstruction(input.workspaceProtocol, input.hasProtocolException),
-      buildSlpAssignmentInstruction(input.assignmentContract),
-      harnessInstruction,
-      buildBeadsSkillAdmissionInstruction(input.definition.id, input.roleProfile),
-      mandates[input.definition.id],
-    ]
-      .filter((part): part is string => Boolean(part))
-      .join("\n\n");
-  };
+function composeInstructions(input: RoleBindingInstructionCompositionInput): string {
+  const harnessInstruction = input.harnessBinding
+    ? buildHarnessAdmissionInstruction(input.definition.id, input.harnessBinding)
+    : undefined;
+  return [
+    input.definition.instructions,
+    input.executionProfile?.instructions,
+    buildProtocolInstruction(input.workspaceProtocol, input.hasProtocolException),
+    buildSlpAssignmentInstruction(input.assignmentContract),
+    harnessInstruction,
+    buildBeadsSkillAdmissionInstruction(input.definition.id, input.roleProfile),
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
 }
 
-/**
- * Builds the SLP role-binding policy for one mandate table. The active generation uses
- * `SLP_ROLE_INSTRUCTION_MANDATES`; a retained generation passes the table it shipped with.
- */
-export function createSlpRoleBindingPolicy(
-  mandates: SlpRoleInstructionMandates,
-): RoleBindingPolicyContribution<string> {
-  return {
-    ...SLP_ROLE_BINDING_POLICY_BASE,
-    composeInstructions: createComposeInstructions(mandates),
-  };
-}
-
-const SLP_ROLE_BINDING_POLICY_BASE: Omit<
-  RoleBindingPolicyContribution<string>,
-  "composeInstructions"
-> = {
+export const SLP_ROLE_BINDING_POLICY: RoleBindingPolicyContribution<string> = {
   getRoleDefinition: getFoundationRoleDefinition,
   getExecutionProfile: (profileId) =>
     getFoundationExecutionProfileDefinition(SLP_EXECUTION_PROFILE_POLICY.parseId(profileId)),
@@ -229,6 +188,7 @@ const SLP_ROLE_BINDING_POLICY_BASE: Omit<
       }
     }
   },
+  composeInstructions,
   preflight(input) {
     const envelope = preflightSlpAssignmentEnvelope({
       roleId: input.roleId,
@@ -248,5 +208,3 @@ const SLP_ROLE_BINDING_POLICY_BASE: Omit<
     return envelope;
   },
 };
-
-export const SLP_ROLE_BINDING_POLICY = createSlpRoleBindingPolicy(SLP_ROLE_INSTRUCTION_MANDATES);

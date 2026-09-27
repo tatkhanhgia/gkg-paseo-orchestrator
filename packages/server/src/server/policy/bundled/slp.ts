@@ -31,11 +31,12 @@ import {
   BundledPolicyPackRegistry,
   type BundledPolicyPackGeneration,
 } from "../bundled-policy-pack.js";
+import { SLP_ROLE_BINDING_POLICY } from "./slp/role-binding-policy.js";
 import {
-  SLP_ROLE_BINDING_POLICY,
   SLP_ROLE_INSTRUCTION_MANDATES,
   type SlpRoleInstructionMandates,
-} from "./slp/role-binding-policy.js";
+  withRoleInstructionMandates,
+} from "./slp/role-instruction-mandates.js";
 import { SLP_COUNCIL_POLICY, SLP_COUNCIL_POLICY_VERSION } from "./slp/council-policy.js";
 import {
   SLP_COORDINATION_POLICY,
@@ -170,8 +171,14 @@ export function createDefaultSlpBundledPolicyRegistry(
  * generation-pinned override (see retained-generations.ts) that must swap in a frozen
  * historical policy piece for exactly one field while keeping the rest identical.
  */
+/** Active-generation role-binding policy: the retained-qualified base plus the mandate table. */
+const SLP_MANDATED_ROLE_BINDING_POLICY = withRoleInstructionMandates(
+  SLP_ROLE_BINDING_POLICY,
+  SLP_ROLE_INSTRUCTION_MANDATES,
+);
+
 export function buildDefaultSlpBundledPolicyContribution(
-  roleBindingPolicy: RoleBindingPolicyContribution<string> = SLP_ROLE_BINDING_POLICY,
+  roleBindingPolicy: RoleBindingPolicyContribution<string> = SLP_MANDATED_ROLE_BINDING_POLICY,
 ): SlpBundledPolicyContribution {
   return {
     roleBindingPolicy,
@@ -252,7 +259,9 @@ function populateSlpBundledPolicyRegistry(
   // generation this module does not retain.
   registerRetainedSlpGenerations(registry, {
     policyVersion: SLP_BUNDLED_POLICY_VERSION,
-    buildDefaultContribution: buildDefaultSlpBundledPolicyContribution,
+    // .60 predates the mandate table, so it keeps the unwrapped role-binding policy.
+    buildDefaultContribution: () =>
+      buildDefaultSlpBundledPolicyContribution(SLP_ROLE_BINDING_POLICY),
     buildArtifactBytesForCoordinationVersion: buildCanonicalSlpArtifactBytesForCoordinationVersion,
   });
   registerRetainedPreMandateSlpGeneration(registry, {

@@ -14,7 +14,7 @@ import {
   computeRetainedHookFidelity,
   type RetainedHookFidelityCheckResult,
 } from "./retained-hook-fidelity-guard.js";
-import { createSlpRoleBindingPolicy } from "./role-binding-policy.js";
+import { SLP_ROLE_BINDING_POLICY } from "./role-binding-policy.js";
 import type { RoleBindingPolicyContribution } from "../../role-binding-policy.js";
 
 /**
@@ -118,9 +118,9 @@ export const RETAINED_PRE_MANDATE_SLP_GENERATION_DIGEST =
  * stored agent resolves this owner, whichever comes first.
  *
  * Registers (never activates) the 0.8.0-paseo.2 generation so Leads and Peers bound before the
- * mandate upgrade keep resolving their pinned owner. The retained contribution composes with an
- * empty mandate table, so this identity keeps exactly its original composition semantics; resumed
- * agents replay their persisted instruction bytes either way.
+ * mandate upgrade keep resolving their pinned owner. The retained contribution uses the unwrapped
+ * role-binding policy (no mandate table), so this identity keeps exactly its original composition
+ * semantics; resumed agents replay their persisted instruction bytes either way.
  *
  * Admission is byte-verified: current source with the mandate table removed must hash to the
  * recorded digest. Any later change to roles, execution profiles, tool ceilings, or skill/harness
@@ -155,7 +155,7 @@ export function registerRetainedPreMandateSlpGeneration(
     registry.registerGeneration({
       manifest: { id: "slp", abiVersion: 1, policyVersion: input.policyVersion },
       artifactBytes,
-      contribution: input.buildContribution(createSlpRoleBindingPolicy({})),
+      contribution: input.buildContribution(SLP_ROLE_BINDING_POLICY),
     });
   } catch (error) {
     registry.recordGenerationLoadFailure(owner, error);
