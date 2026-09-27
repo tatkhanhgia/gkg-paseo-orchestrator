@@ -180,3 +180,21 @@ assignment-policy.ts, harness-package-policy.ts, role-definitions.ts, skill-poli
 module này chưa có mitigation nào (phần DATA của nó đã được cover gián tiếp qua digest content mà
 `role-definitions.json`/DATA-only guard kia embed); `assignment-policy.ts` vẫn là residual gap đã
 named, acknowledged, không có mitigation nào cả.
+
+## Retained pre-mandate generation (0.8.0-paseo.2 resume)
+
+Role instruction mandate table (`SLP_ROLE_INSTRUCTION_MANDATES` trong
+`policy/bundled/slp/role-instruction-mandates.ts`, hiện là `test-value` mandate cho Lead và Peer) nằm trong
+canonical SLP artifact. Active generation bọc `SLP_ROLE_BINDING_POLICY` bằng
+`withRoleInstructionMandates`; bản thân `role-binding-policy.ts` giữ nguyên bytes mà retained-hook-fidelity
+guard đã qualify cho `.60`. Sửa bất kỳ entry nào sẽ đổi generation digest, nên một generation identity chỉ
+ứng với đúng một composition semantics.
+
+Generation `7a9e0953…fb01` của release `0.8.0-paseo.2` ship trước bảng này. `registerRetainedPreMandateSlpGeneration`
+(`retained-generations.ts`, `COMPAT(slpPreMandateGeneration)`) đăng ký lại owner đó — không activate —
+với `SLP_ROLE_BINDING_POLICY` chưa bọc (không mandate), để Lead/Peer bind trước upgrade vẫn resolve được owner
+khi resume. Admission byte-verified: current source bỏ bảng mandate phải hash đúng digest đã ghi; mọi
+thay đổi data khác (roles, execution profiles, tool ceilings, skill/harness descriptors) làm owner này
+fail closed. Function-body-only edit trong module được reuse vẫn nằm ngoài data check này, giống active
+generation. Resume replay persisted instruction bytes, không compose lại. `.60` cũng ship trước bảng
+này: recompute của nó bỏ bảng mandate và contribution của nó cũng dùng policy chưa bọc.
