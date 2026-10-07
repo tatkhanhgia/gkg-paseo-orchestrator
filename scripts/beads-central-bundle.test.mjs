@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const repoRoot = new URL("../", import.meta.url);
 const lock = JSON.parse(
@@ -108,3 +112,82 @@ test("Nix daemon package owns the immutable Central and bd bundle", () => {
   assert.match(nixBeadsCentralSource, /beadsSourceSha256/);
   assert.match(nixBeadsCentralSource, /python3Packages/);
 });
+
+function withToolStubs(tools, callback) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "paseo-sidecar-toolchain."));
+  try {
+    const env = { ...process.env };
+    for (const [variable, { name, output }] of Object.entries(tools)) {
+      const stub = path.join(root, name);
+      writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' '${output}'\n`);
+      chmodSync(stub, 0o755);
+      env[variable] = stub;
+    }
+    return callback(env, root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function checkSidecarToolchain(env) {
+  return spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("scripts/build-beads-central-sidecar.mjs", repoRoot)),
+      "--check-toolchain",
+    ],
+    { encoding: "utf8", env },
+  );
+}
+
+const posixOnly = { skip: process.platform === "win32" && "tool stubs are POSIX shell scripts" };
+
+test(
+  "sidecar toolchain preflight accepts the uv, Python and bd versions the lock pins",
+  posixOnly,
+  () => {
+    withToolStubs(
+      {
+        PASEO_UV_BIN: { name: "uv", output: `uv ${lock.uvVersion} (stub)` },
+        PASEO_PYTHON_BIN: { name: "python3", output: `Python ${lock.pythonVersion}` },
+        PASEO_BEADS_BD_BIN: { name: "bd", output: `bd version ${lock.beadsVersion} (stub)` },
+      },
+      (env) => {
+        const result = checkSidecarToolchain(env);
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, /Beads Central sidecar toolchain ready/u);
+      },
+    );
+  },
+);
+
+test(
+  "sidecar toolchain preflight names every unpinned tool and its env var in one failure",
+  posixOnly,
+  () => {
+    const [uvMajor, uvMinor, uvPatch] = lock.uvVersion.split(".").map(Number);
+    const [pyMajor, pyMinor] = lock.pythonVersion.split(".").map(Number);
+    withToolStubs(
+      {
+        PASEO_UV_BIN: { name: "uv", output: `uv ${uvMajor}.${uvMinor}.${uvPatch + 5} (stub)` },
+        PASEO_PYTHON_BIN: { name: "python3", output: `Python ${pyMajor}.${pyMinor + 1}.0` },
+      },
+      (env, root) => {
+        const missingBd = path.join(root, "no-such-bd");
+        const result = checkSidecarToolchain({ ...env, PASEO_BEADS_BD_BIN: missingBd });
+        assert.notEqual(result.status, 0);
+        assert.match(
+          result.stderr,
+          new RegExp(`uv version mismatch: expected ${lock.uvVersion.replaceAll(".", "\\.")}`, "u"),
+        );
+        assert.match(result.stderr, /set PASEO_UV_BIN/u);
+        assert.match(result.stderr, /Python version mismatch/u);
+        assert.match(result.stderr, /set PASEO_PYTHON_BIN/u);
+        assert.ok(
+          result.stderr.includes(`PASEO_BEADS_BD_BIN points to a missing file: ${missingBd}`),
+          result.stderr,
+        );
+      },
+    );
+  },
+);

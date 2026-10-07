@@ -149,6 +149,61 @@ smoke dưới đây vẫn bắt buộc trước publish, khác với Electron pa
 Manifest một target không chứng minh đã validate Windows, Linux hoặc macOS Intel. Chỉ phát hành
 artifact tương ứng khi đã có môi trường build và smoke riêng cho target đó.
 
+### Local release build
+
+Một lệnh build, cài và restart local stack: `./scripts/local-stack.sh --apply`. Script import
+Foundation nếu lock cũ, build protocol, chạy `build:macos-web-cli-artifact`, rồi chỉ restart khi
+readback mới cho thấy không agent nào đang chạy. `./scripts/local-stack.sh` không cờ chỉ báo drift.
+
+Artifact cần một toolchain ghim cứng. Máy dev thường không khớp (Homebrew `uv` mới hơn, không có
+Python 3.13, không có Go), nên ghim bằng bốn biến env:
+
+| Biến                      | Phải trỏ tới                                                                          | Ghim ở                               |
+| ------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------ |
+| `PASEO_RELEASE_NODE_ROOT` | thư mục Node có `bin/node` và `LICENSE`, đúng kiến trúc máy build                     | Node được ship trong artifact        |
+| `PASEO_UV_BIN`            | `uv` đúng `uvVersion`                                                                 | `components/beads-central.lock.json` |
+| `PASEO_PYTHON_BIN`        | Python cùng series `pythonVersion` (vd. 3.13.x)                                       | `components/beads-central.lock.json` |
+| `PASEO_BEADS_BD_BIN`      | `bd` dựng sẵn đúng `beadsVersion`; bỏ trống thì cần Go `goVersion` để build từ source | `components/beads-central.lock.json` |
+
+Kiểm toolchain trong vài giây, không build gì:
+
+```bash
+node scripts/build-beads-central-sidecar.mjs --check-toolchain
+```
+
+`build:macos-web-cli-artifact` chạy cùng kiểm tra này ngay sau khi tìm Node, trước bước build sản
+phẩm, và liệt kê mọi tool lệch kèm tên biến cần đặt.
+
+Giữ toolchain ngoài git trong `.dev/` (đã gitignore) và gọi qua một wrapper cục bộ, ví dụ
+`.dev/apply.sh`:
+
+```zsh
+#!/bin/zsh
+# Local-only: point the release build at the pinned toolchain under .dev/.
+set -e
+root="${0:A:h:h}"
+tools="$root/.dev/toolchain"
+export PASEO_RELEASE_NODE_ROOT="$root/.dev/release-node"
+export PASEO_UV_BIN="$tools/bin/uv"
+export PASEO_PYTHON_BIN="$tools/python/cpython-3.13-macos-aarch64-none/bin/python3.13"
+export PASEO_BEADS_BD_BIN="$tools/bin/bd"
+cd "$root"
+exec ./scripts/local-stack.sh "$@"
+```
+
+`.dev/apply.sh` báo drift; `.dev/apply.sh --apply` build, cài và restart. Dựng toolchain một lần:
+
+- Node: giải nén bản Node chính thức (`node-v<version>-darwin-arm64.tar.gz`) vào `.dev/release-node`;
+  thư mục gốc của bản giải nén đã có `bin/node` và `LICENSE`.
+- `uv`: cài đúng phiên bản vào `.dev/toolchain/bin`, ví dụ
+  `curl -LsSf https://astral.sh/uv/<uvVersion>/install.sh | env UV_INSTALL_DIR=.dev/toolchain/bin UV_NO_MODIFY_PATH=1 sh`.
+- Python: `UV_PYTHON_INSTALL_DIR=.dev/toolchain/python .dev/toolchain/bin/uv python install 3.13`.
+- `bd`: chép `components/beads-central/bin/bd` từ một release đã cài
+  (`~/.local/share/paseo-web-cli/releases/<version>/`) vào `.dev/toolchain/bin/bd`, rồi kiểm
+  `bd version` khớp `beadsVersion`.
+
+Chạy `--check-toolchain` với các biến trên sau khi dựng xong.
+
 ## Two steps
 
 A release has exactly two steps. The agent does the first, the user authorizes the second.

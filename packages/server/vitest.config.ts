@@ -22,6 +22,14 @@ export default defineConfig({
     // Windows runners intermittently starve subprocess-heavy Git tests at the
     // default worker count, leaving child processes alive past their deadlines.
     maxWorkers: process.platform === "win32" ? 2 : undefined,
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/**", "**/.dev/**"],
+    // write-build-provenance.test.mjs is a node:test artifact check of the built dist;
+    // run it after `npm run build` with `npm run test:build-provenance`.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.claude/**",
+      "**/.dev/**",
+      "scripts/write-build-provenance.test.mjs",
+    ],
   },
 });

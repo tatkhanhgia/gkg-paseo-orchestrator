@@ -90,7 +90,7 @@ function resolveBundledNodeRoot() {
     if (existsSync(node) && existsSync(license)) return realpathSync(candidate);
   }
   fail(
-    "Could not locate a relocatable Node distribution. Set PASEO_RELEASE_NODE_ROOT to a Node installation containing the Node executable and LICENSE.",
+    `Could not locate a relocatable Node distribution (tried: ${candidates.join(", ")}). Set PASEO_RELEASE_NODE_ROOT to a Node installation containing ${PLATFORM === "win32" ? "node.exe" : "bin/node"} and LICENSE; see docs/release.md#local-release-build.`,
   );
 }
 
@@ -215,13 +215,17 @@ function copyNodeRuntime(nodeRoot) {
   }
 }
 
+const BEADS_SIDECAR_BUILDER = path.join(REPO_ROOT, "scripts", "build-beads-central-sidecar.mjs");
+
+// The sidecar needs uv, Python and bd (or Go); check them before the multi-minute product build
+// so a missing pin fails immediately instead of at the last packaging step.
+function assertSidecarToolchain() {
+  run(process.execPath, [BEADS_SIDECAR_BUILDER, "--check-toolchain"]);
+}
+
 function buildBeadsCentralComponent() {
   const output = path.join(STAGING_ROOT, "components", "beads-central");
-  run(process.execPath, [
-    path.join(REPO_ROOT, "scripts", "build-beads-central-sidecar.mjs"),
-    "--output",
-    output,
-  ]);
+  run(process.execPath, [BEADS_SIDECAR_BUILDER, "--output", output]);
 }
 
 function createLaunchers() {
@@ -1558,6 +1562,7 @@ function main() {
   try {
     const nodeRoot = resolveBundledNodeRoot();
     assertReleaseInputs(nodeRoot);
+    assertSidecarToolchain();
     rmSync(STAGING_ROOT, { recursive: true, force: true });
     mkdirSync(STAGING_ROOT, { recursive: true });
     buildProduct();

@@ -558,6 +558,28 @@ function mockStoredAgentRecords(get: AgentStorageSpies["get"], records: StoredAg
   get.mockImplementation(async (agentId: string) => recordsById.get(agentId) ?? null);
 }
 
+// The real AgentManager persists a record for every agent it creates, and create_agent
+// registers a durable finish-notification watch on that record. The createAgent spy does
+// not persist, so resolve the agents it returned as stored records too.
+function mockStoredAgentRecordsWithCreatedChildren(
+  spies: TestDeps["spies"],
+  records: StoredAgentRecord[],
+): void {
+  const recordsById = new Map(records.map((record) => [record.id, record]));
+  spies.agentStorage.get.mockImplementation(async (agentId: string) => {
+    const stored = recordsById.get(agentId);
+    if (stored) return stored;
+    for (const result of spies.agentManager.createAgent.mock.results) {
+      if (result.type !== "return") continue;
+      const created = (await result.value) as ManagedAgent | undefined;
+      if (created?.id === agentId) {
+        return createActiveStoredRecord({ id: created.id, cwd: created.cwd });
+      }
+    }
+    return null;
+  });
+}
+
 function expectedCreateTopologyError(roleId: PaseoRoleId): string {
   if (roleId === "lead") return "A role-bound Lead may create only a role-bound Peer";
   if (roleId === "supervisor") {
@@ -1542,7 +1564,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -1694,7 +1716,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -1750,7 +1772,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -2010,7 +2032,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -2101,7 +2123,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -2230,7 +2252,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -2359,7 +2381,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -2460,7 +2482,7 @@ describe("create_agent MCP tool", () => {
       if (id === child.id) return child;
       return null;
     });
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: lead.id,
         cwd: lead.cwd,
@@ -2515,7 +2537,7 @@ describe("create_agent MCP tool", () => {
         roleBinding: createTestRoleBinding(callerRole),
       });
       spies.agentManager.getAgent.mockReturnValue(caller);
-      mockStoredAgentRecords(spies.agentStorage.get, [
+      mockStoredAgentRecordsWithCreatedChildren(spies, [
         createActiveStoredRecord({
           id: caller.id,
           cwd: caller.cwd,
@@ -2569,7 +2591,7 @@ describe("create_agent MCP tool", () => {
       spies.agentManager.getAgent.mockImplementation((agentId: string) =>
         agentId === caller.id ? caller : null,
       );
-      mockStoredAgentRecords(spies.agentStorage.get, [
+      mockStoredAgentRecordsWithCreatedChildren(spies, [
         createActiveStoredRecord({
           id: caller.id,
           cwd: caller.cwd,
@@ -2663,7 +2685,7 @@ describe("create_agent MCP tool", () => {
     spies.agentManager.getAgent.mockImplementation((agentId: string) =>
       agentId === caller.id ? caller : null,
     );
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: caller.id,
         cwd: caller.cwd,
@@ -4600,7 +4622,7 @@ describe("create_agent MCP tool", () => {
       availableModes: [],
       config: { title: "Child" },
     } as ManagedAgent);
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({ id: "voice-agent", cwd: baseDir, workspaceId: "wks_voice" }),
     ]);
 
@@ -4716,7 +4738,7 @@ describe("create_agent MCP tool", () => {
       return null;
     });
     spies.agentManager.createAgent.mockResolvedValue(childAgent);
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: "parent-agent",
         cwd: existingCwd,
@@ -4762,7 +4784,7 @@ describe("create_agent MCP tool", () => {
       availableModes: [],
       config: { title: "Detached" },
     } as ManagedAgent);
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: "parent-agent",
         cwd: existingCwd,
@@ -4821,7 +4843,7 @@ describe("create_agent MCP tool", () => {
       availableModes: [],
       config: { title: "Child", featureValues: { fast_mode: true } },
     } as ManagedAgent);
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: "parent-agent",
         cwd: existingCwd,
@@ -4887,7 +4909,7 @@ describe("create_agent MCP tool", () => {
       },
     } as ManagedAgent;
     spies.agentManager.getAgent.mockReturnValue(parentAgent);
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: parentAgent.id,
         cwd: parentAgent.cwd,
@@ -5157,7 +5179,7 @@ describe("create_agent MCP tool", () => {
       availableModes: [],
       config: { title: "Child" },
     } as ManagedAgent);
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: "parent-agent",
         cwd: existingCwd,
@@ -5215,7 +5237,7 @@ describe("create_agent MCP tool", () => {
       availableModes: [],
       config: { title: "Child" },
     } as ManagedAgent);
-    mockStoredAgentRecords(spies.agentStorage.get, [
+    mockStoredAgentRecordsWithCreatedChildren(spies, [
       createActiveStoredRecord({
         id: "parent-agent",
         cwd: existingCwd,

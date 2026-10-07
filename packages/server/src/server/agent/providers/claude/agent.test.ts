@@ -833,41 +833,86 @@ describe("ClaudeAgentSession features", () => {
         behavior: "allow",
         updatedInput: { file_path: entryMapPath },
       });
-
-      const otherPathRead = canUseTool(
-        "Read",
-        { file_path: `${entryMapPath}.changed` },
-        { toolUseID: "other-path-read" },
-      );
-      expect(session.getPendingPermissions()).toHaveLength(1);
-      const otherPathRequest = session.getPendingPermissions()[0];
-      if (!otherPathRequest) throw new Error("Expected a permission request for a different path");
-      await session.respondToPermission(otherPathRequest.id, {
-        behavior: "deny",
-        message: "only the pinned entry map is preapproved",
-      });
-      await expect(otherPathRead).resolves.toMatchObject({
-        behavior: "deny",
-        message: "only the pinned entry map is preapproved",
-      });
-
-      const otherToolRead = canUseTool(
-        "Glob",
-        { pattern: entryMapPath },
-        { toolUseID: "other-tool-read" },
-      );
-      expect(session.getPendingPermissions()).toHaveLength(1);
-      const otherToolRequest = session.getPendingPermissions()[0];
-      if (!otherToolRequest) throw new Error("Expected a permission request for another tool");
-      await session.respondToPermission(otherToolRequest.id, {
-        behavior: "deny",
-        message: "only native Read of the pinned entry map is preapproved",
-      });
-      await expect(otherToolRead).resolves.toMatchObject({
-        behavior: "deny",
-        message: "only native Read of the pinned entry map is preapproved",
-      });
     } finally {
+      await session.close();
+    }
+  });
+
+  test("denies at once what a no-write role cannot be granted instead of waiting for an approval", async () => {
+    const { queryFactory, launches } = createQueryMock();
+    const entryMapPath = "/installed/paseo/harness/README.md";
+    const client = new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.createSession(
+      { provider: "claude", cwd: process.cwd(), modeId: "default" },
+      {
+        roleBinding: {
+          roleId: "peer",
+          instructions: "PASEO ROLE PEER",
+          noWrite: true,
+          mandatoryResourceReads: [{ key: "entryMap", path: entryMapPath, digest: "a".repeat(64) }],
+        },
+      },
+    );
+    const events: AgentStreamEvent[] = [];
+    const unsubscribe = session.subscribe((event) => events.push(event));
+
+    try {
+      await session.startTurn("inspect without changing anything");
+      const canUseTool = launches[0]?.options.canUseTool as
+        | ((
+            toolName: string,
+            input: Record<string, unknown>,
+            options: Record<string, unknown>,
+          ) => Promise<Record<string, unknown>>)
+        | undefined;
+      if (!canUseTool) throw new Error("Expected canUseTool callback");
+
+      // Only these three inputs can reach the callback; nothing answers a Peer seat's prompt.
+      const outsideCwdRead = { file_path: `${entryMapPath}.changed` };
+      await expect(
+        canUseTool("Read", outsideCwdRead, { toolUseID: "outside-cwd-read" }),
+      ).resolves.toMatchObject({
+        behavior: "deny",
+        message: expect.stringContaining("BLOCKED"),
+        interrupt: false,
+      });
+      await expect(
+        canUseTool("Glob", { pattern: entryMapPath }, { toolUseID: "other-tool" }),
+      ).resolves.toMatchObject({ behavior: "deny", message: expect.stringContaining("BLOCKED") });
+      await expect(
+        canUseTool("ExitPlanMode", { plan: "write it" }, { toolUseID: "plan" }),
+      ).resolves.toMatchObject({ behavior: "deny", message: expect.stringContaining("BLOCKED") });
+
+      expect(session.getPendingPermissions()).toEqual([]);
+      expect(events.filter((event) => event.type === "permission_requested")).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "timeline",
+          item: expect.objectContaining({
+            type: "tool_call",
+            callId: "outside-cwd-read",
+            status: "failed",
+          }),
+        }),
+      );
+
+      // A question grants no capability, so it still waits for an answer.
+      const question = canUseTool(
+        "AskUserQuestion",
+        { questions: [{ question: "Proceed?", header: "Go", options: [], multiSelect: false }] },
+        { toolUseID: "question" },
+      );
+      expect(session.getPendingPermissions().map((request) => request.kind)).toEqual(["question"]);
+      const [pending] = session.getPendingPermissions();
+      if (!pending) throw new Error("Expected the question to stay pending");
+      await session.respondToPermission(pending.id, { behavior: "deny", message: "no answer" });
+      await expect(question).resolves.toMatchObject({ behavior: "deny" });
+    } finally {
+      unsubscribe();
       await session.close();
     }
   });

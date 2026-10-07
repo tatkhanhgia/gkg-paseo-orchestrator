@@ -142,6 +142,81 @@ function hasAssignmentExpiryErrorPrefix(error: unknown): boolean {
   );
 }
 
+// Watch ids that already have a live subscription from `watchNotificationRunForParent`.
+const parentWatchesAttached = new Set<string>();
+
+/**
+ * Registers and attaches the caller's PARENT watch for the run that a finish-notification
+ * dispatch is about to start on the caller. Does nothing when the caller has no live parent.
+ *
+ * A watch is one-shot and per run, and `send_agent_prompt`/`create_agent` register it only for
+ * runs the parent itself starts. A Lead woken by its Peer's finish notification therefore ran
+ * unobserved: when that run was cancelled, nobody above the Lead heard it go idle.
+ *
+ * The watch is deliberately never retired when the dispatch then fails, times out or turns out
+ * to be a no-op. Every attempt to cancel it at the right moment lost a bell to some interleaving
+ * (the parent's own prompt sharing the watch, a run starting while the cancel was queued, a
+ * run-start wait that rejects after the run began). Leaving it pending is safe: registration
+ * reuses a pre-launch watch, so at most one waits per child/parent pair, and the worst outcome
+ * is one extra bell for the caller's next run, including after an unarchive.
+ *
+ * Known limit: the parent's own out-of-band command (e.g. `/goal pause`) can reuse this watch
+ * before the notification dispatches, and `send_agent_prompt` then cancels it for that command.
+ * That only reverts to the behaviour before this watch existed; separating the two identities
+ * needs a stored-schema change.
+ */
+async function watchNotificationRunForParent(
+  dependencies: FinishNotificationDependencies,
+  callerRecord: StoredAgentRecord | null,
+): Promise<void> {
+  const parentAgentId = getParentAgentIdFromLabels(callerRecord?.labels);
+  if (!callerRecord || !parentAgentId) return;
+  const parentRecord = await dependencies.agentStorage.get(parentAgentId);
+  if (!parentRecord || parentRecord.archivedAt || parentRecord.internal) return;
+
+  const watch = await registerFinishNotificationWatch(dependencies, {
+    childAgentId: callerRecord.id,
+    callerAgentId: parentAgentId,
+    requireParentOwnership: true,
+  });
+  // Every failed attempt reuses the same pending watch. A watcher ends only after a terminal
+  // outcome it saw running for, so a startup that never reaches `running` would otherwise stack
+  // one more live subscription per attempt, forever.
+  if (parentWatchesAttached.has(watch.watchId)) return;
+  parentWatchesAttached.add(watch.watchId);
+  attachFinishNotificationWatch(dependencies, {
+    childAgentId: callerRecord.id,
+    watch,
+    onEnd: () => parentWatchesAttached.delete(watch.watchId),
+  });
+}
+
+/**
+ * Starts the caller's notification run with the caller's parent watching it. The run is not one
+ * the parent prompted, so no watch of the parent's covers it; without this the parent sees the
+ * caller as `running`, waits for a bell, and never gets one when the run ends.
+ */
+async function sendNotificationWatchedByParent(
+  dependencies: FinishNotificationDependencies,
+  params: { callerAgentId: string; callerRecord: StoredAgentRecord | null; prompt: string },
+): Promise<void> {
+  await watchNotificationRunForParent(dependencies, params.callerRecord);
+  // Never replace or steer an active caller run: the surrounding delivery
+  // channel only calls this once the caller has no in-flight run, and
+  // `replaceRunning: false` keeps that guarantee even if the caller starts a
+  // run in the small window between that check and this call.
+  await sendPromptToAgent({
+    agentManager: dependencies.agentManager,
+    agentStorage: dependencies.agentStorage,
+    agentId: params.callerAgentId,
+    prompt: params.prompt,
+    unarchive: false,
+    replaceRunning: false,
+    waitForRunStart: true,
+    logger: dependencies.logger,
+  });
+}
+
 async function deliverPendingFinishNotifications(
   dependencies: FinishNotificationDependencies,
   callerAgentId: string,
@@ -235,20 +310,11 @@ async function deliverPendingFinishNotifications(
     };
   }
 
-  // Never replace or steer an active caller run: the surrounding delivery
-  // channel only calls this once the caller has no in-flight run, and
-  // `replaceRunning: false` keeps that guarantee even if the caller starts a
-  // run in the small window between that check and this call.
   try {
-    await sendPromptToAgent({
-      agentManager: dependencies.agentManager,
-      agentStorage: dependencies.agentStorage,
-      agentId: callerAgentId,
+    await sendNotificationWatchedByParent(dependencies, {
+      callerAgentId,
+      callerRecord: dispatchCallerRecord,
       prompt: formatSystemNotificationPrompt(bodies.map(({ body }) => body).join("\n\n")),
-      unarchive: false,
-      replaceRunning: false,
-      waitForRunStart: true,
-      logger: dependencies.logger,
     });
   } catch (error) {
     // The error prefix only identifies the manager's expiry-shaped failure for a bounded
@@ -640,7 +706,12 @@ async function persistObservedRun(
  */
 export function attachFinishNotificationWatch(
   dependencies: FinishNotificationDependencies,
-  params: { childAgentId: string; watch: FinishNotificationWatch },
+  params: {
+    childAgentId: string;
+    watch: FinishNotificationWatch;
+    /** Called once when this subscription ends, whether by a terminal outcome or by `stop()`. */
+    onEnd?: () => void;
+  },
 ): () => void {
   const { childAgentId, watch } = params;
   let observedRunId = watch.observedRunId ?? null;
@@ -861,7 +932,7 @@ export function attachFinishNotificationWatch(
     }
   }
 
-  const unsubscribe = dependencies.agentManager.subscribe(
+  const unsubscribeFromManager = dependencies.agentManager.subscribe(
     (event) => {
       if (stopped) return;
       if (event.type === "agent_state") {
@@ -878,6 +949,13 @@ export function attachFinishNotificationWatch(
     },
     { agentId: childAgentId, replayState: false },
   );
+  let ended = false;
+  const unsubscribe = (): void => {
+    if (ended) return;
+    ended = true;
+    unsubscribeFromManager();
+    params.onEnd?.();
+  };
 
   // Fast-finish reconciliation: the caller already dispatched (or attempted
   // to dispatch) a run before calling this, so a terminal-looking snapshot

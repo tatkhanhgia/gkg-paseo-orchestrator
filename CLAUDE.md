@@ -63,6 +63,8 @@ npm run format:check                 # Check formatting without writing
 Repo dev commands use checkout-local state by default. In this checkout, `PASEO_HOME` resolves to `.dev/paseo-home`, and `npm run cli -- ...` targets that same dev home automatically. The packaged desktop app and production-style daemon keep using `~/.paseo` on port `6767`.
 
 See [docs/development.md](docs/development.md) for full setup, build sync requirements, and debugging.
+`local-stack.sh --apply` needs a pinned release toolchain (Node, uv, Python, bd); see
+[Local release build](docs/release.md#local-release-build).
 
 ## Release branches
 
@@ -85,6 +87,7 @@ and updating `next`, integrating it after a release, and releasing a hotfix from
   - If you must run a broad suite, pipe output to a file and read it afterward: `npx vitest run <file> --bail=1 > /tmp/test-output.txt 2>&1` then read the file.
   - Never re-run a test suite that another agent already ran and reported green — trust the result.
   - For full suite verification, push to CI and check GitHub Actions instead.
+- **NEVER kill processes by pattern (`pkill`, `killall`, `pgrep … | xargs kill`).** macOS pkill stops parsing options at the first pattern, so `pkill -f vitest -n` also treats `-n` as a pattern and SIGTERMs every process whose argv contains `-n` — every role-bound Claude agent (`--plugin-dir-no-mcp`) plus unrelated apps. That killed five agents at once. Kill only a PID you started yourself (`cmd & pid=$!; …; kill "$pid"`), and bound hung tests with `--testTimeout` instead.
 - **Always run typecheck and lint after every change.**
 - **Build workspace packages before diagnosing cross-package type errors.** This repo consumes generated declarations across workspaces. If typecheck fails in a package that depends on another workspace, rebuild the owning stack first so `dist` declarations are current:
   - `npm run build:client` — rebuild protocol and client declarations.

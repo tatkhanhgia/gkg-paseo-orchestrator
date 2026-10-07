@@ -10,6 +10,7 @@ import { buildWorkspaceProtocolTemplate } from "../../../utils/workspace-protoco
 import type { FoundationExecutionProfileId } from "./slp/execution-profiles.js";
 import { materializeRoleBinding as materializeLegacyRoleBinding } from "../../agent/legacy-role-binding.js";
 import { createDefaultSlpBundledPolicyRegistry } from "./slp.js";
+import { createProjectHarnessBindingService } from "../../project/harness-binding-service.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -20,6 +21,23 @@ afterEach(async () => {
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
+
+// Sections the bundled SLP policy adds on purpose after the legacy core was frozen. Parity
+// is asserted on every other byte; these two are named so any further addition fails.
+const DELIBERATE_BUNDLED_SECTION_PREFIXES = [
+  "Mandatory Project Harness admission (",
+  "Test proof mandate: ",
+] as const;
+
+function withoutDeliberateBundledSections(instructions: string): string {
+  return instructions
+    .split("\n\n")
+    .filter(
+      (paragraph) =>
+        !DELIBERATE_BUNDLED_SECTION_PREFIXES.some((prefix) => paragraph.startsWith(prefix)),
+    )
+    .join("\n\n");
+}
 
 function assignmentFor(roleId: PaseoRoleId): AssignmentEnvelope {
   let disposition: AssignmentEnvelope["disposition"] = "supervision";
@@ -46,7 +64,7 @@ describe("bundled SLP role-binding parity", () => {
     { roleId: "peer", provider: "codex", executionProfileId: "solution-architect" },
     { roleId: "peer", provider: "claude", executionProfileId: "reviewer" },
   ] as const)(
-    "preserves exact $roleId/$executionProfileId bytes on $provider while changing only owner",
+    "preserves $roleId/$executionProfileId legacy bytes on $provider except the deliberate harness and test-proof sections",
     async ({ roleId, provider, executionProfileId }) => {
       const cwd = await mkdtemp(join(tmpdir(), "paseo-slp-parity-"));
       temporaryDirectories.push(cwd);
@@ -70,17 +88,42 @@ describe("bundled SLP role-binding parity", () => {
 
       const legacy = await materializeLegacyRoleBinding(input);
       const generation = createDefaultSlpBundledPolicyRegistry().resolveActive("slp");
-      const plugin = await generation.contribution.materializeRoleBinding(input, generation.owner);
-      const { policyOwner: legacyOwner, ...legacyBytes } = legacy;
-      const { policyOwner: pluginOwner, ...pluginBytes } = plugin;
+      const resolveHarnessBinding = createProjectHarnessBindingService({
+        workspaceRegistry: {
+          get: async (workspaceId) =>
+            ({ workspaceId, projectId: "project-1", cwd, archivedAt: null }) as never,
+        },
+        projectRegistry: {
+          get: async (projectId) => ({ projectId, rootPath: cwd, archivedAt: null }) as never,
+          list: async () => [{ projectId: "project-1", rootPath: cwd, archivedAt: null }] as never,
+        },
+      });
+      const plugin = await generation.contribution.materializeRoleBinding(
+        { ...input, agentId: "agent-parity", resolveHarnessBinding },
+        generation.owner,
+      );
+      const {
+        policyOwner: legacyOwner,
+        bindingDigest: _legacyDigest,
+        instructions: legacyInstructions,
+        ...legacyBytes
+      } = legacy;
+      const {
+        policyOwner: pluginOwner,
+        bindingDigest: pluginDigest,
+        instructions: pluginInstructions,
+        harnessBinding: pluginHarnessBinding,
+        ...pluginBytes
+      } = plugin;
 
       expect(legacyOwner).toEqual({ kind: "legacy-core" });
       expect(pluginOwner).toEqual(generation.owner);
       expect(pluginBytes).toEqual(legacyBytes);
-      expect(Buffer.from(plugin.instructions)).toEqual(Buffer.from(legacy.instructions));
-      expect(plugin.bindingDigest).toBe(
-        createHash("sha256").update(plugin.instructions).digest("hex"),
+      expect(pluginHarnessBinding?.package).toBe("paseo-project-harness");
+      expect(Buffer.from(withoutDeliberateBundledSections(pluginInstructions))).toEqual(
+        Buffer.from(legacyInstructions),
       );
+      expect(pluginDigest).toBe(createHash("sha256").update(pluginInstructions).digest("hex"));
       if (roleId === "peer") {
         expect(plugin.roleProfile?.allowedTools).not.toEqual(
           expect.arrayContaining([

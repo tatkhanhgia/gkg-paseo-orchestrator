@@ -314,15 +314,19 @@ describe("ProviderSnapshotManager public surface", () => {
     });
     try {
       const snapshot = manager.getSnapshot("/tmp/project");
-      expect(snapshot.find((entry) => entry.provider === "codex")?.roleBinding).toMatchObject({
+      expect(
+        snapshot.records.find(({ entry }) => entry.provider === "codex")?.entry.roleBinding,
+      ).toMatchObject({
         status: "supported",
       });
-      expect(snapshot.find((entry) => entry.provider === "codex-lead")?.roleBinding).toMatchObject({
+      expect(
+        snapshot.records.find(({ entry }) => entry.provider === "codex-lead")?.entry.roleBinding,
+      ).toMatchObject({
         status: "unsupported",
       });
-      expect(snapshot.find((entry) => entry.provider === "clean-codex")?.roleBinding).toMatchObject(
-        { status: "supported" },
-      );
+      expect(
+        snapshot.records.find(({ entry }) => entry.provider === "clean-codex")?.entry.roleBinding,
+      ).toMatchObject({ status: "supported" });
 
       expect(
         manager.getAgentManagerProviderState().providerDefinitions["codex-lead"]
@@ -361,22 +365,29 @@ describe("ProviderSnapshotManager public surface", () => {
     });
     try {
       const snapshot = manager.getSnapshot("/tmp/project");
-      expect(snapshot.find((entry) => entry.provider === "cursor")?.roleBinding).toMatchObject({
+      expect(
+        snapshot.records.find(({ entry }) => entry.provider === "cursor")?.entry.roleBinding,
+      ).toMatchObject({
         status: "supported",
         injectionMethod: "cursor-project-rule-capsule",
       });
-      expect(snapshot.find((entry) => entry.provider === "grok")?.roleBinding).toMatchObject({
+      expect(
+        snapshot.records.find(({ entry }) => entry.provider === "grok")?.entry.roleBinding,
+      ).toMatchObject({
         status: "supported",
         injectionMethod: "grok-acp-session-rules",
       });
       expect(
-        snapshot.find((entry) => entry.provider === "gemini-antigravity")?.roleBinding,
+        snapshot.records.find(({ entry }) => entry.provider === "gemini-antigravity")?.entry
+          .roleBinding,
       ).toMatchObject(
         process.platform === "win32"
           ? { status: "unsupported" }
           : { status: "supported", injectionMethod: "antigravity-custom-agent" },
       );
-      expect(snapshot.find((entry) => entry.provider === "plain-acp")?.roleBinding).toMatchObject({
+      expect(
+        snapshot.records.find(({ entry }) => entry.provider === "plain-acp")?.entry.roleBinding,
+      ).toMatchObject({
         status: "unsupported",
       });
     } finally {
@@ -398,7 +409,8 @@ describe("ProviderSnapshotManager public surface", () => {
     });
     try {
       expect(
-        manager.getSnapshot("/tmp/project").find((entry) => entry.provider === "cursor"),
+        manager.getSnapshot("/tmp/project").records.find(({ entry }) => entry.provider === "cursor")
+          ?.entry,
       ).toMatchObject({
         roleBinding: {
           status: "unsupported",
@@ -1740,6 +1752,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
       opencode: { enabled: false },
       pi: { enabled: false },
       omp: { enabled: false },
+      "gemini-antigravity": { enabled: false },
     };
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
@@ -1791,6 +1804,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
       opencode: { enabled: false },
       pi: { enabled: false },
       omp: { enabled: false },
+      "gemini-antigravity": { enabled: false },
     };
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
@@ -2233,6 +2247,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
     }));
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
+      providerOverrides: enabledProviders("pi"),
       extraClients: {
         pi: createExtraClient("pi", {
           isAvailable: vi.fn(async () => true),
@@ -2374,6 +2389,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
           copilot: { enabled: false },
           opencode: { enabled: false },
           pi: { enabled: false },
+          "gemini-antigravity": { enabled: false },
         },
       });
       try {
@@ -2779,6 +2795,7 @@ test("settings refresh starts independent workspace discoveries together and sha
   const cwds = [resolveSnapshotCwd("/refresh-a"), resolveSnapshotCwd("/refresh-b")];
   const manager = new ProviderSnapshotManager({
     logger: createTestLogger(),
+    providerOverrides: enabledProviders("pi"),
     extraClients: {
       pi: createExtraClient("pi", {
         async isAvailable() {
@@ -2837,6 +2854,7 @@ test("bounds each provider across workspaces without blocking another provider",
   const cwds = Array.from({ length: 16 }, (_, index) => resolveSnapshotCwd(`/bounded-${index}`));
   const manager = new ProviderSnapshotManager({
     logger: createTestLogger(),
+    providerOverrides: enabledProviders("pi"),
     extraClients: {
       codex: createExtraClient("codex", {
         async isAvailable() {
@@ -3244,11 +3262,12 @@ test("publication detaches provider-retained arrays, thinking options and nested
 });
 
 test("snapshot records share provider results across targets while retaining target-specific catalogues", async () => {
-  const calls = { codex: 0, opencode: 0 };
+  const calls = { codex: 0, pi: 0 };
   const manager = new ProviderSnapshotManager({
     logger: createTestLogger(),
+    providerOverrides: enabledProviders("pi"),
     extraClients: Object.fromEntries(
-      (["codex", "opencode"] as const).map((provider) => [
+      (["codex", "pi"] as const).map((provider) => [
         provider,
         createExtraClient(provider, {
           isAvailable: async () => true,
@@ -3265,9 +3284,7 @@ test("snapshot records share provider results across targets while retaining tar
   try {
     const targets = [undefined, "/tmp/identity-a", "/tmp/identity-b"];
     await Promise.all(
-      targets.map((cwd) =>
-        manager.listProviders({ cwd, providers: ["codex", "opencode"], wait: true }),
-      ),
+      targets.map((cwd) => manager.listProviders({ cwd, providers: ["codex", "pi"], wait: true })),
     );
     const snapshots = targets.map((cwd) => manager.getSnapshot(cwd));
     const shared = snapshots.map(
@@ -3278,11 +3295,11 @@ test("snapshot records share provider results across targets while retaining tar
     expect(
       new Set(
         snapshots.map(
-          ({ records }) => records.find(({ entry }) => entry.provider === "opencode")!.contentHash,
+          ({ records }) => records.find(({ entry }) => entry.provider === "pi")!.contentHash,
         ),
       ).size,
     ).toBe(3);
-    expect(calls).toEqual({ codex: 1, opencode: 3 });
+    expect(calls).toEqual({ codex: 1, pi: 3 });
     expect(await manager.getProvider({ provider: "codex", cwd: targets[1] })).toBe(
       shared[0]!.entry,
     );
@@ -3339,8 +3356,14 @@ test("result identity covers content, metadata and status while unchanged refres
   }
 });
 
+// This fork ships copilot, opencode, pi and omp disabled by default
+// (`enabledByDefault: false`); tests that exercise one of them must enable it.
+function enabledProviders(...providers: string[]): Record<string, { enabled: true }> {
+  return Object.fromEntries(providers.map((provider) => [provider, { enabled: true as const }]));
+}
+
 const PUBLICATION_PROVIDERS = Object.fromEntries(
-  ["claude", "codex", "copilot", "opencode", "pi", "omp"].map((provider) => [
+  ["claude", "codex", "copilot", "opencode", "pi", "omp", "gemini-antigravity"].map((provider) => [
     provider,
     { enabled: provider === "codex" },
   ]),

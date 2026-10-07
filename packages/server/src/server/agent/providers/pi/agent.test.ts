@@ -1501,6 +1501,18 @@ describe("PiRpcAgentSession", () => {
     ).resolves.toBe("Pi project prompt\n\nAgent prompt\n\nDaemon prompt\n\nImmutable Peer role");
   });
 
+  test("exposes one unattended full-access mode and keeps the launched mode", async () => {
+    const client = createClient();
+    const session = await client.createSession(createConfig({ modeId: "full-access" }));
+
+    await expect(session.getAvailableModes()).resolves.toEqual([
+      expect.objectContaining({ id: "full-access", isUnattended: true }),
+    ]);
+    await expect(session.getCurrentMode()).resolves.toBe("full-access");
+    await expect(session.setMode("full-access")).resolves.toBeUndefined();
+    await expect(session.setMode("plan")).rejects.toThrow("Invalid Pi mode 'plan'");
+  });
+
   test("updates model and thinking through Pi runtime commands", async () => {
     const { pi, session } = await createSession();
     const fakeSession = pi.latestSession();
@@ -2325,7 +2337,7 @@ describe("PiRpcAgentClient", () => {
           defaultThinkingOptionId: "medium",
         },
       ],
-      modes: [],
+      modes: [{ id: "full-access", isUnattended: true }],
     });
     expect(pi.recordedLaunches[0]).toMatchObject({ cwd: "/workspace/with-extension" });
   });

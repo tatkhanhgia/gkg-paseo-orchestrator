@@ -175,6 +175,20 @@ const ANTIGRAVITY_MODES: AgentProviderModeDefinition[] = [
   },
 ];
 
+// Pi has no native tool-approval gate: every tool call runs without a prompt.
+// Declaring that as an unattended mode lets policies that require one (Peer
+// delegation runMode "unattended") select Pi instead of rejecting it.
+export const PI_MODES: AgentProviderModeDefinition[] = [
+  {
+    id: "full-access",
+    label: "Full Access",
+    description: "Pi runs tools without approval prompts; extensions may still ask questions.",
+    icon: "ShieldOff",
+    colorTier: "dangerous",
+    isUnattended: true,
+  },
+];
+
 export const OMP_MODES: AgentProviderModeDefinition[] = [
   {
     id: "full",
@@ -280,8 +294,8 @@ export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
     label: "Pi",
     description: "Minimal terminal-based coding agent with multi-provider LLM support",
     enabledByDefault: false,
-    defaultModeId: null,
-    modes: [],
+    defaultModeId: "full-access",
+    modes: PI_MODES,
   },
   {
     id: "omp",
