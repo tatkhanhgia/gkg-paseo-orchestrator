@@ -29,6 +29,7 @@ import { buildWorkspaceProtocolTemplate } from "../../utils/workspace-protocol-f
 import { createDefaultSlpBundledPolicyRegistry } from "../policy/bundled/slp.js";
 import { SLP_LIFECYCLE_ATTENTION_EVENT_POLICY } from "../policy/bundled/slp/lifecycle-attention-policy.js";
 import { startEventPolicyRuntime } from "./event-policy-runtime.js";
+import { createProjectHarnessBindingService } from "../project/harness-binding-service.js";
 
 const CAPABILITIES = {
   supportsStreaming: false,
@@ -182,6 +183,20 @@ class HeldClient implements AgentClient {
   }
 }
 
+function testHarnessResolver(projectRoot: string) {
+  return createProjectHarnessBindingService({
+    workspaceRegistry: {
+      get: async (workspaceId) =>
+        ({ workspaceId, projectId: "project-test", cwd: projectRoot, archivedAt: null }) as never,
+    },
+    projectRegistry: {
+      get: async (projectId) => ({ projectId, rootPath: projectRoot, archivedAt: null }) as never,
+      list: async () =>
+        [{ projectId: "project-test", rootPath: projectRoot, archivedAt: null }] as never,
+    },
+  });
+}
+
 describe("AgentManager to SLP lifecycle policy integration", () => {
   test("captures a real started run before closure and rejects ordinary close/cancel as loss", async () => {
     const workdir = mkdtempSync(join(tmpdir(), "paseo-lifecycle-policy-manager-"));
@@ -200,6 +215,7 @@ describe("AgentManager to SLP lifecycle policy integration", () => {
       bundledPolicyPacks: registry,
       registry: storage,
       logger,
+      resolveHarnessBinding: testHarnessResolver(workdir),
     });
     const closureEvents: Extract<AgentManagerEvent, { type: "agent_closure" }>[] = [];
     const closedSnapshots: Extract<AgentManagerEvent, { type: "agent_state" }>[] = [];

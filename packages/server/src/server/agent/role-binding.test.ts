@@ -17,7 +17,10 @@ import {
 } from "./role-binding.js";
 import { materializeRoleBinding } from "./legacy-role-binding.js";
 import { buildWorkspaceProtocolTemplate } from "../../utils/workspace-protocol-file.js";
-import type { AssignmentEnvelope } from "@getpaseo/protocol/assignment-contract";
+import {
+  assignmentExternalEffectBoundaryFor,
+  type AssignmentEnvelope,
+} from "@getpaseo/protocol/assignment-contract";
 import { MANDATORY_ROLE_TOOLS } from "./role-profiles.js";
 
 const temporaryDirectories: string[] = [];
@@ -52,7 +55,7 @@ function assignmentFor(
       effectClass === "mutating"
         ? { mode: "bounded-write", scope: "src/**" }
         : { mode: "no-write" },
-    externalEffectBoundary: { mode: "denied" },
+    externalEffectBoundary: assignmentExternalEffectBoundaryFor(roleId, effectClass),
     ...(roleId === "peer" ? { resourceGrants: { beadsIssueIds: ["ps-role-binding-test"] } } : {}),
     evidence: "Report exact inspected paths and observed checks.",
     handbackAndStop: "Stop after evidence handback or a material blocker.",
@@ -329,7 +332,7 @@ describe("native Foundation role materialization", () => {
         ...assignmentBinding("lead", cwd),
         assignment: {
           ...assignmentFor("lead", "delegation"),
-          externalEffectBoundary: { mode: "bounded", scope: "publish release notes" },
+          externalEffectBoundary: assignmentExternalEffectBoundaryFor("lead", "delegation"),
         },
       }),
     ).rejects.toThrow(`${WORKSPACE_PROTOCOL_ADMISSION_ERROR}: missing`);

@@ -84,10 +84,16 @@ describe("E1 role-overlay counterfactual", () => {
     expect(binding.instructions).not.toContain("<paseo-role-skill");
     expect(legacyInlineBytes - currentInstructionBytes).toBeGreaterThan(3_000);
     expect(leadTools.length).toBeLessThan(38);
-    expect(leadTools).toHaveLength(34);
+    expect(leadTools).toHaveLength(36);
     expect(leadTools).toContain("list_profiles");
     expect(leadTools).toEqual(
-      expect.arrayContaining(["resolve_agent_signal", "start_council", "record_council_seat"]),
+      expect.arrayContaining([
+        "resolve_agent_signal",
+        "start_council",
+        "record_council_seat",
+        "get_agent_checkpoint",
+        "read_project_notebook",
+      ]),
     );
     expect(leadTools).toEqual(expect.arrayContaining([...readOnlyBrowserTools]));
     expect(leadTools.some((tool) => forbiddenToolIds.has(tool))).toBe(false);

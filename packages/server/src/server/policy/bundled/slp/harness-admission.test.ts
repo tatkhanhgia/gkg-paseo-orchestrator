@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 
-import type { AssignmentEnvelope } from "@getpaseo/protocol/assignment-contract";
+import {
+  assignmentExternalEffectBoundaryFor,
+  type AssignmentEnvelope,
+} from "@getpaseo/protocol/assignment-contract";
 import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 
 import { materializeTrustedRoleBinding } from "../../trusted-policy.js";
@@ -33,7 +36,7 @@ function envelopeFor(roleId: PaseoRoleId): AssignmentEnvelope {
       objective: "Directly perform a tiny, bounded engineering task.",
       effectClass: "mutating",
       mutationBoundary: { mode: "bounded-write", scope: "Exact tiny task files only." },
-      externalEffectBoundary: { mode: "denied" },
+      externalEffectBoundary: assignmentExternalEffectBoundaryFor("lead", "mutating"),
       resourceGrants: { beadsIssueIds: ["fixture-issue-1"] },
       evidence: "Return the exact diff.",
       handbackAndStop: "Stop at the bounded task's completion.",
@@ -46,7 +49,7 @@ function envelopeFor(roleId: PaseoRoleId): AssignmentEnvelope {
       objective: "Implement a bounded slice independently.",
       effectClass: "mutating",
       mutationBoundary: { mode: "bounded-write", scope: "Exact assigned files only." },
-      externalEffectBoundary: { mode: "denied" },
+      externalEffectBoundary: assignmentExternalEffectBoundaryFor("peer", "mutating"),
       resourceGrants: { beadsIssueIds: ["fixture-issue-1"] },
       evidence: "Return the exact diff.",
       handbackAndStop: "Stop at handback.",

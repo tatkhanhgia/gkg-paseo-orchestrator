@@ -24,6 +24,21 @@ import type {
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import { sendPromptToAgent } from "./agent-prompt.js";
+import { createProjectHarnessBindingService } from "../project/harness-binding-service.js";
+
+function testHarnessResolver(projectRoot: string) {
+  return createProjectHarnessBindingService({
+    workspaceRegistry: {
+      get: async (workspaceId) =>
+        ({ workspaceId, projectId: "project-test", cwd: projectRoot, archivedAt: null }) as never,
+    },
+    projectRegistry: {
+      get: async (projectId) => ({ projectId, rootPath: projectRoot, archivedAt: null }) as never,
+      list: async () =>
+        [{ projectId: "project-test", rootPath: projectRoot, archivedAt: null }] as never,
+    },
+  });
+}
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -188,6 +203,7 @@ test("revalidates assignment expiry after resume and mode preparation before pro
     registry: storage,
     logger,
     idFactory: () => "00000000-0000-4000-8000-000000000151",
+    resolveHarnessBinding: testHarnessResolver(workdir),
   });
   const expiresAt = new Date(originalNow.getTime() + 1_000).toISOString();
 
