@@ -160,6 +160,11 @@ export function createPendingDeliveryChannel<TItem>(
 ): PendingDeliveryChannel {
   const scheduledSubscriptions = new Map<string, () => void>();
   const deliveryInFlight = new Set<string>();
+  // An item persisted while a delivery is mid-flight must not wait for the next idle
+  // event: the drain that is running read its pending set before the item existed.
+  // Only a pass that did not fail re-runs from this flag; a failed pass already owns a
+  // bounded retry timer, and re-running here would bypass that bound.
+  const redeliverAfterInFlight = new Set<string>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const retryAttempts = new Map<string, number>();
   const maxRetries = config.maxInProcessRetries ?? DEFAULT_MAX_RETRIES;
@@ -181,10 +186,15 @@ export function createPendingDeliveryChannel<TItem>(
   }
 
   async function tryDeliver(agentId: string): Promise<void> {
-    if (deliveryInFlight.has(agentId) || dependencies.agentManager.hasInFlightRun(agentId)) {
+    if (deliveryInFlight.has(agentId)) {
+      redeliverAfterInFlight.add(agentId);
+      return;
+    }
+    if (dependencies.agentManager.hasInFlightRun(agentId)) {
       return;
     }
     deliveryInFlight.add(agentId);
+    let passFailed = false;
     try {
       const record = await dependencies.agentStorage.get(agentId);
       const pending = record ? config.getPending(record) : [];
@@ -212,6 +222,7 @@ export function createPendingDeliveryChannel<TItem>(
       retryAttempts.delete(agentId);
       clearRetryTimer(agentId);
     } catch (error) {
+      passFailed = true;
       dependencies.logger.warn(
         { err: error, agentId, channel: config.channelName },
         `Failed to deliver pending ${config.channelName} items`,
@@ -249,6 +260,9 @@ export function createPendingDeliveryChannel<TItem>(
       }
     } finally {
       deliveryInFlight.delete(agentId);
+      if (redeliverAfterInFlight.delete(agentId) && !passFailed) {
+        void tryDeliver(agentId);
+      }
     }
   }
 
