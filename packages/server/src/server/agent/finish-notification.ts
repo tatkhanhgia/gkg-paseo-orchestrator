@@ -142,57 +142,36 @@ function hasAssignmentExpiryErrorPrefix(error: unknown): boolean {
   );
 }
 
-interface NotificationRunParentWatch {
-  /**
-   * Called once the notification dispatch has returned or thrown. Retires the watch only on
-   * evidence that no run will carry it; otherwise keeps it. An extra bell is cheaper than a
-   * lost one: the run-start wait can time out or fail after the run itself began.
-   */
-  release(options: { dispatchReturnedTurnStarted: boolean }): Promise<void>;
-}
-
 /**
  * Registers and attaches the caller's PARENT watch for the run that a finish-notification
- * dispatch is about to start on the caller. Returns null when the caller has no live parent.
+ * dispatch is about to start on the caller. Does nothing when the caller has no live parent.
  *
  * A watch is one-shot and per run, and `send_agent_prompt`/`create_agent` register it only for
  * runs the parent itself starts. A Lead woken by its Peer's finish notification therefore ran
  * unobserved: when that run was cancelled, nobody above the Lead heard it go idle.
+ *
+ * The watch is deliberately never retired when the dispatch then fails, times out or turns out
+ * to be a no-op. Every attempt to cancel it at the right moment lost a bell to some interleaving
+ * (the parent's own prompt sharing the watch, a run starting while the cancel was queued, a
+ * run-start wait that rejects after the run began). Leaving it pending is safe: registration
+ * reuses a pre-launch watch, so at most one waits per child/parent pair, and the worst outcome
+ * is one extra bell for the caller's next run, including after an unarchive.
  */
 async function watchNotificationRunForParent(
   dependencies: FinishNotificationDependencies,
   callerRecord: StoredAgentRecord | null,
-): Promise<NotificationRunParentWatch | null> {
+): Promise<void> {
   const parentAgentId = getParentAgentIdFromLabels(callerRecord?.labels);
-  if (!callerRecord || !parentAgentId) return null;
+  if (!callerRecord || !parentAgentId) return;
   const parentRecord = await dependencies.agentStorage.get(parentAgentId);
-  if (!parentRecord || parentRecord.archivedAt || parentRecord.internal) return null;
+  if (!parentRecord || parentRecord.archivedAt || parentRecord.internal) return;
 
-  const { watch, created } = await registerFinishNotificationWatchWithOutcome(dependencies, {
+  const watch = await registerFinishNotificationWatch(dependencies, {
     childAgentId: callerRecord.id,
     callerAgentId: parentAgentId,
     requireParentOwnership: true,
   });
-  const stop = attachFinishNotificationWatch(dependencies, {
-    childAgentId: callerRecord.id,
-    watch,
-  });
-  return {
-    release: async ({ dispatchReturnedTurnStarted }) => {
-      if (
-        dispatchReturnedTurnStarted &&
-        dependencies.agentManager.hasInFlightRun(callerRecord.id)
-      ) {
-        return;
-      }
-      // Only the registration that created the watch may retire it. A reused pre-launch watch
-      // belongs to the parent's own prompt; this call just drops its own extra subscription.
-      const retired = created
-        ? await retireUnobservedWatch(dependencies, callerRecord.id, watch.watchId)
-        : true;
-      if (retired) stop();
-    },
-  };
+  attachFinishNotificationWatch(dependencies, { childAgentId: callerRecord.id, watch });
 }
 
 /**
@@ -204,32 +183,21 @@ async function sendNotificationWatchedByParent(
   dependencies: FinishNotificationDependencies,
   params: { callerAgentId: string; callerRecord: StoredAgentRecord | null; prompt: string },
 ): Promise<void> {
-  const parentWatch = await watchNotificationRunForParent(dependencies, params.callerRecord);
-  try {
-    // Never replace or steer an active caller run: the surrounding delivery
-    // channel only calls this once the caller has no in-flight run, and
-    // `replaceRunning: false` keeps that guarantee even if the caller starts a
-    // run in the small window between that check and this call.
-    const dispatch = await sendPromptToAgent({
-      agentManager: dependencies.agentManager,
-      agentStorage: dependencies.agentStorage,
-      agentId: params.callerAgentId,
-      prompt: params.prompt,
-      unarchive: false,
-      replaceRunning: false,
-      waitForRunStart: true,
-      logger: dependencies.logger,
-    });
-    // `turn_started` is also what an archived caller returns for a no-op, so it is not proof of
-    // a run: release re-checks for one.
-    await parentWatch?.release({
-      dispatchReturnedTurnStarted: dispatch.disposition === "turn_started",
-    });
-  } catch (error) {
-    // The run-start wait can reject (timeout, provider error) after the run began.
-    await parentWatch?.release({ dispatchReturnedTurnStarted: true });
-    throw error;
-  }
+  await watchNotificationRunForParent(dependencies, params.callerRecord);
+  // Never replace or steer an active caller run: the surrounding delivery
+  // channel only calls this once the caller has no in-flight run, and
+  // `replaceRunning: false` keeps that guarantee even if the caller starts a
+  // run in the small window between that check and this call.
+  await sendPromptToAgent({
+    agentManager: dependencies.agentManager,
+    agentStorage: dependencies.agentStorage,
+    agentId: params.callerAgentId,
+    prompt: params.prompt,
+    unarchive: false,
+    replaceRunning: false,
+    waitForRunStart: true,
+    logger: dependencies.logger,
+  });
 }
 
 async function deliverPendingFinishNotifications(
@@ -620,37 +588,6 @@ export async function cancelFinishNotificationWatch(
 }
 
 /**
- * Stops a watch only while it is still pre-launch (no observed run), in one record update, and
- * reports whether it did. A watch that already observed a run belongs to that run and must be
- * left to report it. Writes archived records: the child can be archived after the watch was
- * registered, and the watch must not survive to claim a run after an unarchive.
- */
-async function retireUnobservedWatch(
-  dependencies: FinishNotificationDependencies,
-  childAgentId: string,
-  watchId: string,
-): Promise<boolean> {
-  return updateRecordFor(dependencies)(
-    childAgentId,
-    (record) => {
-      const current = (record.finishNotificationWatches ?? []).find(
-        (watch) => watch.watchId === watchId,
-      );
-      if (!current || current.status !== "active" || (current.observedRunId ?? null) !== null) {
-        return { record, result: false, changed: false };
-      }
-      const watches = (record.finishNotificationWatches ?? []).map((watch) =>
-        watch.watchId === watchId
-          ? Object.assign({}, watch, { status: "stopped" as const })
-          : watch,
-      );
-      return { record: { ...record, finishNotificationWatches: watches }, result: true };
-    },
-    { allowArchived: true },
-  );
-}
-
-/**
  * Persists the intent to notify `callerAgentId` about `childAgentId`'s next
  * run outcome. Callers that control launch ordering (create-agent) MUST call
  * this BEFORE dispatching the initial prompt so a crash between registration
@@ -660,25 +597,9 @@ export async function registerFinishNotificationWatch(
   dependencies: FinishNotificationDependencies,
   params: { childAgentId: string; callerAgentId: string; requireParentOwnership?: boolean },
 ): Promise<FinishNotificationWatch> {
-  return (await registerFinishNotificationWatchWithOutcome(dependencies, params)).watch;
-}
-
-interface FinishNotificationWatchRegistration {
-  watch: FinishNotificationWatch;
-  /**
-   * Decided inside the same record update that registered the watch: false means this call
-   * reused a pre-launch watch another registrant already owns, so it must never retire it.
-   */
-  created: boolean;
-}
-
-async function registerFinishNotificationWatchWithOutcome(
-  dependencies: FinishNotificationDependencies,
-  params: { childAgentId: string; callerAgentId: string; requireParentOwnership?: boolean },
-): Promise<FinishNotificationWatchRegistration> {
   const requireParentOwnership = params.requireParentOwnership ?? false;
   const updateRecord = updateRecordFor(dependencies);
-  return updateRecord<FinishNotificationWatchRegistration>(params.childAgentId, (record) => {
+  return updateRecord(params.childAgentId, (record) => {
     // A watch that has already durably observed a started run belongs to that
     // run. Never reuse it for a later launch: the new launch needs a fresh
     // durable identity, otherwise a fast finish could be deduped against the
@@ -692,7 +613,7 @@ async function registerFinishNotificationWatchWithOutcome(
         (watch.observedRunId ?? null) === null,
     );
     if (existing) {
-      return { record, result: { watch: existing, created: false } };
+      return { record, result: existing };
     }
     const watch: FinishNotificationWatch = {
       watchId: randomUUID(),
@@ -707,7 +628,7 @@ async function registerFinishNotificationWatchWithOutcome(
         ...record,
         finishNotificationWatches: [...(record.finishNotificationWatches ?? []), watch],
       },
-      result: { watch, created: true },
+      result: watch,
     };
   });
 }

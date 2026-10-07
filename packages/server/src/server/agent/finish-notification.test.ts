@@ -1331,9 +1331,10 @@ test.each([
   },
 );
 
-// Reviewer round 1 on the parent-watch fix: the cleanup must never retire a watch that may still
-// be needed. Each test stages one interleaving between "the caller's record was read" and
-// "the notification dispatch returned" and asserts the parent still gets its bell.
+// The parent's watch for a notification-started run is registered before the dispatch and never
+// retired when the dispatch fails, times out, or is a no-op: the parent's own prompt may share the
+// watch, a run may begin after the dispatch gave up, and registration already caps pending watches
+// at one per child/parent pair. Each test stages one interleaving around that dispatch.
 function setUpLeadWithParent(h: ReturnType<typeof createFinishHarness>) {
   h.agents.set("peer-1", makeFakeAgent("peer-1", "running"));
   h.agents.get("peer-1")!.activeForegroundTurnId = "turn-1";
@@ -1365,34 +1366,47 @@ async function leadWatchesOf(h: ReturnType<typeof createFinishHarness>, parentAg
   );
 }
 
-test("a failed notification dispatch does not retire a parent watch the parent registered itself", async () => {
-  const h = createFinishHarness();
-  setUpLeadWithParent(h);
-  h.sendFailures.set("lead-1", 1);
-  // The parent prompts the Lead after the notification read the Lead's record but before it
-  // registered: the parent's pre-launch watch is the one registration then reuses.
-  let parentWatchId: string | null = null;
-  h.runBeforeNextGet("jarvis-1", async () => {
-    const parentWatch = await registerFinishNotificationWatch(h.createDependencies(), {
-      childAgentId: "lead-1",
-      callerAgentId: "jarvis-1",
-      requireParentOwnership: true,
+test.each([
+  {
+    name: "the parent registers its own watch before the notification does",
+    stage: (h: ReturnType<typeof createFinishHarness>, registerAsParent: () => Promise<void>) =>
+      h.runBeforeNextGet("jarvis-1", registerAsParent),
+  },
+  {
+    name: "the parent reuses the notification's watch before the notification dispatches",
+    // attach reads the Lead's live snapshot right after the notification registered its watch.
+    stage: (h: ReturnType<typeof createFinishHarness>, registerAsParent: () => Promise<void>) =>
+      h.runBeforeNextGetAgent("lead-1", () => void registerAsParent()),
+  },
+])(
+  "a failed notification dispatch never stops the parent's watch when $name",
+  async ({ stage }) => {
+    const h = createFinishHarness();
+    setUpLeadWithParent(h);
+    h.sendFailures.set("lead-1", 1);
+    let parentWatchId: string | null = null;
+    stage(h, async () => {
+      const parentWatch = await registerFinishNotificationWatch(h.createDependencies(), {
+        childAgentId: "lead-1",
+        callerAgentId: "jarvis-1",
+        requireParentOwnership: true,
+      });
+      parentWatchId = parentWatch.watchId;
     });
-    parentWatchId = parentWatch.watchId;
-  });
 
-  await finishPeerIntoLead(h);
-  await vi.waitFor(async () => {
-    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries ?? []).toBeDefined();
-    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts).toBe(
-      1,
-    );
-  });
+    await finishPeerIntoLead(h);
+    await vi.waitFor(async () => {
+      expect(
+        (await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts,
+      ).toBe(1);
+    });
 
-  expect(await leadWatchesOf(h, "jarvis-1")).toEqual([
-    expect.objectContaining({ watchId: parentWatchId, status: "active" }),
-  ]);
-});
+    // The parent's run may start any time after this: its watch must still be live to report it.
+    expect(await leadWatchesOf(h, "jarvis-1")).toEqual([
+      expect.objectContaining({ watchId: parentWatchId, status: "active" }),
+    ]);
+  },
+);
 
 test("a notification dispatch that errors after its run began keeps the parent watch", async () => {
   const h = createFinishHarness();
@@ -1418,7 +1432,53 @@ test("a notification dispatch that errors after its run began keeps the parent w
   );
 });
 
-test("a notification dispatch that is a no-op because the caller was archived retires its parent watch", async () => {
+test("a watch left pending by a failed notification dispatch reports the caller's next run to its parent", async () => {
+  const h = createFinishHarness();
+  setUpLeadWithParent(h);
+  h.sendFailures.set("lead-1", 1);
+
+  await finishPeerIntoLead(h);
+  await vi.waitFor(async () => {
+    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts).toBe(
+      1,
+    );
+  });
+  // An unrelated run of the Lead (not started by the notification) now starts and ends.
+  h.setLifecycle("lead-1", "running", "turn-9");
+  h.setLifecycle("lead-1", "idle");
+
+  await vi.waitFor(async () => {
+    expect((await h.agentStorage.get("jarvis-1"))?.finishNotificationDeliveries).toEqual([
+      expect.objectContaining({ childAgentId: "lead-1", runId: "turn-9", reason: "finished" }),
+    ]);
+  });
+});
+
+test("repeated failed notification dispatches leave at most one pending parent watch", async () => {
+  vi.useFakeTimers();
+  try {
+    const h = createFinishHarness();
+    setUpLeadWithParent(h);
+    h.sendFailures.set("lead-1", 3);
+
+    await finishPeerIntoLead(h);
+    // Default backoff: 500 ms, then 1 s, then 2 s. Three failures, the fourth pass succeeds.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts).toBe(
+      3,
+    );
+
+    expect(await leadWatchesOf(h, "jarvis-1")).toEqual([
+      expect.objectContaining({ status: "active" }),
+    ]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a no-op notification dispatch because the caller was archived leaves the parent watch pending", async () => {
   const h = createFinishHarness();
   setUpLeadWithParent(h);
   // The Lead is archived after the delivery's availability checks and after the parent watch was
@@ -1435,9 +1495,12 @@ test("a notification dispatch that is a no-op because the caller was archived re
   await vi.waitFor(async () => {
     expect(await leadWatchesOf(h, "jarvis-1")).toHaveLength(1);
   });
+  // Everything the delivery does after registering is promise-only in the harness, so one
+  // macrotask turn lets it run to completion before the assertion.
+  await new Promise((resolve) => setImmediate(resolve));
 
   expect(await leadWatchesOf(h, "jarvis-1")).toEqual([
-    expect.objectContaining({ status: "stopped" }),
+    expect.objectContaining({ status: "active" }),
   ]);
   expect(h.sentPrompts.filter((prompt) => prompt.agentId === "lead-1")).toEqual([]);
 });
