@@ -389,6 +389,8 @@ const INTERRUPT_PLACEHOLDER_PATTERN = /^\[Request interrupted by user(?:[^\]]*)\
 const NO_RESPONSE_REQUESTED_PLACEHOLDER = "No response requested.";
 const STEER_SUPERSEDED_PERMISSION_MESSAGE =
   "The user answered with a message instead of approving. Their message follows.";
+const NO_WRITE_PERMISSION_DENIED_MESSAGE =
+  "BLOCKED: this no-write assignment cannot be granted that permission, and nobody can approve it. Do not retry it. Report BLOCKED to your Lead, naming the file or tool you needed, and continue with what you can read.";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface SlashCommandInvocation {
@@ -4790,6 +4792,42 @@ class ClaudeAgentSession implements AgentSession {
     return this.contextUsage.buildResultUsage(message, modelUsage);
   }
 
+  /**
+   * The daemon rejects every `allow` response for a no-write assignment
+   * (assertRoleAssignmentPermissionResponseAllowed), so a prompt here can never
+   * be approved and, with no human watching a Peer seat, would hang the turn
+   * until something cancels it. Allow only the pinned mandatory reads, deny
+   * everything else at once, and tell the model to report BLOCKED. Questions
+   * stay interactive: answering one grants no capability.
+   */
+  private resolveNoWritePermission(params: {
+    toolName: string;
+    input: Record<string, unknown>;
+    requestInput: Record<string, unknown>;
+    kind: AgentPermissionRequestKind;
+    toolUseId: string | undefined;
+  }): PermissionResult | null {
+    const { toolName, input, requestInput, kind, toolUseId } = params;
+    if (
+      toolName === "Read" &&
+      this.mandatoryResourceReads?.some((resource) => input.file_path === resource.path)
+    ) {
+      return { behavior: "allow", updatedInput: input };
+    }
+    if (kind === "question") return null;
+    return this.resolveDeniedPermission(
+      {
+        id: `permission-${randomUUID()}`,
+        provider: "claude",
+        name: toolName,
+        kind,
+        input: requestInput,
+        metadata: toolUseId ? { toolUseId } : undefined,
+      },
+      { behavior: "deny", message: NO_WRITE_PERMISSION_DENIED_MESSAGE, interrupt: false },
+    );
+  }
+
   private handlePermissionRequest: CanUseTool = async (
     toolName,
     input,
@@ -4807,19 +4845,19 @@ class ClaudeAgentSession implements AgentSession {
         updatedInput: input,
       };
     }
-    if (
-      this.noWrite &&
-      toolName === "Read" &&
-      this.mandatoryResourceReads?.some((resource) => input.file_path === resource.path)
-    ) {
-      return {
-        behavior: "allow",
-        updatedInput: input,
-      };
-    }
-    const requestId = `permission-${randomUUID()}`;
     const kind = resolvePermissionKind(toolName, input);
     const requestInput = normalizeClaudeAskUserQuestionRequestInput(toolName, input);
+    if (this.noWrite) {
+      const noWriteResult = this.resolveNoWritePermission({
+        toolName,
+        input,
+        requestInput,
+        kind,
+        toolUseId: options.toolUseID,
+      });
+      if (noWriteResult) return noWriteResult;
+    }
+    const requestId = `permission-${randomUUID()}`;
     if (kind === "plan" && this.requestedMode === "bypassPermissions") {
       await this.applyPermissionMode("bypassPermissions", { rememberRequest: false });
       this.pushToolCall(

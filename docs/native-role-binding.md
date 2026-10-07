@@ -103,8 +103,12 @@ edit/write notebook, worktree/cron mutation và `ExitPlanMode`; vì `allowedTool
 không thu hẹp tool surface, adapter dùng SDK `tools` làm strict allowlist. Exact Paseo MCP grants trong
 immutable role tool policy còn được `canUseTool` auto-allow trực tiếp. Không dùng Claude `plan` vì Plan
 workflow tự yêu cầu model tránh cả native Room coordination dù tool đã pre-approved; guarded `default`
-loại variance đó mà strict tool surface vẫn giữ technical no-write. Tool ngoài receipt vẫn đi qua
-permission gate bình thường. Pi và OMP vẫn có durable role channel nhưng chưa có no-write mode đã
+loại variance đó mà strict tool surface vẫn giữ technical no-write. Tool ngoài receipt, và mọi đọc
+ngoài cwd không phải mandatory resource đã ghim, bị adapter Claude từ chối ngay trong `canUseTool`
+bằng thông điệp `BLOCKED: ...` (không mở permission request, không đánh thức attention): daemon đã từ
+chối mọi response `allow` của ghế no-write nên prompt không bao giờ duyệt được, và ghế Peer không có
+người nghe, nên chờ chỉ làm treo turn. Model nhận lỗi rõ để tự báo BLOCKED cho Lead và đọc tiếp
+phần còn đọc được. Câu hỏi `AskUserQuestion` vẫn chờ trả lời vì không cấp capability. Pi và OMP vẫn có durable role channel nhưng chưa có no-write mode đã
 qualify, nên no-write launch của hai route này fail closed.
 Assignment boundary luôn thắng global Peer run mode và mode lưu trong Agent Profile: `no-write` ép
 qualified read-only/guarded/plan mode với `unattended=false`; global `unattended` chỉ áp cho assignment có write
