@@ -5,6 +5,7 @@ import { join, resolve as resolvePath } from "node:path";
 import type { Logger } from "pino";
 import stripAnsi from "strip-ansi";
 import { z } from "zod";
+import { PI_MODES } from "@getpaseo/protocol/provider-manifest";
 
 import {
   type AgentCapabilityFlags,
@@ -1268,7 +1269,7 @@ export class PiRpcAgentSession implements AgentSession {
     this.state = options.initialState;
     this.capabilities = options.capabilities;
     this.provider = PI_PROVIDER;
-    this.currentModeId = options.currentModeId ?? null;
+    this.currentModeId = options.currentModeId ?? options.config.modeId ?? null;
     this.cleanup = options.cleanup;
     this.lastKnownThinkingOptionId =
       normalizePiThinkingOption(options.config.thinkingOptionId) ??
@@ -1478,15 +1479,17 @@ export class PiRpcAgentSession implements AgentSession {
   }
 
   async getAvailableModes(): Promise<AgentMode[]> {
-    return [];
+    return [...PI_MODES];
   }
 
   async getCurrentMode(): Promise<string | null> {
     return this.currentModeId;
   }
 
-  async setMode(_modeId: string): Promise<void | AgentProviderNotice> {
-    throw new Error("Pi does not expose selectable modes");
+  async setMode(modeId: string): Promise<void | AgentProviderNotice> {
+    if (!PI_MODES.some((mode) => mode.id === modeId)) {
+      throw new Error(`Invalid Pi mode '${modeId}'`);
+    }
   }
 
   getPendingPermissions(): AgentPermissionRequest[] {
@@ -2671,7 +2674,7 @@ export class PiRpcAgentClient implements AgentClient {
           )
         ).map((model) => mapPiModel(model, PI_PROVIDER)),
       );
-      return { models, modes: [] };
+      return { models, modes: [...PI_MODES] };
     } finally {
       context?.signal.removeEventListener("abort", handleAbort);
       await closeSession();

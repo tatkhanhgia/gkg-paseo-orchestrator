@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PROVIDER_DEFINITIONS } from "./provider-manifest";
+import { AGENT_PROVIDER_DEFINITIONS, getUnattendedModeId } from "./provider-manifest";
 
 describe("shipping provider support defaults", () => {
   it("enables only currently supported built-in provider families", () => {
@@ -20,5 +20,11 @@ describe("shipping provider support defaults", () => {
       pi: false,
       omp: false,
     });
+  });
+});
+
+describe("unattended provider modes", () => {
+  it("lets Pi satisfy unattended-only policies through its full-access mode", () => {
+    expect(getUnattendedModeId("pi")).toBe("full-access");
   });
 });
