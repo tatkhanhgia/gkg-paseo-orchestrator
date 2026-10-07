@@ -1,22 +1,26 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
 
 const repoRoot = new URL("../", import.meta.url);
 const ciWorkflowPath = new URL(".github/workflows/ci.yml", repoRoot);
-const dockerWorkflowPath = new URL(".github/workflows/docker.yml", repoRoot);
-const nixWorkflowPath = new URL(".github/workflows/nix.yml", repoRoot);
-const nixUpdateHashWorkflowPath = new URL(".github/workflows/nix-update-hash.yml", repoRoot);
-const websiteWorkflowPath = new URL(".github/workflows/deploy-website.yml", repoRoot);
+// The GKG fork parks upstream workflows it cannot run in .github/workflows-disabled/
+// (see its README). The contract stays pinned wherever the file lives, so re-enabling
+// a parked workflow by moving it back does not drop its protection.
+function workflowUrl(name) {
+  const active = new URL(`.github/workflows/${name}`, repoRoot);
+  return existsSync(active) ? active : new URL(`.github/workflows-disabled/${name}`, repoRoot);
+}
+const dockerWorkflowPath = workflowUrl("docker.yml");
+const nixWorkflowPath = workflowUrl("nix.yml");
+const nixUpdateHashWorkflowPath = workflowUrl("nix-update-hash.yml");
+const websiteWorkflowPath = workflowUrl("deploy-website.yml");
 const portableReleaseCoreWorkflowPath = new URL(
   ".github/workflows/downstream-portable-release-core.yml",
   repoRoot,
 );
-const portablePrereleaseWorkflowPath = new URL(
-  ".github/workflows/downstream-macos-release.yml",
-  repoRoot,
-);
+const portablePrereleaseWorkflowPath = workflowUrl("downstream-macos-release.yml");
 const stableReleaseWorkflowPath = new URL(
   ".github/workflows/downstream-stable-release.yml",
   repoRoot,
@@ -104,6 +108,7 @@ test("gated checks are statically named jobs with real job-level gating", () => 
     const job = jobs.get(jobId)?.join("\n");
     assert.ok(job, `missing static job ${jobId}`);
     assert.match(job, new RegExp(`^    name: ${expected.name.replace(/[()]/g, "\\$&")}$`, "m"));
+    if (/^    if: false # GKG: disabled — \S/m.test(job)) continue;
     assert.match(job, /needs\.changes\.outputs\.full != 'false'/);
     for (const contract of expected.contracts ?? [expected.contract]) {
       assert.match(job, new RegExp(`needs\\.changes\\.outputs\\.${contract} != 'false'`));
@@ -366,6 +371,28 @@ test("cross-package invariants live in the suite that owns them", () => {
     repoRoot,
   );
   assert.match(readFileSync(protocolWireCompatibility, "utf8"), /wire schema compatibility/);
+});
+
+test("server build provenance check runs in CI after the build that produces it", () => {
+  // The check is a node:test file that reads dist/, so the server vitest suite excludes it;
+  // this pins the CI step that keeps it a gate.
+  const serverPackage = JSON.parse(
+    readFileSync(new URL("packages/server/package.json", repoRoot), "utf8"),
+  );
+  assert.equal(
+    serverPackage.scripts["test:build-provenance"],
+    "node --test scripts/write-build-provenance.test.mjs",
+  );
+  const steps = jobBlocks(readFileSync(ciWorkflowPath, "utf8"))
+    .get("typecheck")
+    .filter((line) => /^\s+run: /.test(line))
+    .map((line) => line.trim());
+  const build = steps.indexOf("run: npm run build:server");
+  const provenance = steps.indexOf(
+    "run: npm run test:build-provenance --workspace=@getpaseo/server",
+  );
+  assert.ok(build >= 0, "typecheck job no longer builds the server");
+  assert.ok(provenance > build, "build provenance check must run after npm run build:server");
 });
 
 test("browser and desktop tests have exclusive, directory-owned suites", () => {
