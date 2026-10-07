@@ -38,6 +38,7 @@ test("sendPromptToAgent forwards the client message id as run options", async ()
     "getAgent",
     vi.fn(() => agent),
   );
+  Reflect.set(agentManager, "waitForAgentClose", vi.fn().mockResolvedValue(undefined));
   Reflect.set(agentManager, "tryRunOutOfBandAuthorized", vi.fn().mockResolvedValue(false));
   Reflect.set(agentManager, "hasInFlightRun", vi.fn().mockReturnValue(false));
   Reflect.set(agentManager, "startAuthorizedAgentStream", async (...args: unknown[]) => {
@@ -79,6 +80,7 @@ test("safe-boundary prompt delivery never replaces an in-flight run", async () =
     "getAgent",
     vi.fn(() => agent),
   );
+  Reflect.set(agentManager, "waitForAgentClose", vi.fn().mockResolvedValue(undefined));
   Reflect.set(agentManager, "tryRunOutOfBandAuthorized", vi.fn().mockResolvedValue(false));
   Reflect.set(agentManager, "hasInFlightRun", vi.fn().mockReturnValue(true));
   Reflect.set(agentManager, "startAuthorizedAgentStream", async (...args: unknown[]) => {

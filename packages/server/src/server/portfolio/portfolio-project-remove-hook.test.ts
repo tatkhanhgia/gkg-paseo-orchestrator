@@ -10,20 +10,21 @@ import { createPersistedProjectRecord } from "../workspace-registry.js";
 import { FileBackedPortfolioService } from "./portfolio-service.js";
 import { FileBackedPortfolioStore } from "./portfolio-store.js";
 import { Session, type SessionOptions } from "../session.js";
+import { OWNER_PERMISSIONS } from "../authorization/index.js";
+import { WorkspaceAutoName } from "../workspace-auto-name.js";
 import {
   asAgentManager,
   asAgentStorage,
-  asChatService,
   asCheckoutDiffManager,
   asDaemonConfigStore,
   asDownloadTokenStore,
-  asLoopService,
-  asPushTokenStore,
   asScheduleService,
-  asWorkspaceGitService,
+  asPushNotifications,
+  createAgentRequestsStub,
   createProviderSnapshotManagerStub,
   findByType,
 } from "../test-utils/session-stubs.js";
+import { createNoopWorkspaceGitService } from "../test-utils/workspace-git-service-stub.js";
 
 describe("project.remove.request portfolio scrub hook", () => {
   let paseoHome: string;
@@ -66,19 +67,33 @@ describe("project.remove.request portfolio scrub hook", () => {
 
   function createSession(onMessage: (message: SessionOutboundMessage) => void): Session {
     const logger = pino({ level: "silent" });
+    const agentManager = asAgentManager({
+      listAgents: vi.fn(() => []),
+      listProviderSubagentActivity: vi.fn(() => []),
+      subscribe: vi.fn(() => () => {}),
+    });
+    const workspaceRegistry: SessionOptions["workspaceRegistry"] = {
+      initialize: vi.fn(),
+      existsOnDisk: vi.fn(),
+      list: vi.fn().mockResolvedValue([]),
+      get: vi.fn(),
+      update: vi.fn(),
+      upsert: vi.fn(),
+      archive: vi.fn(),
+      remove: vi.fn(),
+    };
+    const workspaceGitService = createNoopWorkspaceGitService();
+    const providerSnapshotManager = createProviderSnapshotManagerStub().manager;
     const sessionOptions: SessionOptions = {
       clientId: "test-client",
-      scopes: ["*"],
+      permissions: OWNER_PERMISSIONS,
       onMessage,
       logger,
+      agentRequests: createAgentRequestsStub(),
       downloadTokenStore: asDownloadTokenStore(),
-      pushTokenStore: asPushTokenStore(),
+      pushNotifications: asPushNotifications(),
       paseoHome,
-      agentManager: asAgentManager({
-        listAgents: vi.fn(() => []),
-        listProviderSubagentActivity: vi.fn(() => []),
-        subscribe: vi.fn(() => () => {}),
-      }),
+      agentManager,
       agentStorage: asAgentStorage({
         list: vi.fn().mockResolvedValue([]),
         get: vi.fn().mockResolvedValue(undefined),
@@ -93,25 +108,23 @@ describe("project.remove.request portfolio scrub hook", () => {
         archive: vi.fn(),
         remove: removeProject,
       },
-      workspaceRegistry: {
-        initialize: vi.fn(),
-        existsOnDisk: vi.fn(),
-        list: vi.fn().mockResolvedValue([]),
-        get: vi.fn(),
-        update: vi.fn(),
-        upsert: vi.fn(),
-        archive: vi.fn(),
-        remove: vi.fn(),
-      },
-      chatService: asChatService(),
+      workspaceRegistry,
       portfolioService,
       scheduleService: asScheduleService(),
-      loopService: asLoopService(),
       checkoutDiffManager: asCheckoutDiffManager({
         scheduleRefreshForCwd: vi.fn(),
       }),
-      workspaceGitService: asWorkspaceGitService({
-        resolveForge: vi.fn(),
+      workspaceGitService,
+      workspaceAutoName: new WorkspaceAutoName({
+        agentManager,
+        workspaceRegistry,
+        workspaceGitService,
+        providerSnapshotManager,
+        readDaemonConfig: () => ({ metadataGeneration: { providers: [] } }),
+        gitMutation: { notifyGitMutation: async () => {} },
+        emitWorkspaceUpdateForCwd: async () => {},
+        emitWorkspaceUpdateForWorkspaceId: async () => {},
+        logger,
       }),
       daemonConfigStore: asDaemonConfigStore({
         get: vi.fn(() => ({ mcp: { injectIntoAgents: false }, providers: {} })),
@@ -120,7 +133,7 @@ describe("project.remove.request portfolio scrub hook", () => {
       stt: null,
       tts: null,
       terminalManager: null,
-      providerSnapshotManager: createProviderSnapshotManagerStub().manager,
+      providerSnapshotManager,
     };
     return new Session(sessionOptions);
   }
