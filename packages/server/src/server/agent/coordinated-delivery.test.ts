@@ -320,34 +320,47 @@ describe("coordinated-delivery", () => {
   });
 
   test("a failed delivery pass is retried only by the bounded retry timer, even if its failure re-notifies the recipient", async () => {
-    const harness = createHarness({ running: false });
-    harness.records.set(
-      "agent-1",
-      makeRecord("agent-1", [{ id: "a", value: "a", deliveredAt: null }]),
-    );
-    const { updateRecord } = createSerializedRecordUpdateQueue(harness.dependencies);
-    let sends = 0;
-    let failureNotifications = 0;
-    const channel = createPendingDeliveryChannel(harness.dependencies, updateRecord, {
-      ...harness.config,
-      deliver: async () => {
-        sends += 1;
-        throw new Error("persistent send failure");
-      },
-      // Persisting the failure goes through updateRecord, which notifies agent state; an idle
-      // recipient then emits an idle event while this pass is still in flight. The cap only
-      // lets an unbounded implementation terminate so the test can fail instead of hang.
-      markFailed: async (_updateRecord, agentId) => {
-        failureNotifications += 1;
-        if (failureNotifications < 50) harness.reachIdleBoundary(agentId);
-      },
-    });
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ running: false });
+      harness.records.set(
+        "agent-1",
+        makeRecord("agent-1", [{ id: "a", value: "a", deliveredAt: null }]),
+      );
+      const { updateRecord } = createSerializedRecordUpdateQueue(harness.dependencies);
+      let sends = 0;
+      let failureNotifications = 0;
+      const channel = createPendingDeliveryChannel(harness.dependencies, updateRecord, {
+        ...harness.config,
+        deliver: async () => {
+          sends += 1;
+          throw new Error("persistent send failure");
+        },
+        // Persisting the failure goes through updateRecord, which notifies agent state; an idle
+        // recipient then emits an idle event while this pass is still in flight. The cap only
+        // lets an unbounded implementation terminate so the test can fail instead of hang.
+        markFailed: async (_updateRecord, agentId) => {
+          failureNotifications += 1;
+          if (failureNotifications < 50) harness.reachIdleBoundary(agentId);
+        },
+      });
 
-    channel.scheduleDelivery("agent-1");
-    await new Promise((resolve) => setTimeout(resolve, 200));
+      channel.scheduleDelivery("agent-1");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sends).toBe(1);
 
-    // One initial pass plus maxInProcessRetries (2) timer-driven retries.
-    expect(sends).toBe(3);
+      // The harness backoff is 20 ms: one timer-driven retry per step, up to maxInProcessRetries.
+      await vi.advanceTimersByTimeAsync(20);
+      expect(sends).toBe(2);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(sends).toBe(3);
+
+      // Past the ceiling nothing else may send, however long the recipient stays idle.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sends).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("resumePendingDeliveries reschedules every record with undelivered items after a restart", async () => {

@@ -30,9 +30,18 @@ export interface SerializedRecordUpdateDependencies {
   agentManager: Pick<AgentManager, "notifyAgentState">;
 }
 
+export interface UpdateRecordOptions {
+  /**
+   * Allow writing an archived record. For cleanup of state a caller left on a record that was
+   * archived mid-operation; delivery to an archived agent stays refused.
+   */
+  allowArchived?: boolean;
+}
+
 export type UpdateRecordFn = <TResult>(
   agentId: string,
   mutate: SerializedRecordMutator<TResult>,
+  options?: UpdateRecordOptions,
 ) => Promise<TResult>;
 
 export interface PendingDeliveryDispatchResult {
@@ -68,11 +77,11 @@ export function createSerializedRecordUpdateQueue(
 
   const recordUpdates = new Map<string, Promise<unknown>>();
 
-  const updateRecord: UpdateRecordFn = async (agentId, mutate) => {
+  const updateRecord: UpdateRecordFn = async (agentId, mutate, options) => {
     const previous = recordUpdates.get(agentId) ?? Promise.resolve();
     const current = previous.then(async () => {
       const record = await dependencies.agentStorage.get(agentId);
-      if (!record || record.internal || record.archivedAt) {
+      if (!record || record.internal || (record.archivedAt && !options?.allowArchived)) {
         throw new Error(`Agent ${agentId} is not available for coordinated delivery`);
       }
       const next = mutate(record);

@@ -70,6 +70,8 @@ function createFinishHarness() {
   let runStartFailure: Error | null = null;
   let beforeProviderStart: (() => Promise<void>) | null = null;
   let notifyAgentStateCount = 0;
+  const beforeNextGet = new Map<string, () => Promise<void>>();
+  const beforeNextGetAgent = new Map<string, () => void>();
 
   function dispatch(event: AgentManagerEvent): void {
     for (const sub of subscribers) {
@@ -99,7 +101,14 @@ function createFinishHarness() {
   }
 
   const agentManager: AgentManager = Object.create(AgentManager.prototype);
-  Reflect.set(agentManager, "getAgent", (id: string) => agents.get(id) ?? null);
+  Reflect.set(agentManager, "getAgent", (id: string) => {
+    const hook = beforeNextGetAgent.get(id);
+    if (hook) {
+      beforeNextGetAgent.delete(id);
+      hook();
+    }
+    return agents.get(id) ?? null;
+  });
   Reflect.set(
     agentManager,
     "subscribe",
@@ -160,7 +169,14 @@ function createFinishHarness() {
   Reflect.set(agentManager, "waitForAgentClose", async () => {});
 
   const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
-  Reflect.set(agentStorage, "get", async (id: string) => records.get(id) ?? null);
+  Reflect.set(agentStorage, "get", async (id: string) => {
+    const hook = beforeNextGet.get(id);
+    if (hook) {
+      beforeNextGet.delete(id);
+      await hook();
+    }
+    return records.get(id) ?? null;
+  });
   Reflect.set(agentStorage, "upsert", async (record: StoredAgentRecord) => {
     records.set(record.id, record);
   });
@@ -174,6 +190,14 @@ function createFinishHarness() {
     sendFailures,
     setRunStartFailure(error: Error | null) {
       runStartFailure = error;
+    },
+    /** Runs once, just before the next storage read of `agentId`, to stage an interleaving. */
+    runBeforeNextGet(agentId: string, callback: () => Promise<void>) {
+      beforeNextGet.set(agentId, callback);
+    },
+    /** Runs once, just before the next live-snapshot read of `agentId`. */
+    runBeforeNextGetAgent(agentId: string, callback: () => void) {
+      beforeNextGetAgent.set(agentId, callback);
     },
     setBeforeProviderStart(callback: (() => Promise<void>) | null) {
       beforeProviderStart = callback;
@@ -1244,11 +1268,15 @@ test("a run started by a finish notification is watched on behalf of the caller'
     requireParentOwnership: true,
   });
   attachFinishNotificationWatch(deps, { childAgentId: "peer-1", watch });
+  // As in production, the dispatch returns only once the Lead's run is running.
+  h.setBeforeProviderStart(async () => {
+    h.setBeforeProviderStart(null);
+    h.setLifecycle("lead-1", "running", "turn-8");
+  });
   h.setLifecycle("peer-1", "idle");
   await vi.waitFor(() => expect(h.sentPrompts.map((p) => p.agentId)).toEqual(["lead-1"]));
 
-  // The notification-started Lead run is cancelled: the fake manager reports it as running, then idle.
-  h.setLifecycle("lead-1", "running", "turn-8");
+  // The notification-started Lead run is cancelled, which leaves the Lead idle.
   h.setLifecycle("lead-1", "idle");
 
   await vi.waitFor(() =>
@@ -1302,3 +1330,114 @@ test.each([
     expect(h.sentPrompts.map((p) => p.agentId)).toEqual(["lead-1"]);
   },
 );
+
+// Reviewer round 1 on the parent-watch fix: the cleanup must never retire a watch that may still
+// be needed. Each test stages one interleaving between "the caller's record was read" and
+// "the notification dispatch returned" and asserts the parent still gets its bell.
+function setUpLeadWithParent(h: ReturnType<typeof createFinishHarness>) {
+  h.agents.set("peer-1", makeFakeAgent("peer-1", "running"));
+  h.agents.get("peer-1")!.activeForegroundTurnId = "turn-1";
+  h.records.set("peer-1", makeRecord("peer-1", { labels: { "paseo.parent-agent-id": "lead-1" } }));
+  h.agents.set("lead-1", makeFakeAgent("lead-1", "idle"));
+  h.records.set(
+    "lead-1",
+    makeRecord("lead-1", { labels: { "paseo.parent-agent-id": "jarvis-1" } }),
+  );
+  h.agents.set("jarvis-1", makeFakeAgent("jarvis-1", "idle"));
+  h.records.set("jarvis-1", makeRecord("jarvis-1"));
+}
+
+async function finishPeerIntoLead(h: ReturnType<typeof createFinishHarness>) {
+  const deps = h.createDependencies();
+  const watch = await registerFinishNotificationWatch(deps, {
+    childAgentId: "peer-1",
+    callerAgentId: "lead-1",
+    requireParentOwnership: true,
+  });
+  attachFinishNotificationWatch(deps, { childAgentId: "peer-1", watch });
+  h.setLifecycle("peer-1", "idle");
+}
+
+async function leadWatchesOf(h: ReturnType<typeof createFinishHarness>, parentAgentId: string) {
+  const record = await h.agentStorage.get("lead-1");
+  return (record?.finishNotificationWatches ?? []).filter(
+    (watch) => watch.callerAgentId === parentAgentId,
+  );
+}
+
+test("a failed notification dispatch does not retire a parent watch the parent registered itself", async () => {
+  const h = createFinishHarness();
+  setUpLeadWithParent(h);
+  h.sendFailures.set("lead-1", 1);
+  // The parent prompts the Lead after the notification read the Lead's record but before it
+  // registered: the parent's pre-launch watch is the one registration then reuses.
+  let parentWatchId: string | null = null;
+  h.runBeforeNextGet("jarvis-1", async () => {
+    const parentWatch = await registerFinishNotificationWatch(h.createDependencies(), {
+      childAgentId: "lead-1",
+      callerAgentId: "jarvis-1",
+      requireParentOwnership: true,
+    });
+    parentWatchId = parentWatch.watchId;
+  });
+
+  await finishPeerIntoLead(h);
+  await vi.waitFor(async () => {
+    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries ?? []).toBeDefined();
+    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts).toBe(
+      1,
+    );
+  });
+
+  expect(await leadWatchesOf(h, "jarvis-1")).toEqual([
+    expect.objectContaining({ watchId: parentWatchId, status: "active" }),
+  ]);
+});
+
+test("a notification dispatch that errors after its run began keeps the parent watch", async () => {
+  const h = createFinishHarness();
+  setUpLeadWithParent(h);
+  // Provider startup outlasts the run-start wait: the wait rejects, but the run is in flight.
+  h.setRunStartFailure(new Error("claude run did not start within 60 seconds (phase: run start)"));
+  h.setBeforeProviderStart(async () => {
+    h.setLifecycle("lead-1", "running", "turn-8");
+  });
+
+  await finishPeerIntoLead(h);
+  await vi.waitFor(async () => {
+    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts).toBe(
+      1,
+    );
+  });
+  h.setRunStartFailure(null);
+  h.setBeforeProviderStart(null);
+  h.setLifecycle("lead-1", "idle");
+
+  await vi.waitFor(() =>
+    expect(h.sentPrompts.some((prompt) => prompt.agentId === "jarvis-1")).toBe(true),
+  );
+});
+
+test("a notification dispatch that is a no-op because the caller was archived retires its parent watch", async () => {
+  const h = createFinishHarness();
+  setUpLeadWithParent(h);
+  // The Lead is archived after the delivery's availability checks and after the parent watch was
+  // registered (attach reads the Lead's live snapshot right then), so
+  // sendPromptToAgent(unarchive: false) reports turn_started without starting anything.
+  h.runBeforeNextGetAgent("lead-1", () => {
+    h.records.set("lead-1", {
+      ...h.records.get("lead-1")!,
+      archivedAt: "2026-10-07T00:00:00.000Z",
+    });
+  });
+
+  await finishPeerIntoLead(h);
+  await vi.waitFor(async () => {
+    expect(await leadWatchesOf(h, "jarvis-1")).toHaveLength(1);
+  });
+
+  expect(await leadWatchesOf(h, "jarvis-1")).toEqual([
+    expect.objectContaining({ status: "stopped" }),
+  ]);
+  expect(h.sentPrompts.filter((prompt) => prompt.agentId === "lead-1")).toEqual([]);
+});
