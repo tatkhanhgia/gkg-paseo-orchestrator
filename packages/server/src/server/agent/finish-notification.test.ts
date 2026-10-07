@@ -191,6 +191,10 @@ function createFinishHarness() {
     setRunStartFailure(error: Error | null) {
       runStartFailure = error;
     },
+    /** Live manager subscriptions scoped to `agentId` (the delivery channel's and the watchers'). */
+    liveSubscriberCount(agentId: string) {
+      return Array.from(subscribers).filter((sub) => sub.agentId === agentId).length;
+    },
     /** Runs once, just before the next storage read of `agentId`, to stage an interleaving. */
     runBeforeNextGet(agentId: string, callback: () => Promise<void>) {
       beforeNextGet.set(agentId, callback);
@@ -1454,7 +1458,7 @@ test("a watch left pending by a failed notification dispatch reports the caller'
   });
 });
 
-test("repeated failed notification dispatches leave at most one pending parent watch", async () => {
+test("repeated failed notification dispatches leave one pending parent watch and one live subscription for it", async () => {
   vi.useFakeTimers();
   try {
     const h = createFinishHarness();
@@ -1464,15 +1468,21 @@ test("repeated failed notification dispatches leave at most one pending parent w
     await finishPeerIntoLead(h);
     // Default backoff: 500 ms, then 1 s, then 2 s. Three failures, the fourth pass succeeds.
     await vi.advanceTimersByTimeAsync(0);
+    const attempts = async () =>
+      (await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts;
+    expect(await attempts()).toBe(1);
+    const subscriptionsAfterFirstFailure = h.liveSubscriberCount("lead-1");
+
     await vi.advanceTimersByTimeAsync(500);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect((await h.agentStorage.get("lead-1"))?.finishNotificationDeliveries?.[0]?.attempts).toBe(
-      3,
-    );
+    expect(await attempts()).toBe(3);
 
     expect(await leadWatchesOf(h, "jarvis-1")).toEqual([
       expect.objectContaining({ status: "active" }),
     ]);
+    // Every failed attempt reuses the same pending watch; none may attach another subscription.
+    // With a startup that never reaches `running`, a watcher never ends on its own.
+    expect(h.liveSubscriberCount("lead-1")).toBe(subscriptionsAfterFirstFailure);
   } finally {
     vi.useRealTimers();
   }

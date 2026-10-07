@@ -142,6 +142,9 @@ function hasAssignmentExpiryErrorPrefix(error: unknown): boolean {
   );
 }
 
+// Watch ids that already have a live subscription from `watchNotificationRunForParent`.
+const parentWatchesAttached = new Set<string>();
+
 /**
  * Registers and attaches the caller's PARENT watch for the run that a finish-notification
  * dispatch is about to start on the caller. Does nothing when the caller has no live parent.
@@ -156,6 +159,11 @@ function hasAssignmentExpiryErrorPrefix(error: unknown): boolean {
  * run-start wait that rejects after the run began). Leaving it pending is safe: registration
  * reuses a pre-launch watch, so at most one waits per child/parent pair, and the worst outcome
  * is one extra bell for the caller's next run, including after an unarchive.
+ *
+ * Known limit: the parent's own out-of-band command (e.g. `/goal pause`) can reuse this watch
+ * before the notification dispatches, and `send_agent_prompt` then cancels it for that command.
+ * That only reverts to the behaviour before this watch existed; separating the two identities
+ * needs a stored-schema change.
  */
 async function watchNotificationRunForParent(
   dependencies: FinishNotificationDependencies,
@@ -171,7 +179,16 @@ async function watchNotificationRunForParent(
     callerAgentId: parentAgentId,
     requireParentOwnership: true,
   });
-  attachFinishNotificationWatch(dependencies, { childAgentId: callerRecord.id, watch });
+  // Every failed attempt reuses the same pending watch. A watcher ends only after a terminal
+  // outcome it saw running for, so a startup that never reaches `running` would otherwise stack
+  // one more live subscription per attempt, forever.
+  if (parentWatchesAttached.has(watch.watchId)) return;
+  parentWatchesAttached.add(watch.watchId);
+  attachFinishNotificationWatch(dependencies, {
+    childAgentId: callerRecord.id,
+    watch,
+    onEnd: () => parentWatchesAttached.delete(watch.watchId),
+  });
 }
 
 /**
@@ -689,7 +706,12 @@ async function persistObservedRun(
  */
 export function attachFinishNotificationWatch(
   dependencies: FinishNotificationDependencies,
-  params: { childAgentId: string; watch: FinishNotificationWatch },
+  params: {
+    childAgentId: string;
+    watch: FinishNotificationWatch;
+    /** Called once when this subscription ends, whether by a terminal outcome or by `stop()`. */
+    onEnd?: () => void;
+  },
 ): () => void {
   const { childAgentId, watch } = params;
   let observedRunId = watch.observedRunId ?? null;
@@ -910,7 +932,7 @@ export function attachFinishNotificationWatch(
     }
   }
 
-  const unsubscribe = dependencies.agentManager.subscribe(
+  const unsubscribeFromManager = dependencies.agentManager.subscribe(
     (event) => {
       if (stopped) return;
       if (event.type === "agent_state") {
@@ -927,6 +949,13 @@ export function attachFinishNotificationWatch(
     },
     { agentId: childAgentId, replayState: false },
   );
+  let ended = false;
+  const unsubscribe = (): void => {
+    if (ended) return;
+    ended = true;
+    unsubscribeFromManager();
+    params.onEnd?.();
+  };
 
   // Fast-finish reconciliation: the caller already dispatched (or attempted
   // to dispatch) a run before calling this, so a terminal-looking snapshot
