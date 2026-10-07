@@ -142,6 +142,93 @@ function hasAssignmentExpiryErrorPrefix(error: unknown): boolean {
   );
 }
 
+interface NotificationRunParentWatch {
+  /** Undo the pre-launch registration when the notification dispatch started no run. */
+  abandon(): Promise<void>;
+}
+
+/**
+ * Registers and attaches the caller's PARENT watch for the run that a finish-notification
+ * dispatch is about to start on the caller. Returns null when the caller has no live parent.
+ *
+ * A watch is one-shot and per run, and `send_agent_prompt`/`create_agent` register it only for
+ * runs the parent itself starts. A Lead woken by its Peer's finish notification therefore ran
+ * unobserved: when that run was cancelled, nobody above the Lead heard it go idle.
+ */
+async function watchNotificationRunForParent(
+  dependencies: FinishNotificationDependencies,
+  callerRecord: StoredAgentRecord | null,
+): Promise<NotificationRunParentWatch | null> {
+  const parentAgentId = getParentAgentIdFromLabels(callerRecord?.labels);
+  if (!callerRecord || !parentAgentId) return null;
+  const parentRecord = await dependencies.agentStorage.get(parentAgentId);
+  if (!parentRecord || parentRecord.archivedAt || parentRecord.internal) return null;
+
+  // A pre-launch watch of the parent's own may already be registered (the parent prompted the
+  // caller at the same moment). Share it, but never cancel what this dispatch did not create.
+  const sharesParentIntent = (callerRecord.finishNotificationWatches ?? []).some(
+    (watch) =>
+      watch.status === "active" &&
+      watch.callerAgentId === parentAgentId &&
+      watch.requireParentOwnership &&
+      (watch.observedRunId ?? null) === null,
+  );
+  const watch = await registerFinishNotificationWatch(dependencies, {
+    childAgentId: callerRecord.id,
+    callerAgentId: parentAgentId,
+    requireParentOwnership: true,
+  });
+  const stop = attachFinishNotificationWatch(dependencies, {
+    childAgentId: callerRecord.id,
+    watch,
+  });
+  return {
+    abandon: async () => {
+      stop();
+      if (!sharesParentIntent) {
+        await cancelFinishNotificationWatch(dependencies, {
+          childAgentId: callerRecord.id,
+          watch,
+        });
+      }
+    },
+  };
+}
+
+/**
+ * Starts the caller's notification run with the caller's parent watching it. The run is not one
+ * the parent prompted, so no watch of the parent's covers it; without this the parent sees the
+ * caller as `running`, waits for a bell, and never gets one when the run ends.
+ */
+async function sendNotificationWatchedByParent(
+  dependencies: FinishNotificationDependencies,
+  params: { callerAgentId: string; callerRecord: StoredAgentRecord | null; prompt: string },
+): Promise<void> {
+  const parentWatch = await watchNotificationRunForParent(dependencies, params.callerRecord);
+  try {
+    // Never replace or steer an active caller run: the surrounding delivery
+    // channel only calls this once the caller has no in-flight run, and
+    // `replaceRunning: false` keeps that guarantee even if the caller starts a
+    // run in the small window between that check and this call.
+    const dispatch = await sendPromptToAgent({
+      agentManager: dependencies.agentManager,
+      agentStorage: dependencies.agentStorage,
+      agentId: params.callerAgentId,
+      prompt: params.prompt,
+      unarchive: false,
+      replaceRunning: false,
+      waitForRunStart: true,
+      logger: dependencies.logger,
+    });
+    if (dispatch.disposition !== "turn_started") {
+      await parentWatch?.abandon();
+    }
+  } catch (error) {
+    await parentWatch?.abandon();
+    throw error;
+  }
+}
+
 async function deliverPendingFinishNotifications(
   dependencies: FinishNotificationDependencies,
   callerAgentId: string,
@@ -235,20 +322,11 @@ async function deliverPendingFinishNotifications(
     };
   }
 
-  // Never replace or steer an active caller run: the surrounding delivery
-  // channel only calls this once the caller has no in-flight run, and
-  // `replaceRunning: false` keeps that guarantee even if the caller starts a
-  // run in the small window between that check and this call.
   try {
-    await sendPromptToAgent({
-      agentManager: dependencies.agentManager,
-      agentStorage: dependencies.agentStorage,
-      agentId: callerAgentId,
+    await sendNotificationWatchedByParent(dependencies, {
+      callerAgentId,
+      callerRecord: dispatchCallerRecord,
       prompt: formatSystemNotificationPrompt(bodies.map(({ body }) => body).join("\n\n")),
-      unarchive: false,
-      replaceRunning: false,
-      waitForRunStart: true,
-      logger: dependencies.logger,
     });
   } catch (error) {
     // The error prefix only identifies the manager's expiry-shaped failure for a bounded

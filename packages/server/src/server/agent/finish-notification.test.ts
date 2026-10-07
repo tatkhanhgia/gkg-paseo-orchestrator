@@ -154,6 +154,10 @@ function createFinishHarness() {
     return (async function* () {})();
   });
   Reflect.set(agentManager, "setAgentMode", async () => {});
+  // The harness manager is a bare prototype instance; ensureAgentLoaded would otherwise reach the
+  // real close-tracking methods, which read private state the constructor never initialised.
+  Reflect.set(agentManager, "isAgentCloseInFlight", () => false);
+  Reflect.set(agentManager, "waitForAgentClose", async () => {});
 
   const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
   Reflect.set(agentStorage, "get", async (id: string) => records.get(id) ?? null);
@@ -1215,3 +1219,86 @@ test("setupFinishNotification composes register+attach for call sites that dispa
   h.setLifecycle("child-1", "idle");
   await vi.waitFor(() => expect(h.sentPrompts).toHaveLength(1));
 });
+
+// Regression: Lead 2735ad8f idled ~10h on 2026-10-06. Its Peer's cancel DID notify the Lead and wake
+// it (a Lead run started), but that run was started by the daemon, not by the Lead's parent, so no
+// watch of the parent covered it. The run was then cancelled, nobody above the Lead got a bell, and
+// the parent was left believing the Lead was still working.
+test("a run started by a finish notification is watched on behalf of the caller's own parent", async () => {
+  const h = createFinishHarness();
+  h.agents.set("peer-1", makeFakeAgent("peer-1", "running"));
+  h.agents.get("peer-1")!.activeForegroundTurnId = "turn-1";
+  h.records.set("peer-1", makeRecord("peer-1", { labels: { "paseo.parent-agent-id": "lead-1" } }));
+  h.agents.set("lead-1", makeFakeAgent("lead-1", "idle"));
+  h.records.set(
+    "lead-1",
+    makeRecord("lead-1", { labels: { "paseo.parent-agent-id": "jarvis-1" } }),
+  );
+  h.agents.set("jarvis-1", makeFakeAgent("jarvis-1", "idle"));
+  h.records.set("jarvis-1", makeRecord("jarvis-1"));
+
+  const deps = h.createDependencies();
+  const watch = await registerFinishNotificationWatch(deps, {
+    childAgentId: "peer-1",
+    callerAgentId: "lead-1",
+    requireParentOwnership: true,
+  });
+  attachFinishNotificationWatch(deps, { childAgentId: "peer-1", watch });
+  h.setLifecycle("peer-1", "idle");
+  await vi.waitFor(() => expect(h.sentPrompts.map((p) => p.agentId)).toEqual(["lead-1"]));
+
+  // The notification-started Lead run is cancelled: the fake manager reports it as running, then idle.
+  h.setLifecycle("lead-1", "running", "turn-8");
+  h.setLifecycle("lead-1", "idle");
+
+  await vi.waitFor(() =>
+    expect(h.sentPrompts.map((p) => p.agentId)).toEqual(["lead-1", "jarvis-1"]),
+  );
+  expect((await h.agentStorage.get("jarvis-1"))?.finishNotificationDeliveries).toEqual([
+    expect.objectContaining({
+      childAgentId: "lead-1",
+      callerAgentId: "jarvis-1",
+      runId: "turn-8",
+      reason: "finished",
+    }),
+  ]);
+});
+
+test.each([
+  { name: "has no parent", leadLabels: {}, jarvisArchivedAt: undefined },
+  {
+    name: "has an archived parent",
+    leadLabels: { "paseo.parent-agent-id": "jarvis-1" },
+    jarvisArchivedAt: "2026-10-06T00:00:00.000Z",
+  },
+])(
+  "a notification-started run registers no parent watch when the caller $name",
+  async ({ leadLabels, jarvisArchivedAt }) => {
+    const h = createFinishHarness();
+    h.agents.set("peer-1", makeFakeAgent("peer-1", "running"));
+    h.agents.get("peer-1")!.activeForegroundTurnId = "turn-1";
+    h.records.set(
+      "peer-1",
+      makeRecord("peer-1", { labels: { "paseo.parent-agent-id": "lead-1" } }),
+    );
+    h.agents.set("lead-1", makeFakeAgent("lead-1", "idle"));
+    h.records.set("lead-1", makeRecord("lead-1", { labels: leadLabels }));
+    h.records.set("jarvis-1", makeRecord("jarvis-1", { archivedAt: jarvisArchivedAt }));
+
+    const deps = h.createDependencies();
+    const watch = await registerFinishNotificationWatch(deps, {
+      childAgentId: "peer-1",
+      callerAgentId: "lead-1",
+      requireParentOwnership: true,
+    });
+    attachFinishNotificationWatch(deps, { childAgentId: "peer-1", watch });
+    h.setLifecycle("peer-1", "idle");
+    await vi.waitFor(() => expect(h.sentPrompts).toHaveLength(1));
+    h.setLifecycle("lead-1", "running", "turn-8");
+    h.setLifecycle("lead-1", "idle");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect((await h.agentStorage.get("lead-1"))?.finishNotificationWatches ?? []).toEqual([]);
+    expect(h.sentPrompts.map((p) => p.agentId)).toEqual(["lead-1"]);
+  },
+);
