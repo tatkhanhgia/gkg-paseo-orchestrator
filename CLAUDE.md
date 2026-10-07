@@ -63,6 +63,8 @@ npm run format:check                 # Check formatting without writing
 Repo dev commands use checkout-local state by default. In this checkout, `PASEO_HOME` resolves to `.dev/paseo-home`, and `npm run cli -- ...` targets that same dev home automatically. The packaged desktop app and production-style daemon keep using `~/.paseo` on port `6767`.
 
 See [docs/development.md](docs/development.md) for full setup, build sync requirements, and debugging.
+`local-stack.sh --apply` needs a pinned release toolchain (Node, uv, Python, bd); see
+[Local release build](docs/release.md#local-release-build).
 
 ## Release branches
 

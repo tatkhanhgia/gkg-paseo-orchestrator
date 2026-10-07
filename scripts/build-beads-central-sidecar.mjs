@@ -89,6 +89,7 @@ function centralSourceSha256(centralRoot) {
 
 function parseArgs(argv) {
   let output = null;
+  let checkToolchain = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--output") {
@@ -96,14 +97,21 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (argument === "--check-toolchain") {
+      checkToolchain = true;
+      continue;
+    }
     fail(`Unknown argument: ${argument}`);
   }
-  if (!output) fail("Usage: build-beads-central-sidecar.mjs --output <directory>");
+  if (checkToolchain) return { checkToolchain, output: null };
+  if (!output) {
+    fail("Usage: build-beads-central-sidecar.mjs --output <directory> | --check-toolchain");
+  }
   const resolved = path.resolve(output);
   if (resolved === path.parse(resolved).root || resolved === REPO_ROOT) {
     fail(`Refusing unsafe sidecar output: ${resolved}`);
   }
-  return { output: resolved };
+  return { checkToolchain, output: resolved };
 }
 
 function resolveCentralRoot() {
@@ -185,11 +193,21 @@ async function resolveBeadsArchive(centralRoot, temporaryRoot) {
   return verifyBeadsArchive(archive);
 }
 
-function resolveBdBinary(centralRoot, archive, temporaryRoot) {
+// A configured PASEO_BEADS_BD_BIN that does not exist is a typo, not a request to build bd from
+// source; falling through to Go would report a missing Go toolchain instead of the real mistake.
+function resolvePrebuiltBd(centralRoot) {
   const configured = process.env.PASEO_BEADS_BD_BIN?.trim();
-  const prebuilt =
-    configured || path.join(centralRoot, "dist", process.platform === "win32" ? "bd.exe" : "bd");
-  if (existsSync(prebuilt)) return { binary: realpathSync(prebuilt), goRuntime: "prebuilt" };
+  if (configured) {
+    if (!existsSync(configured)) fail(`PASEO_BEADS_BD_BIN points to a missing file: ${configured}`);
+    return realpathSync(configured);
+  }
+  const bundled = path.join(centralRoot, "dist", process.platform === "win32" ? "bd.exe" : "bd");
+  return existsSync(bundled) ? realpathSync(bundled) : null;
+}
+
+function resolveBdBinary(centralRoot, archive, temporaryRoot) {
+  const prebuilt = resolvePrebuiltBd(centralRoot);
+  if (prebuilt) return { binary: prebuilt, goRuntime: "prebuilt" };
   const output = path.join(temporaryRoot, process.platform === "win32" ? "bd.exe" : "bd");
   const sourceRoot = path.join(temporaryRoot, "beads-source");
   mkdirSync(sourceRoot, { recursive: true });
@@ -252,6 +270,40 @@ function resolvePythonRuntime() {
     fail(`Python version mismatch: expected ${compatibleSeries}.x, received ${version}`);
   }
   return { python, version };
+}
+
+// Checks every external tool the sidecar build needs and reports all problems at once, so a
+// release build fails in seconds instead of after the Node product build has already run.
+function assertToolchainReady(centralRoot) {
+  const problems = [];
+  const check = (hint, probe) => {
+    try {
+      return probe();
+    } catch (error) {
+      problems.push(`${error instanceof Error ? error.message : String(error)}\n    -> ${hint}`);
+      return null;
+    }
+  };
+  const uv = check(`set PASEO_UV_BIN to a uv ${LOCK.uvVersion} binary`, resolveUvRuntime);
+  const python = check(
+    `set PASEO_PYTHON_BIN to a Python ${LOCK.pythonVersion.split(".").slice(0, 2).join(".")} interpreter`,
+    resolvePythonRuntime,
+  );
+  const bd = check(
+    `set PASEO_BEADS_BD_BIN to a prebuilt bd ${LOCK.beadsVersion}, or install Go ${LOCK.goVersion.split(".").slice(0, 2).join(".")}.x to build it`,
+    () => {
+      const prebuilt = resolvePrebuiltBd(centralRoot);
+      return prebuilt ? verifyBdBinary(prebuilt) : `built from source with ${resolveGoRuntime()}`;
+    },
+  );
+  if (problems.length > 0) {
+    fail(
+      `Beads Central sidecar toolchain is not ready (see docs/release.md#local-release-build):\n  ${problems.join("\n  ")}`,
+    );
+  }
+  process.stdout.write(
+    `Beads Central sidecar toolchain ready: ${uv.version}; ${python.version}; ${bd}\n`,
+  );
 }
 
 function buildPythonSidecar(centralRoot, temporaryRoot, uv, python) {
@@ -415,8 +467,12 @@ function assemble(
 }
 
 async function main() {
-  const { output } = parseArgs(process.argv.slice(2));
+  const { checkToolchain, output } = parseArgs(process.argv.slice(2));
   const centralRoot = resolveCentralRoot();
+  if (checkToolchain) {
+    assertToolchainReady(centralRoot);
+    return;
+  }
   verifyCentralSource(centralRoot);
   const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "paseo-beads-sidecar-build."));
   try {
@@ -443,4 +499,11 @@ async function main() {
   }
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  process.stderr.write(
+    `build-beads-central-sidecar: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  process.exitCode = 1;
+}
