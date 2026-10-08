@@ -44,7 +44,7 @@ describe("bundled policy pack registry", () => {
     expect(first.owner.policyVersion).toBe(SLP_BUNDLED_POLICY_VERSION);
     expect(first.owner.generationDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(first.owner.generationDigest).toBe(
-      "1aedb08557a78cf64b4826b91a20aa33dde61131ff431350a847fde4c0482c49",
+      "a0f756cffceba7c767ae38fda6e171d6ba686e92c04ddb4e3ebd7bc62fc94cad",
     );
     // Superseded by the Project Harness admission and test-proof mandate additions.
     expect(first.owner.generationDigest).not.toBe(

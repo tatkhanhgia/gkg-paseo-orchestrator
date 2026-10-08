@@ -92,6 +92,30 @@ describe("product role skill policy", () => {
     expect(councilSkill).not.toContain("the only tool operations permitted");
   });
 
+  test("mirrors the imported Lead baseline's Council trigger criteria", () => {
+    const repositoryRoot = path.resolve(import.meta.dirname, "../../../../../");
+    const roleSource = JSON.parse(
+      readFileSync(
+        path.join(repositoryRoot, "foundation/dist/profiles/native/role-definitions.json"),
+        "utf8",
+      ),
+    ) as { roles: { lead: string[] } };
+    const trigger = roleSource.roles.lead.find((block) => block.startsWith("Council trigger:"));
+    const criteria = [...(trigger ?? "").matchAll(/\([a-d]\) ([^,.—]+)/gu)].map((m) => m[1].trim());
+    const skill = readFileSync(path.join(repositoryRoot, "skills/council/SKILL.md"), "utf8");
+    const description = /^description: (.*)$/mu.exec(skill)?.[1] ?? "";
+    const section = (/^## When to convene\n([\s\S]*?)^## /mu.exec(skill)?.[1] ?? "").replace(
+      /\s+/gu,
+      " ",
+    );
+
+    expect(criteria).toHaveLength(4);
+    for (const criterion of criteria) {
+      expect(description).toContain(criterion);
+      expect(section).toContain(criterion);
+    }
+  });
+
   test("admits Council only to Lead from one canonical manifest", () => {
     const root = bundleRoot();
     const lead = loadProductSkillPolicy("lead", root);
