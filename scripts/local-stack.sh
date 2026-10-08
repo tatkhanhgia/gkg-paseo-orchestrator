@@ -42,8 +42,10 @@ installed_provenance() {
 
 # Fingerprint of just what ships into the daemon. The provenance file records a whole-tree
 # fingerprint, which flips on any doc edit and would cry stale for changes the daemon never
-# sees. This one is scoped to packages/ and foundation/dist/, written beside the release at
-# install time, and compared on the next check — so "stale" means runtime code actually moved.
+# sees. This one is scoped to packages/, foundation/dist/, and skills/ (product skills the build
+# copies into the daemon), written beside the release at install time, and compared on the next
+# check — so "stale" means runtime code actually moved. The domain tag changes with the scope, so
+# a stamp written under an older scope never compares equal.
 runtime_fingerprint() {
   node -e '
     const { createHash } = require("node:crypto");
@@ -51,10 +53,10 @@ runtime_fingerprint() {
     const { readFileSync, readlinkSync, lstatSync } = require("node:fs");
     const { resolve } = require("node:path");
     const root = process.argv[1];
-    const scope = ["packages", "foundation/dist"];
+    const scope = ["packages", "foundation/dist", "skills"];
     const git = (a, o = {}) => execFileSync("git", ["-C", root, ...a], { maxBuffer: 64 << 20, ...o });
     const h = createHash("sha256");
-    h.update("paseo-runtime-scope-v1\0");
+    h.update("paseo-runtime-scope-v2\0");
     h.update(git(["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
     h.update("\0diff\0");
     h.update(git(["diff", "--binary", "--no-ext-diff", "HEAD", "--", ...scope]));
