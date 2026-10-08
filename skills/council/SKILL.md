@@ -1,6 +1,6 @@
 ---
 name: council
-description: Lead-only Paseo Council for a consequential architecture, review, product, research, policy, or incident decision. Launch fresh provider-neutral Peer specialists with native solution-architect or reviewer execution profiles, sealed reports, Beads Central child issues, bounded verification, and one binding Lead verdict. Use when the Human asks the current Lead to start a council or invokes /council. Never use inside a Council seat.
+description: Lead-only Paseo Council for a consequential architecture, review, product, research, policy, or incident decision. Launch fresh provider-neutral Peer specialists with native solution-architect or reviewer execution profiles, sealed reports, Beads Central child issues, bounded verification, and one binding Lead verdict. Use when the Human asks the current Lead to start a council or invokes /council, or when the Lead's own next decision is hard to reverse, touches security or data integrity, changes architecture across more than one module, or commits significant cost or effort. Never use inside a Council seat.
 ---
 
 # Paseo Council — Lead protocol
@@ -19,7 +19,8 @@ task.
 
 The Human may start Council by asking Lead directly or through a Council control surface that routes
 the request to the existing Lead. A Council page is a Human view and trigger, not another authority
-tier. Council remains optional across Foundation work. Once Lead starts a native Council with
+tier. Lead also convenes Council itself when its next decision meets [When to convene](#when-to-convene);
+otherwise Council is not required. Once Lead starts a native Council with
 `start_council`, that exact case uses the one returned Paseo Room as an authored-evidence channel.
 Seats still derive independently in their own sessions: Peer has `post_room` but no `read_room`, so it
 can publish its own sealed report without reading a sibling report. Room receipts prove authorship;
@@ -27,6 +28,21 @@ they do not launch seats, grant authority, or replace the agent timeline and Lea
 
 Use Paseo's built-in agent and Beads tools. Do not use provider-native subagents, Codex-native
 collaboration, shell-launched agents, or manually forged parent labels.
+
+## When to convene
+
+Convene before deciding, instead of deciding alone or escalating straight to the Human, when your own
+next decision is (a) hard to reverse, (b) touches security or data integrity, (c) changes architecture
+across more than one module, or (d) commits significant cost or effort. For example: a migration that
+rewrites or drops existing data, a change to how credentials are stored or verified, or moving a shared
+contract across three packages so every caller must follow. Do not convene for an ordinary reversible
+single-module decision such as renaming a local helper, adding a focused test, or a default you can
+revert in one commit.
+
+Council installs judgment only: it never changes your role authority, tool ceiling, mutation boundary,
+or who accepts the work, and Human decisions stay Human's. When the trigger fires but the current
+assignment cannot run Council (see [Durable case graph](#durable-case-graph)), do not call
+`start_council` and do not decide alone: report `BLOCKED` to the assigner, naming the criterion met.
 
 ## Smallest useful topology
 
@@ -52,8 +68,9 @@ choices, never profile identity or authority.
 
 ## Durable case graph
 
-Council requires a Lead assignment with `effectClass: delegation`, a bounded external-effect lease,
-and Beads Central available for the exact project. Before evidence analysis or seat launch:
+Council requires a Lead assignment with `effectClass` `mutating` or `delegation` (the daemon refuses
+Peer seats otherwise), a bounded external-effect lease (case and seat issues are Beads writes), and
+Beads Central available for the exact project. Before evidence analysis or seat launch:
 
 1. call `beads_status`;
 2. resolve one exact parent `CASE_ISSUE_ID` from the Lead assignment, or create a neutral case issue
