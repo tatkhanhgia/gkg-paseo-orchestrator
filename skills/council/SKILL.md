@@ -35,14 +35,15 @@ Convene before deciding, instead of deciding alone or escalating straight to the
 next decision is (a) hard to reverse, (b) touches security or data integrity, (c) changes architecture
 across more than one module, or (d) commits significant cost or effort. For example: a migration that
 rewrites or drops existing data, a change to how credentials are stored or verified, or moving a shared
-contract across three packages so every caller must follow. Do not convene for an ordinary reversible
-single-module decision such as renaming a local helper, adding a focused test, or a default you can
-revert in one commit.
+contract across three packages so every caller must follow. If none of these criteria applies, do not
+convene for an ordinary reversible single-module decision, such as renaming a local helper, adding a
+focused test, or changing a display default.
 
 Council installs judgment only: it never changes your role authority, tool ceiling, mutation boundary,
 or who accepts the work, and Human decisions stay Human's. When the trigger fires but the current
 assignment cannot run Council (see [Durable case graph](#durable-case-graph)), do not call
-`start_council` and do not decide alone: report `BLOCKED` to the assigner, naming the criterion met.
+`start_council` and do not decide alone: report `COUNCIL_REQUEST` to the assigner, naming the
+criterion met and the exact decision.
 
 ## Smallest useful topology
 

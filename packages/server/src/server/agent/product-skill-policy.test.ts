@@ -92,7 +92,7 @@ describe("product role skill policy", () => {
     expect(councilSkill).not.toContain("the only tool operations permitted");
   });
 
-  test("fires Council on the imported Lead baseline's Council trigger criteria", () => {
+  test("mirrors the imported Lead baseline's Council trigger criteria", () => {
     const repositoryRoot = path.resolve(import.meta.dirname, "../../../../../");
     const roleSource = JSON.parse(
       readFileSync(
