@@ -124,70 +124,19 @@ Ledger trên là historical baseline của tranche `.46`; dòng `plugin:slp@569c
 bây giờ fail closed với `bundled_policy_pack_missing`. Đọc ledger này như bằng chứng lịch sử tại thời điểm
 tranche `.46`, không phải trạng thái hiện hành.
 
-## Retained-hook-fidelity guard (retained `.60` generation resume)
+## Retired `.60` generation
 
-`policy/bundled/slp/retained-hook-fidelity-guard.ts` đóng lại một gap có tên cụ thể trong
-`registerRetainedSlpGenerations` (`retained-generations.ts`): guard mô tả DATA-only
-(`buildCanonicalSlpArtifactBytesForCoordinationVersion`) dùng `JSON.stringify`, mà `JSON.stringify`
-âm thầm bỏ qua function VALUES, nên một edit chỉ đổi function body của bất kỳ module nào trong
-mười module này sẽ vô hình với guard đó: chín module mà
-`buildDefaultSlpBundledPolicyContribution()` reference TRỰC TIẾP (council-policy,
-checkpoint-policy, execution-profiles, role-binding-policy, attention-policy,
-lifecycle-attention-policy, role-profiles, `agent/role-binding.ts`, và chính slp.ts) cộng thêm
-`retained-coordination-policy-v5.ts` — fixture fork mà `registerRetainedSlpGenerations` swap vào
-làm `coordinationPolicy` của owner `.60` retained. Guard này là một byte fingerprint thuần của
-chính file mỗi module được check, read-only — không bao giờ import hay gọi vào bất kỳ policy
-function nào.
-
-Provenance wording chính xác (không overclaim): mỗi checked module mang hai frozen digest,
-`sourceDigest` và `distDigest`. Bất kỳ thay đổi byte nào — kể cả chỉ whitespace hoặc comment,
-không đổi semantics — đều làm digest lệch và đòi hỏi requalify frozen digest một cách chủ ý (chạy
-lại hash/build và cập nhật giá trị frozen); đây là literal byte check, không phải semantic/AST
-check, nên guard không tự "bỏ qua" no-op edit.
-
-Ba `kind` khác nhau, không phải một claim đồng nhất:
-
-- **Tám module `"old-equal"`** (council-policy, checkpoint-policy, execution-profiles,
-  role-binding-policy, attention-policy, lifecycle-attention-policy, role-profiles,
-  `agent/role-binding.ts`): claim `.60`-equivalence chỉ được chứng minh ở mức COMPILED: `*.ts`
-  source hiện tại, chạy qua một `tsc` build mới, tạo ra `*.js` byte-identical với compiled dist của
-  release `0.7.0-paseo.60` thật đã installed hôm nay. `distDigest` ghi lại compiled output đã
-  proven-equal đó; `sourceDigest` fingerprint `*.ts` source hiện tại đang checked-out, KHÔNG claim
-  bằng bất kỳ `.60` TypeScript source gốc nào (không có `.60` TypeScript nào từng được đọc hay
-  được claim tồn tại) — nó chỉ tồn tại để freeze form dev/test-mode từ hôm nay trở đi.
-- **Một module `"reviewed-adapter"`** (slp.ts): KHÔNG phải old-equal claim ở form nào cả. slp.ts là
-  bridge đã sửa đổi implement chính retained-generation feature (thay đổi của riêng candidate này);
-  cả `sourceDigest` lẫn `distDigest` đều là baseline forward-only "đã review, không âm thầm drift
-  thêm nữa", không phải claim `.60` equivalence.
-- **Một module `"retained-fork"`** (retained-coordination-policy-v5.ts): CŨNG không phải old-equal
-  raw-JS-identity claim — đây là một fork đã được AST-qualify từ semantics `.60` (cùng policy
-  contribution nhưng export names/module shape chủ ý khác so với `.60` coordination-policy.js
-  thật, không phải literal byte copy). Claim của guard này với `kind` đó hẹp hơn và thuần cơ học:
-  bất biến byte-cho-byte của chính file fork đó kể từ hôm nay trở đi, cả ở form source lẫn compiled
-  — bắt mọi edit tiếp theo (cố ý hay vô tình) vào fixture đã qualify này.
-
-Source vs. compiled resolution: guard tự suy ra nó đang execute ở form nào (`.ts` qua tsx/vitest,
-`.js` từ compiled dist, lấy từ chính `import.meta.url` của nó) và chỉ hash sibling của checked
-module ở đúng form đó — không bao giờ dùng form còn lại, không có fallback. Một guard `.js` compiled
-mà chỉ tìm thấy sibling `.ts` liền kề bị stale/drift (hoặc ngược lại) phải fail closed thay vì âm
-thầm validate bytes của sai form.
-
-Bounded coverage, không phải transitive graph freeze: chỉ các module được
-`buildDefaultSlpBundledPolicyContribution()` reference TRỰC TIẾP (cộng fixture fork nêu trên) mới
-được check; các import sâu hơn của chính chúng (vd. role-binding-policy.ts import
-assignment-policy.ts, harness-package-policy.ts, role-definitions.ts, skill-policy.ts) chủ ý không
-được walk. Residual gap hẹp lại còn: `role-definitions.ts` — chỉ phần IMPLEMENTATION logic của
-module này chưa có mitigation nào (phần DATA của nó đã được cover gián tiếp qua digest content mà
-`role-definitions.json`/DATA-only guard kia embed); `assignment-policy.ts` vẫn là residual gap đã
-named, acknowledged, không có mitigation nào cả.
+Generation `plugin:slp@d19918d9…0770c` của release `0.7.0-paseo.60` đã nghỉ hưu: registry không còn
+đăng ký lại nó, nên resolve owner này fail closed với `bundled_policy_pack_missing`, giống owner `.46`
+ở trên. Lúc gỡ, không agent record nào trong `~/.paseo/agents` còn bind owner này. Fixture artifact
+`.60`, fork coordination-policy v5 và retained-hook-fidelity guard đi cùng nó cũng đã bị xoá.
 
 ## Retained pre-mandate generation (0.8.0-paseo.2 resume)
 
 Role instruction mandate table (`SLP_ROLE_INSTRUCTION_MANDATES` trong
 `policy/bundled/slp/role-instruction-mandates.ts`, hiện là `test-value` mandate cho Lead và Peer) nằm trong
 canonical SLP artifact. Active generation bọc `SLP_ROLE_BINDING_POLICY` bằng
-`withRoleInstructionMandates`; bản thân `role-binding-policy.ts` giữ nguyên bytes mà retained-hook-fidelity
-guard đã qualify cho `.60`. Sửa bất kỳ entry nào sẽ đổi generation digest, nên một generation identity chỉ
+`withRoleInstructionMandates`; bản thân `role-binding-policy.ts` không chứa bảng này. Sửa bất kỳ entry nào sẽ đổi generation digest, nên một generation identity chỉ
 ứng với đúng một composition semantics.
 
 Generation `7a9e0953…fb01` của release `0.8.0-paseo.2` ship trước bảng này. `registerRetainedPreMandateSlpGeneration`
@@ -196,5 +145,4 @@ với `SLP_ROLE_BINDING_POLICY` chưa bọc (không mandate), để Lead/Peer bi
 khi resume. Admission byte-verified: current source bỏ bảng mandate phải hash đúng digest đã ghi; mọi
 thay đổi data khác (roles, execution profiles, tool ceilings, skill/harness descriptors) làm owner này
 fail closed. Function-body-only edit trong module được reuse vẫn nằm ngoài data check này, giống active
-generation. Resume replay persisted instruction bytes, không compose lại. `.60` cũng ship trước bảng
-này: recompute của nó bỏ bảng mandate và contribution của nó cũng dùng policy chưa bọc.
+generation. Resume replay persisted instruction bytes, không compose lại.

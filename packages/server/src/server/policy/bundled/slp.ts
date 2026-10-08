@@ -42,7 +42,6 @@ import {
   SLP_COORDINATION_POLICY,
   SLP_COORDINATION_POLICY_VERSION,
 } from "./slp/coordination-policy.js";
-import type { RETAINED_SLP_COORDINATION_POLICY_V5 } from "./slp/retained-coordination-policy-v5.js";
 import { SLP_CHECKPOINT_POLICY, SLP_CHECKPOINT_POLICY_VERSION } from "./slp/checkpoint-policy.js";
 import {
   SLP_ATTENTION_EVENT_POLICY,
@@ -53,10 +52,7 @@ import {
   SLP_LIFECYCLE_ATTENTION_POLICY_VERSION,
 } from "./slp/lifecycle-attention-policy.js";
 import { SLP_FINISH_NOTIFICATION_POLICY_VERSION } from "./slp/finish-notification-policy.js";
-import {
-  registerRetainedPreMandateSlpGeneration,
-  registerRetainedSlpGenerations,
-} from "./slp/retained-generations.js";
+import { registerRetainedPreMandateSlpGeneration } from "./slp/retained-generations.js";
 import type { AgentEventPolicy } from "../../agent/event-policy-runtime.js";
 import type { TrustedPolicyContribution } from "../trusted-policy.js";
 import type { RoleBindingPolicyContribution } from "../role-binding-policy.js";
@@ -68,12 +64,7 @@ type PluginPolicyOwner = Extract<PolicyOwner, { kind: "plugin" }>;
 export interface SlpBundledPolicyContribution extends TrustedPolicyContribution {
   roleBindingPolicy: RoleBindingPolicyContribution<string>;
   councilPolicy: typeof SLP_COUNCIL_POLICY;
-  /**
-   * Live current coordination semantics, or a frozen prior-generation fork (see
-   * retained-generations.ts) reused verbatim so a pinned old generation keeps its exact
-   * qualified authority instead of drifting onto current semantics.
-   */
-  coordinationPolicy: typeof SLP_COORDINATION_POLICY | typeof RETAINED_SLP_COORDINATION_POLICY_V5;
+  coordinationPolicy: typeof SLP_COORDINATION_POLICY;
   checkpointPolicy: typeof SLP_CHECKPOINT_POLICY;
   eventPolicies: readonly AgentEventPolicy[];
   executionProfilePolicy: typeof SLP_EXECUTION_PROFILE_POLICY;
@@ -93,7 +84,6 @@ export interface SlpBundledPolicyContribution extends TrustedPolicyContribution 
 }
 
 interface CanonicalSlpArtifactOverrides {
-  coordinationPolicyVersion?: string;
   /** `null` reproduces a generation that shipped before the mandate table existed. */
   roleInstructionMandates?: SlpRoleInstructionMandates | null;
 }
@@ -116,8 +106,7 @@ function canonicalSlpArtifactBytes(overrides: CanonicalSlpArtifactOverrides = {}
     roleProfilePolicyVersion: ROLE_PROFILE_POLICY_VERSION,
     executionProfilePolicyVersion: SLP_EXECUTION_PROFILE_POLICY_VERSION,
     councilPolicyVersion: SLP_COUNCIL_POLICY_VERSION,
-    coordinationPolicyVersion:
-      overrides.coordinationPolicyVersion ?? SLP_COORDINATION_POLICY_VERSION,
+    coordinationPolicyVersion: SLP_COORDINATION_POLICY_VERSION,
     attentionPolicyVersion: SLP_ATTENTION_POLICY_VERSION,
     checkpointPolicyVersion: SLP_CHECKPOINT_POLICY_VERSION,
     lifecycleAttentionPolicyVersion: SLP_LIFECYCLE_ATTENTION_POLICY_VERSION,
@@ -127,24 +116,6 @@ function canonicalSlpArtifactBytes(overrides: CanonicalSlpArtifactOverrides = {}
     // Last and omitted when undefined, so historical generations recompute their exact bytes.
     roleInstructionMandates,
   });
-}
-
-/**
- * Drift guard for retained-generations.ts: recomputes the canonical artifact bytes from
- * *current* source with only `coordinationPolicyVersion` swapped to a historical value. A
- * retained generation reuses live imports (roles, execution profiles, tool ceilings, skill and
- * harness descriptors) for every field except coordinationPolicy, on the proven-today premise
- * that those fields are still byte-identical to what the retained generation's frozen fixture
- * recorded. If a later source change (e.g. role-definitions content) invalidates that premise,
- * this function's output silently stops matching the frozen fixture bytes; the caller in
- * retained-generations.ts compares the two and fails that one retained owner closed instead of
- * serving drifted (current) behavior mislabeled under the old owner digest.
- */
-export function buildCanonicalSlpArtifactBytesForCoordinationVersion(
-  coordinationPolicyVersion: string,
-): string {
-  // .60 predates the role instruction mandate table.
-  return canonicalSlpArtifactBytes({ coordinationPolicyVersion, roleInstructionMandates: null });
 }
 
 /**
@@ -166,11 +137,6 @@ export function createDefaultSlpBundledPolicyRegistry(
   return populateSlpBundledPolicyRegistry(options, false);
 }
 
-/**
- * Shared contribution builder reused by both the current (active) generation and any
- * generation-pinned override (see retained-generations.ts) that must swap in a frozen
- * historical policy piece for exactly one field while keeping the rest identical.
- */
 /** Active-generation role-binding policy: the retained-qualified base plus the mandate table. */
 const SLP_MANDATED_ROLE_BINDING_POLICY = withRoleInstructionMandates(
   SLP_ROLE_BINDING_POLICY,
@@ -252,18 +218,10 @@ function populateSlpBundledPolicyRegistry(
       if (!failClosedActive) throw error;
     }
   }
-  // Register (never activate) exactly the immediately-preceding qualified generation so a
-  // resume bound to it can still resolvePinned. Failure here must never block or replace
-  // current-generation activation above; a retained-generation failure only means that one
-  // specific old owner keeps failing closed, which is the pre-existing behavior for any
-  // generation this module does not retain.
-  registerRetainedSlpGenerations(registry, {
-    policyVersion: SLP_BUNDLED_POLICY_VERSION,
-    // .60 predates the mandate table, so it keeps the unwrapped role-binding policy.
-    buildDefaultContribution: () =>
-      buildDefaultSlpBundledPolicyContribution(SLP_ROLE_BINDING_POLICY),
-    buildArtifactBytesForCoordinationVersion: buildCanonicalSlpArtifactBytesForCoordinationVersion,
-  });
+  // Register (never activate) the retained prior generation so a resume bound to it can still
+  // resolvePinned. Failure here must never block or replace current-generation activation
+  // above; a retained-generation failure only means that one specific old owner keeps failing
+  // closed, which is the behavior for any generation this module does not retain.
   registerRetainedPreMandateSlpGeneration(registry, {
     policyVersion: SLP_BUNDLED_POLICY_VERSION,
     buildArtifactBytes: buildCanonicalSlpArtifactBytesWithoutRoleMandates,

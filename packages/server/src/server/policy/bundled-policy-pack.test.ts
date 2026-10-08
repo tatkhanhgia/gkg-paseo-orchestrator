@@ -22,6 +22,14 @@ const REMOVED_HISTORICAL_OWNER = {
   generationDigest: "569c7f4633b7ffacb2e63c0ee3dda1ea882bc050bc456fdc8ac0c466f4f483f0",
 };
 
+// Release 0.7.0-paseo.60's owner, retired once no stored agent was bound to it.
+const RETIRED_V60_OWNER = {
+  kind: "plugin" as const,
+  pluginId: "slp" as const,
+  policyVersion: "1.4.0",
+  generationDigest: "d19918d93ff78dab8a89652a82e5647a86e1503cad752f4aa6a256ab3f30770c",
+};
+
 function manifest(policyVersion: string, id = "slp") {
   return { id, abiVersion: 1 as const, policyVersion };
 }
@@ -57,9 +65,17 @@ describe("bundled policy pack registry", () => {
 
   test("fails closed for a removed historical generation with no compatibility fallback", () => {
     const registry = createDefaultSlpBundledPolicyRegistry();
+    const active = registry.resolveActive("slp").owner;
 
-    expect(registry.resolveActive("slp").owner.policyVersion).toBe(SLP_BUNDLED_POLICY_VERSION);
+    expect(active.policyVersion).toBe(SLP_BUNDLED_POLICY_VERSION);
     expect(() => registry.resolvePinned(REMOVED_HISTORICAL_OWNER)).toThrow(
+      BUNDLED_POLICY_PACK_MISSING_ERROR,
+    );
+    expect(() => registry.resolvePinned(RETIRED_V60_OWNER)).toThrow(
+      BUNDLED_POLICY_PACK_MISSING_ERROR,
+    );
+    // A receipt carrying a registered digest under another policyVersion is forged, not resumable.
+    expect(() => registry.resolvePinned({ ...active, policyVersion: "9.9.9" })).toThrow(
       BUNDLED_POLICY_PACK_MISSING_ERROR,
     );
   });
