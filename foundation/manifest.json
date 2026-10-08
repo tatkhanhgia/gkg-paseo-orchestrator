@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "distributionVersion": "0.1.0-dev.25-gkg.0",
+  "distributionVersion": "0.1.0-dev.25-gkg.1",
   "foundationSource": {
-    "commit": "c2d2a46318a64c6ebc0cb48623c7bbf86de1d71d",
-    "ref": "foundation-v0.1.0-dev.25-gkg.0"
+    "commit": "64ce7e7c7becd019f0d63a986e26882238dbd6a1",
+    "ref": "foundation-v0.1.0-dev.25-gkg.1"
   },
   "files": [
     {
@@ -39,7 +39,7 @@
     {
       "path": "profiles/antigravity/agents/paseo-lead/agent.md",
       "mode": "0644",
-      "sha256": "3009d804b5aa2bd428b8d40553353a55a80b661efb593e37516da7e7a2334475"
+      "sha256": "c15c775073f45af6888c0ce9ba5a59d6d1005a029597eb267db659af29d1027f"
     },
     {
       "path": "profiles/antigravity/agents/paseo-peer/agent.md",
@@ -54,12 +54,12 @@
     {
       "path": "profiles/claude-plugins/paseo-lead/.claude-plugin/plugin.json",
       "mode": "0644",
-      "sha256": "4a8517ad043c8095ec79735d7124f3ba1a542f2bc35b5199c9a3e0bc46d84f15"
+      "sha256": "954fe477d18cbc2539b6db1f6cdae30f5b147a7ad7946df7e4f927385ab9f90a"
     },
     {
       "path": "profiles/claude-plugins/paseo-lead/agents/paseo-lead.md",
       "mode": "0644",
-      "sha256": "2d23b62f79bd0fadb44e111155b6dc04911e74d917ffe13464d4fce3ed62a532"
+      "sha256": "a300981341f94d55a4864747038ea3794e20d3d8af6bfa3be23cc1a2996e553e"
     },
     {
       "path": "profiles/claude-plugins/paseo-lead/skills/beads-issue-tracker/SKILL.md",
@@ -99,7 +99,7 @@
     {
       "path": "profiles/claude-plugins/paseo-peer/.claude-plugin/plugin.json",
       "mode": "0644",
-      "sha256": "10086950976e3967edf83e6e8833ed05fdeec41542cfbf235cc96d2caa499519"
+      "sha256": "9d3e54a9fffc051595a3ba24dafe2ade70a24b104f5ced06291c4fc13c5a0087"
     },
     {
       "path": "profiles/claude-plugins/paseo-peer/agents/paseo-peer.md",
@@ -124,7 +124,7 @@
     {
       "path": "profiles/claude-plugins/paseo-supervisor/.claude-plugin/plugin.json",
       "mode": "0644",
-      "sha256": "77c5ea7ed16674cd6802623c78a423b2d3e4cfbe53b17ebad810527917676c11"
+      "sha256": "e305136ffed172bcfeff4d66619aadb61ceb4e51956f0b87b00f60428951c078"
     },
     {
       "path": "profiles/claude-plugins/paseo-supervisor/agents/paseo-supervisor.md",
@@ -169,7 +169,7 @@
     {
       "path": "profiles/claude/paseo-lead.md",
       "mode": "0644",
-      "sha256": "2d23b62f79bd0fadb44e111155b6dc04911e74d917ffe13464d4fce3ed62a532"
+      "sha256": "a300981341f94d55a4864747038ea3794e20d3d8af6bfa3be23cc1a2996e553e"
     },
     {
       "path": "profiles/claude/paseo-peer.md",
@@ -184,7 +184,7 @@
     {
       "path": "profiles/codex/lead.config.toml",
       "mode": "0644",
-      "sha256": "1180c3accfa3c603d8a305e619c86ffce97c0d1f3c74f2ea3c16c863a0ad1bd5"
+      "sha256": "8cee9f5de313bbcbd97cee072f7fdfe31b6b392b7299b0c08396982e94a981ce"
     },
     {
       "path": "profiles/codex/peer.config.toml",
@@ -204,7 +204,7 @@
     {
       "path": "profiles/cursor/paseo-lead/rules/paseo-lead.mdc",
       "mode": "0644",
-      "sha256": "0178025e58d5c6b8524babbe5b3e48dae9b7000639db4e459898dfdb5c29557b"
+      "sha256": "71eeda8b5a02cd65dd51637319cda2b512346ed6ff89149df833a155b7b7765d"
     },
     {
       "path": "profiles/cursor/paseo-lead/skills/beads-issue-tracker/SKILL.md",
@@ -319,12 +319,12 @@
     {
       "path": "profiles/native/role-definitions.json",
       "mode": "0644",
-      "sha256": "280f872483e3d18b369f958e83e434e518ec4942bf8cc816da48e1bb127c7d9a"
+      "sha256": "358878c486597983da1acd3d3edbaaf1570730310ab29ed04ab0e990828c051b"
     },
     {
       "path": "profiles/omp/paseo-lead.md",
       "mode": "0644",
-      "sha256": "1dd40261da26f8f4bb905a728777a465ff0528bd922c653ebf3c5231ffa16134"
+      "sha256": "2f9f9a1b18042884a925ecdeab2a4bf9c84f2f16278581aa5e9b2b267df12752"
     },
     {
       "path": "profiles/omp/paseo-peer.md",
@@ -429,7 +429,7 @@
     {
       "path": "profiles/opencode/lead.config.json",
       "mode": "0644",
-      "sha256": "164c4e3bb4bed6820b5175b48d8168afd7fb24bc98aa29e05dd8fcbd4285bd20"
+      "sha256": "3d122ae55dac4e9b513458da9081b2f0c8478f7592efd747be66cace12fc8fa3"
     },
     {
       "path": "profiles/opencode/peer.config.json",

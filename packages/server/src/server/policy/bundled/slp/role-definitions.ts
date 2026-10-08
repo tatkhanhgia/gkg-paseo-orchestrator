@@ -97,26 +97,57 @@ function loadCanonicalRoleSource(): CanonicalRoleSource {
   );
 }
 
-let cachedDefinitions: Record<PaseoRoleId, FoundationRoleDefinition> | null = null;
+/** Lead block added by Foundation 0.1.0-dev.25-gkg.1 (the self-convened Council trigger). */
+const LEAD_COUNCIL_TRIGGER_BLOCK_PREFIX = "Council trigger:";
 
-function definitions(): Record<PaseoRoleId, FoundationRoleDefinition> {
-  if (cachedDefinitions) return cachedDefinitions;
-  const source = loadCanonicalRoleSource();
+type RoleDefinitionTable = Record<PaseoRoleId, FoundationRoleDefinition>;
+
+function buildDefinitions(
+  source: CanonicalRoleSource,
+  keepBlock: (roleId: PaseoRoleId, block: string) => boolean,
+): RoleDefinitionTable {
   const universalInstructions = source.universalBlocks.join("\n\n");
-  cachedDefinitions = Object.fromEntries(
+  return Object.fromEntries(
     ROLE_IDS.map((roleId) => [
       roleId,
       {
         id: roleId,
         ...ROLE_DESCRIPTORS[roleId],
         version: source.contractVersion,
-        instructions: `${universalInstructions}\n\n${source.roles[roleId].join("\n\n")}`,
+        instructions: `${universalInstructions}\n\n${source.roles[roleId]
+          .filter((block) => keepBlock(roleId, block))
+          .join("\n\n")}`,
       },
     ]),
-  ) as Record<PaseoRoleId, FoundationRoleDefinition>;
+  ) as RoleDefinitionTable;
+}
+
+let cachedDefinitions: RoleDefinitionTable | null = null;
+let cachedPreCouncilTriggerDefinitions: RoleDefinitionTable | null = null;
+
+function definitions(): RoleDefinitionTable {
+  cachedDefinitions ??= buildDefinitions(loadCanonicalRoleSource(), () => true);
   return cachedDefinitions;
 }
 
 export function getFoundationRoleDefinition(roleId: PaseoRoleId): FoundationRoleDefinition {
   return definitions()[roleId];
+}
+
+/**
+ * COMPAT(slpPreCouncilTriggerGeneration): added after v0.8.0-paseo.4, remove together with the
+ * last retained generation that uses it (see `RETAINED_SLP_GENERATIONS`).
+ *
+ * Current source with the Lead Council trigger block removed: the role definitions every
+ * generation recorded before Foundation 0.1.0-dev.25-gkg.1 was built from.
+ */
+export function getPreCouncilTriggerFoundationRoleDefinition(
+  roleId: PaseoRoleId,
+): FoundationRoleDefinition {
+  cachedPreCouncilTriggerDefinitions ??= buildDefinitions(
+    loadCanonicalRoleSource(),
+    (blockRoleId, block) =>
+      !(blockRoleId === "lead" && block.startsWith(LEAD_COUNCIL_TRIGGER_BLOCK_PREFIX)),
+  );
+  return cachedPreCouncilTriggerDefinitions[roleId];
 }

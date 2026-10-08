@@ -12678,110 +12678,126 @@ test("daemon-style reload preserves the pinned SLP owner and exact native instru
   }
 });
 
-test("upgrade past the test-value mandate resumes pre-mandate bindings exactly and binds new ones to a new owner", async () => {
-  // Owner recorded on role bindings created by release 0.8.0-paseo.2, read from a live receipt.
-  const preMandateOwner = {
-    kind: "plugin",
-    pluginId: "slp",
+// Owners recorded on role bindings created by these releases, read from live receipts.
+test.each([
+  {
+    release: "0.8.0-paseo.2",
     generationDigest: "7a9e09536c571e0d94bd7455926373da351f2c66ed3295342da542c82075fb01",
-    policyVersion: "1.4.0",
-  } as const;
-  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-slp-mandate-upgrade-"));
-  writeFileSync(
-    join(workdir, "WORKSPACE_PROTOCOL.md"),
-    buildWorkspaceProtocolTemplate(workdir),
-    "utf8",
-  );
-  const storage = new AgentStorage(join(workdir, "agents"), logger);
+    hasTestValueMandate: false,
+  },
+  {
+    release: "0.8.0-paseo.4",
+    generationDigest: "1aedb08557a78cf64b4826b91a20aa33dde61131ff431350a847fde4c0482c49",
+    hasTestValueMandate: true,
+  },
+])(
+  "upgrade resumes $release bindings exactly and binds new ones to the Council-trigger owner",
+  async ({ generationDigest, hasTestValueMandate }) => {
+    const retainedOwner = {
+      kind: "plugin",
+      pluginId: "slp",
+      generationDigest,
+      policyVersion: "1.4.0",
+    } as const;
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-slp-retained-upgrade-"));
+    writeFileSync(
+      join(workdir, "WORKSPACE_PROTOCOL.md"),
+      buildWorkspaceProtocolTemplate(workdir),
+      "utf8",
+    );
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
 
-  class UpgradeCaptureClient extends TestAgentClient {
-    readonly launchContexts: Array<AgentLaunchContext | undefined> = [];
+    class UpgradeCaptureClient extends TestAgentClient {
+      readonly launchContexts: Array<AgentLaunchContext | undefined> = [];
 
-    async materializeProviderLaunchBinding(input: { config: AgentSessionConfig }) {
-      if (!input.config.model) throw new Error("missing test model");
-      return {
-        providerId: "codex",
-        providerFamily: "codex",
-        model: input.config.model,
-        credentialConfigured: true as const,
-        routeKind: "codex-subscription" as const,
-        modelProviderId: "openai" as const,
-        authMethod: "codex-native" as const,
-      };
+      async materializeProviderLaunchBinding(input: { config: AgentSessionConfig }) {
+        if (!input.config.model) throw new Error("missing test model");
+        return {
+          providerId: "codex",
+          providerFamily: "codex",
+          model: input.config.model,
+          credentialConfigured: true as const,
+          routeKind: "codex-subscription" as const,
+          modelProviderId: "openai" as const,
+          authMethod: "codex-native" as const,
+        };
+      }
+
+      override async createSession(
+        config: AgentSessionConfig,
+        launchContext?: AgentLaunchContext,
+      ): Promise<AgentSession> {
+        this.launchContexts.push(launchContext);
+        return new TestAgentSession(config);
+      }
+
+      override async resumeSession(
+        handle: AgentPersistenceHandle,
+        config?: Partial<AgentSessionConfig>,
+        launchContext?: AgentLaunchContext,
+      ): Promise<AgentSession> {
+        this.launchContexts.push(launchContext);
+        return super.resumeSession(handle, config, launchContext);
+      }
     }
 
-    override async createSession(
-      config: AgentSessionConfig,
-      launchContext?: AgentLaunchContext,
-    ): Promise<AgentSession> {
-      this.launchContexts.push(launchContext);
-      return new TestAgentSession(config);
+    const launchConfig = { provider: "codex", cwd: workdir, model: "gpt-5.4" } as const;
+    const launchOptions = {
+      workspaceId: "workspace-mandate-upgrade",
+      roleId: "lead",
+      assignment: leadAssignment(),
+    } as const;
+
+    try {
+      // Pre-upgrade daemon: the retained generation is the active one.
+      const oldPolicyPacks = createDefaultSlpBundledPolicyRegistry();
+      oldPolicyPacks.activate(retainedOwner);
+      const oldManager = new AgentManager({
+        clients: { codex: new UpgradeCaptureClient("codex") },
+        registry: storage,
+        bundledPolicyPacks: oldPolicyPacks,
+        resolveHarnessBinding: testHarnessResolver(workdir),
+        logger,
+      });
+      const oldAgent = await oldManager.createAgent(launchConfig, undefined, launchOptions);
+      const oldInstructions = oldAgent.roleBinding?.instructions;
+      expect(oldAgent.roleBinding?.policyOwner).toEqual(retainedOwner);
+      expect(oldInstructions).toContain("Role: Lead");
+      expect(oldInstructions).not.toContain("Council trigger:");
+      expect(oldInstructions?.includes("`test-value`")).toBe(hasTestValueMandate);
+
+      // Upgraded daemon restart: a fresh default registry over the same storage.
+      const newClient = new UpgradeCaptureClient("codex");
+      const newPolicyPacks = createDefaultSlpBundledPolicyRegistry();
+      const newOwner = newPolicyPacks.resolveActive("slp").owner;
+      expect(newOwner.generationDigest).not.toBe(retainedOwner.generationDigest);
+      const newManager = new AgentManager({
+        clients: { codex: newClient },
+        registry: storage,
+        bundledPolicyPacks: newPolicyPacks,
+        resolveHarnessBinding: testHarnessResolver(workdir),
+        logger,
+      });
+
+      const restored = await ensureAgentLoaded(oldAgent.id, {
+        agentManager: newManager,
+        agentStorage: storage,
+        logger,
+      });
+      expect(restored.roleBinding?.policyOwner).toEqual(retainedOwner);
+      expect(newClient.launchContexts[0]?.roleBinding?.instructions).toBe(oldInstructions);
+
+      const newAgent = await newManager.createAgent(launchConfig, undefined, launchOptions);
+      expect(newAgent.roleBinding?.policyOwner).toEqual(newOwner);
+      expect(newClient.launchContexts[1]?.roleBinding?.instructions).toContain("Council trigger:");
+      for (const clause of TEST_VALUE_MANDATE_CLAUSES) {
+        expect(newClient.launchContexts[1]?.roleBinding?.instructions).toContain(clause);
+      }
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
     }
-
-    override async resumeSession(
-      handle: AgentPersistenceHandle,
-      config?: Partial<AgentSessionConfig>,
-      launchContext?: AgentLaunchContext,
-    ): Promise<AgentSession> {
-      this.launchContexts.push(launchContext);
-      return super.resumeSession(handle, config, launchContext);
-    }
-  }
-
-  const launchConfig = { provider: "codex", cwd: workdir, model: "gpt-5.4" } as const;
-  const launchOptions = {
-    workspaceId: "workspace-mandate-upgrade",
-    roleId: "lead",
-    assignment: leadAssignment(),
-  } as const;
-
-  try {
-    // Pre-upgrade daemon: the 0.8.0-paseo.2 generation is the active one.
-    const oldPolicyPacks = createDefaultSlpBundledPolicyRegistry();
-    oldPolicyPacks.activate(preMandateOwner);
-    const oldManager = new AgentManager({
-      clients: { codex: new UpgradeCaptureClient("codex") },
-      registry: storage,
-      bundledPolicyPacks: oldPolicyPacks,
-      resolveHarnessBinding: testHarnessResolver(workdir),
-      logger,
-    });
-    const oldAgent = await oldManager.createAgent(launchConfig, undefined, launchOptions);
-    const oldInstructions = oldAgent.roleBinding?.instructions;
-    expect(oldAgent.roleBinding?.policyOwner).toEqual(preMandateOwner);
-    expect(oldInstructions).toContain("Role: Lead");
-    expect(oldInstructions).not.toContain("`test-value`");
-
-    // Upgraded daemon restart: a fresh default registry over the same storage.
-    const newClient = new UpgradeCaptureClient("codex");
-    const newPolicyPacks = createDefaultSlpBundledPolicyRegistry();
-    const newOwner = newPolicyPacks.resolveActive("slp").owner;
-    expect(newOwner.generationDigest).not.toBe(preMandateOwner.generationDigest);
-    const newManager = new AgentManager({
-      clients: { codex: newClient },
-      registry: storage,
-      bundledPolicyPacks: newPolicyPacks,
-      resolveHarnessBinding: testHarnessResolver(workdir),
-      logger,
-    });
-
-    const restored = await ensureAgentLoaded(oldAgent.id, {
-      agentManager: newManager,
-      agentStorage: storage,
-      logger,
-    });
-    expect(restored.roleBinding?.policyOwner).toEqual(preMandateOwner);
-    expect(newClient.launchContexts[0]?.roleBinding?.instructions).toBe(oldInstructions);
-
-    const newAgent = await newManager.createAgent(launchConfig, undefined, launchOptions);
-    expect(newAgent.roleBinding?.policyOwner).toEqual(newOwner);
-    for (const clause of TEST_VALUE_MANDATE_CLAUSES) {
-      expect(newClient.launchContexts[1]?.roleBinding?.instructions).toContain(clause);
-    }
-  } finally {
-    rmSync(workdir, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 test("ordinary non-SLP agents remain available when the bundled SLP artifact is unavailable", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-ordinary-without-slp-"));

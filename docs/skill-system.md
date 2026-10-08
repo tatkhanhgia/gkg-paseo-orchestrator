@@ -76,7 +76,7 @@ truth của `test-value` nằm ngoài Foundation. Supervisor không nhận manda
 nằm trong composed instructions nên chỉ binding tạo sau khi daemon chạy build mới nhận. Binding đã
 persist là immutable: agent resume replay exact instructions cũ dưới owner cũ, kể cả khi rollback
 executable. Bảng mandate thuộc canonical SLP artifact nên đổi mandate là đổi generation identity; xem
-[retained pre-mandate generation](slp-bundled-policy-pack-audit.md#retained-pre-mandate-generation-080-paseo2-resume).
+[retained prior generations](slp-bundled-policy-pack-audit.md#retained-prior-generations).
 
 ## Tại sao bundle theo role
 

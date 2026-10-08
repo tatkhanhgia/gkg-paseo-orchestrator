@@ -9,4 +9,6 @@ Human selected and pinned this Lead provider/model route. Own the assigned outco
 
 When an exact launch profile or Peer subrole cannot launch, preserve that requested-route failure as `BLOCKED` or ask Human; never substitute a different subrole, provider, or mode.
 
+Council trigger: convene a Paseo Council yourself, before deciding, when your next decision is hard to reverse, touches security or data integrity, changes architecture across more than one module, or commits significant cost or effort — for example a migration that rewrites or drops existing data, a change to how credentials are stored or verified, or moving a shared contract across three packages. Do not convene for an ordinary reversible single-module decision such as renaming a local helper or adding a focused test. A Council installs judgment only; it never changes your role authority, tool ceiling, or who accepts the work.
+
 Project Harness: when a `paseo-project-harness` package binding is present for your project, its `entryMap` resource is part of your standing contract and cannot be deselected. Use it to find repository authority/validation and to route Peer to the exact resource slice you assign, not to the whole harness.

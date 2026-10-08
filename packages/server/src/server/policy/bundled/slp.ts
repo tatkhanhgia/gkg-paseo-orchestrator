@@ -1,6 +1,10 @@
 import { PASEO_ASSIGNMENT_CONTRACT_VERSION } from "@getpaseo/protocol/assignment-contract";
 import type { AssignmentEnvelope } from "@getpaseo/protocol/assignment-contract";
-import { PASEO_ROLE_CONTRACT_VERSION, PASEO_ROLE_IDS } from "@getpaseo/protocol/role-binding";
+import {
+  PASEO_ROLE_CONTRACT_VERSION,
+  PASEO_ROLE_IDS,
+  type PaseoRoleId,
+} from "@getpaseo/protocol/role-binding";
 import type { PolicyOwner } from "@getpaseo/protocol/policy-owner";
 import type {
   RoleProfileCatalog,
@@ -13,7 +17,11 @@ import {
   SLP_EXECUTION_PROFILE_POLICY,
   SLP_EXECUTION_PROFILE_POLICY_VERSION,
 } from "./slp/execution-profiles.js";
-import { getFoundationRoleDefinition } from "./slp/role-definitions.js";
+import {
+  type FoundationRoleDefinition,
+  getFoundationRoleDefinition,
+  getPreCouncilTriggerFoundationRoleDefinition,
+} from "./slp/role-definitions.js";
 import {
   materializeRoleBindingWithPolicy,
   type MaterializeRoleBindingInput,
@@ -52,7 +60,11 @@ import {
   SLP_LIFECYCLE_ATTENTION_POLICY_VERSION,
 } from "./slp/lifecycle-attention-policy.js";
 import { SLP_FINISH_NOTIFICATION_POLICY_VERSION } from "./slp/finish-notification-policy.js";
-import { registerRetainedPreMandateSlpGeneration } from "./slp/retained-generations.js";
+import {
+  RETAINED_SLP_GENERATIONS,
+  registerRetainedSlpGeneration,
+  type RetainedSlpGeneration,
+} from "./slp/retained-generations.js";
 import type { AgentEventPolicy } from "../../agent/event-policy-runtime.js";
 import type { TrustedPolicyContribution } from "../trusted-policy.js";
 import type { RoleBindingPolicyContribution } from "../role-binding-policy.js";
@@ -84,6 +96,8 @@ export interface SlpBundledPolicyContribution extends TrustedPolicyContribution 
 }
 
 interface CanonicalSlpArtifactOverrides {
+  /** Reproduces a generation that shipped with older role definitions. */
+  getRoleDefinition?: (roleId: PaseoRoleId) => FoundationRoleDefinition;
   /** `null` reproduces a generation that shipped before the mandate table existed. */
   roleInstructionMandates?: SlpRoleInstructionMandates | null;
 }
@@ -97,7 +111,9 @@ function canonicalSlpArtifactBytes(overrides: CanonicalSlpArtifactOverrides = {}
     manifest: { id: "slp", abiVersion: 1, policyVersion: SLP_BUNDLED_POLICY_VERSION },
     roleContractVersion: PASEO_ROLE_CONTRACT_VERSION,
     assignmentContractVersion: PASEO_ASSIGNMENT_CONTRACT_VERSION,
-    roles: PASEO_ROLE_IDS.map((roleId) => getFoundationRoleDefinition(roleId)),
+    roles: PASEO_ROLE_IDS.map((roleId) =>
+      (overrides.getRoleDefinition ?? getFoundationRoleDefinition)(roleId),
+    ),
     executionProfiles: FOUNDATION_EXECUTION_PROFILE_IDS.map((profileId) =>
       getFoundationExecutionProfileDefinition(profileId),
     ),
@@ -118,13 +134,24 @@ function canonicalSlpArtifactBytes(overrides: CanonicalSlpArtifactOverrides = {}
   });
 }
 
-/**
- * Current source with the role instruction mandate table removed: the exact artifact of the
- * generation that shipped before the `test-value` mandate (release 0.8.0-paseo.2). See
- * `registerRetainedPreMandateSlpGeneration`.
- */
-export function buildCanonicalSlpArtifactBytesWithoutRoleMandates(): string {
-  return canonicalSlpArtifactBytes({ roleInstructionMandates: null });
+/** Current source reduced to what a retained generation shipped. See `RETAINED_SLP_GENERATIONS`. */
+function retainedSlpArtifactBytes(retained: RetainedSlpGeneration): string {
+  return canonicalSlpArtifactBytes({
+    getRoleDefinition: getPreCouncilTriggerFoundationRoleDefinition,
+    ...(retained.withRoleInstructionMandates ? {} : { roleInstructionMandates: null }),
+  });
+}
+
+function retainedSlpRoleBindingPolicy(
+  retained: RetainedSlpGeneration,
+): RoleBindingPolicyContribution<string> {
+  const policy = {
+    ...SLP_ROLE_BINDING_POLICY,
+    getRoleDefinition: getPreCouncilTriggerFoundationRoleDefinition,
+  };
+  return retained.withRoleInstructionMandates
+    ? withRoleInstructionMandates(policy, SLP_ROLE_INSTRUCTION_MANDATES)
+    : policy;
 }
 
 export interface CreateSlpBundledPolicyRegistryOptions {
@@ -218,15 +245,19 @@ function populateSlpBundledPolicyRegistry(
       if (!failClosedActive) throw error;
     }
   }
-  // Register (never activate) the retained prior generation so a resume bound to it can still
+  // Register (never activate) the retained prior generations so a resume bound to one can still
   // resolvePinned. Failure here must never block or replace current-generation activation
   // above; a retained-generation failure only means that one specific old owner keeps failing
   // closed, which is the behavior for any generation this module does not retain.
-  registerRetainedPreMandateSlpGeneration(registry, {
-    policyVersion: SLP_BUNDLED_POLICY_VERSION,
-    buildArtifactBytes: buildCanonicalSlpArtifactBytesWithoutRoleMandates,
-    buildContribution: buildDefaultSlpBundledPolicyContribution,
-  });
+  for (const retained of RETAINED_SLP_GENERATIONS) {
+    registerRetainedSlpGeneration(registry, {
+      policyVersion: SLP_BUNDLED_POLICY_VERSION,
+      retained,
+      buildArtifactBytes: () => retainedSlpArtifactBytes(retained),
+      buildRoleBindingPolicy: () => retainedSlpRoleBindingPolicy(retained),
+      buildContribution: buildDefaultSlpBundledPolicyContribution,
+    });
+  }
   return registry;
 }
 

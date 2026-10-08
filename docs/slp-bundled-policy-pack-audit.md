@@ -131,18 +131,26 @@ Generation `plugin:slp@d19918d9…0770c` của release `0.7.0-paseo.60` đã ngh
 ở trên. Lúc gỡ, không agent record nào trong `~/.paseo/agents` còn bind owner này. Fixture artifact
 `.60`, fork coordination-policy v5 và retained-hook-fidelity guard đi cùng nó cũng đã bị xoá.
 
-## Retained pre-mandate generation (0.8.0-paseo.2 resume)
+## Retained prior generations
 
-Role instruction mandate table (`SLP_ROLE_INSTRUCTION_MANDATES` trong
-`policy/bundled/slp/role-instruction-mandates.ts`, hiện là `test-value` mandate cho Lead và Peer) nằm trong
-canonical SLP artifact. Active generation bọc `SLP_ROLE_BINDING_POLICY` bằng
-`withRoleInstructionMandates`; bản thân `role-binding-policy.ts` không chứa bảng này. Sửa bất kỳ entry nào sẽ đổi generation digest, nên một generation identity chỉ
-ứng với đúng một composition semantics.
+Role definitions (gồm Lead text import từ Foundation) và role instruction mandate table
+(`SLP_ROLE_INSTRUCTION_MANDATES` trong `policy/bundled/slp/role-instruction-mandates.ts`, hiện là
+`test-value` mandate cho Lead và Peer) đều nằm trong canonical SLP artifact. Active generation bọc
+`SLP_ROLE_BINDING_POLICY` bằng `withRoleInstructionMandates`; bản thân `role-binding-policy.ts` không chứa
+bảng này. Sửa role text hay bất kỳ entry mandate nào sẽ đổi generation digest, nên một generation identity
+chỉ ứng với đúng một composition semantics.
 
-Generation `7a9e0953…fb01` của release `0.8.0-paseo.2` ship trước bảng này. `registerRetainedPreMandateSlpGeneration`
-(`retained-generations.ts`, `COMPAT(slpPreMandateGeneration)`) đăng ký lại owner đó — không activate —
-với `SLP_ROLE_BINDING_POLICY` chưa bọc (không mandate), để Lead/Peer bind trước upgrade vẫn resolve được owner
-khi resume. Admission byte-verified: current source bỏ bảng mandate phải hash đúng digest đã ghi; mọi
-thay đổi data khác (roles, execution profiles, tool ceilings, skill/harness descriptors) làm owner này
-fail closed. Function-body-only edit trong module được reuse vẫn nằm ngoài data check này, giống active
+`RETAINED_SLP_GENERATIONS` (`retained-generations.ts`) đăng ký lại — không activate — các owner trước để
+Lead/Peer bind trước upgrade vẫn resolve được owner khi resume. Mỗi owner là current source bỏ đi phần vào
+artifact sau khi release đó ship, và contribution của nó compose đúng bằng role definitions + mandate table
+đã dùng để dựng bytes:
+
+| Owner           | Release              | Derivation từ current source                                       | COMPAT                           |
+| --------------- | -------------------- | ------------------------------------------------------------------ | -------------------------------- |
+| `1aedb085…4c49` | `0.8.0-paseo.3`/`.4` | bỏ block Lead `Council trigger:` (Foundation `0.1.0-dev.25-gkg.1`) | `slpPreCouncilTriggerGeneration` |
+| `7a9e0953…fb01` | `0.8.0-paseo.1`/`.2` | bỏ block Lead `Council trigger:` và bỏ mandate table               | `slpPreMandateGeneration`        |
+
+Admission byte-verified: bytes dẫn xuất phải hash đúng digest đã ghi; mọi thay đổi data khác (roles,
+execution profiles, tool ceilings, skill/harness descriptors) làm đúng owner đó fail closed với drift code
+riêng. Function-body-only edit trong module được reuse vẫn nằm ngoài data check này, giống active
 generation. Resume replay persisted instruction bytes, không compose lại.
