@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { AgentSideConnection, PROTOCOL_VERSION, type Agent } from "@agentclientprotocol/sdk";
 import type { ProviderConnection, ProviderEvent, ProviderInput } from "./provider.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { runAcpProvider, type AcpStreamMessage } from "./acp.js";
+import { runAcpProvider, type AcpRoleBinding, type AcpStreamMessage } from "./acp.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -1001,5 +1002,157 @@ lines.on("line", (line) => {
     await connection.close();
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(900);
     expect(Date.now() - startedAt).toBeLessThan(2_500);
+  });
+});
+
+describe("ACP role launch hook", () => {
+  const INSTRUCTIONS = "# Peer\nexact role bytes\n";
+  const roleBinding = {
+    roleId: "peer" as const,
+    instructions: INSTRUCTIONS,
+    bindingDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+    noWrite: false,
+  };
+
+  // Reports ROLE_CAPSULE as its native session id and logs every session/new it receives.
+  async function roleAgent(mcpCapabilities: Record<string, boolean> = {}) {
+    const log = path.join(await mkdtemp(path.join(tmpdir(), "paseo-role-log-")), "log");
+    temporaryDirectories.push(path.dirname(log));
+    const executable = await fakeAcp(`const readline = require("node:readline");
+const fs = require("node:fs");
+const lines = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, agentCapabilities: { mcpCapabilities: ${JSON.stringify(mcpCapabilities)} } } });
+  else if (message.method === "session/new") {
+    fs.appendFileSync(${JSON.stringify(log)}, "session/new\\n");
+    send({ jsonrpc: "2.0", id: message.id, result: { sessionId: process.env.ROLE_CAPSULE || "none", modes: null, configOptions: [] } });
+  }
+});`);
+    return {
+      executable,
+      sessionNewCount: async () =>
+        (await readFile(log, "utf8").catch(() => "")).split("\n").filter(Boolean).length,
+    };
+  }
+
+  function roleProvider(executable: string, hook?: Partial<AcpRoleBinding>) {
+    const disposals: string[] = [];
+    const registration = runAcpProvider({
+      id: "role-acp",
+      label: "Role ACP",
+      command: [process.execPath, executable],
+      ...(hook
+        ? {
+            roleBinding: {
+              roleIds: ["peer"],
+              async launch() {
+                return {
+                  env: { ROLE_CAPSULE: "from-hook" },
+                  dispose: async () => void disposals.push("disposed"),
+                };
+              },
+              ...hook,
+            },
+          }
+        : {}),
+    });
+    return { registration, disposals };
+  }
+
+  async function openRole(
+    registration: ReturnType<typeof roleProvider>["registration"],
+    config: Partial<Extract<ProviderInput, { type: "session.open" }>["config"]>,
+  ) {
+    const connection = await registration.connect({
+      versions: [1],
+      capabilities: ["prompt.message"],
+    });
+    const events: ProviderEvent[] = [];
+    connection.onEvent((event) => events.push(event));
+    const input = openInput();
+    await connection.send({ ...input, config: { ...input.config, roleBinding, ...config } });
+    const settled = await waitForEvent(
+      events,
+      (event) => event.type === "session.ready" || event.type === "request.failed",
+    );
+    return { connection, events, settled };
+  }
+
+  it("spawns the agent with the hook env last and disposes the hook when the session closes", async () => {
+    process.env.ROLE_CAPSULE = "ambient";
+    try {
+      const agent = await roleAgent();
+      const { registration, disposals } = roleProvider(agent.executable, {});
+
+      const { connection, events } = await openRole(registration, {});
+
+      const opened = events.find((event) => event.type === "session.opened");
+      expect(opened).toMatchObject({
+        persistence: { data: { sessionId: "from-hook" } },
+        roleBindingDigest: roleBinding.bindingDigest,
+      });
+      expect(disposals).toEqual([]);
+      await connection.close();
+      expect(disposals).toEqual(["disposed"]);
+    } finally {
+      delete process.env.ROLE_CAPSULE;
+    }
+  });
+
+  it("fails closed before spawning when the role cannot be delivered safely", async () => {
+    const agent = await roleAgent();
+    type Row = [string, Partial<AcpRoleBinding> | null, Parameters<typeof openRole>[1], RegExp];
+    const rows: Row[] = [
+      ["no hook", null, {}, /no role launch hook/u],
+      ["no-write", {}, { roleBinding: { ...roleBinding, noWrite: true } }, /no-write/u],
+      ["undeclared role", { roleIds: ["supervisor"] }, {}, /does not declare role peer/u],
+      ["digest", {}, { roleBinding: { ...roleBinding, bindingDigest: "0".repeat(64) } }, /digest/u],
+      ["env collision", {}, { env: { ROLE_CAPSULE: "caller" } }, /collides/u],
+    ];
+
+    expect(() =>
+      runAcpProvider({
+        id: "role-acp",
+        label: "Role ACP",
+        roleBinding: { roleIds: ["peer"], launch: async () => ({ env: {} }) },
+        connector: () => {
+          throw new Error("unused");
+        },
+      }),
+    ).toThrow(/spawned command/u);
+
+    for (const [name, hook, config, message] of rows) {
+      const { registration, disposals } = roleProvider(agent.executable, hook ?? undefined);
+      const { connection, settled } = await openRole(registration, config);
+      expect(settled, name).toMatchObject({
+        type: "request.failed",
+        error: { message: expect.stringMatching(message) },
+      });
+      expect(await agent.sessionNewCount(), name).toBe(0);
+      expect(disposals, name).toEqual(name === "env collision" ? ["disposed"] : []);
+      await connection.close();
+    }
+  });
+
+  it("refuses a role session whose http MCP server the agent cannot accept", async () => {
+    const mcpServers = { paseo: { type: "http" as const, url: "http://127.0.0.1:1/mcp" } };
+    const incapable = await roleAgent();
+    const refused = roleProvider(incapable.executable, {});
+    const failed = await openRole(refused.registration, { mcpServers });
+    expect(failed.settled).toMatchObject({
+      type: "request.failed",
+      error: { message: expect.stringContaining("http MCP") },
+    });
+    expect(refused.disposals).toEqual(["disposed"]);
+    await failed.connection.close();
+
+    const capable = await roleAgent({ http: true });
+    const accepted = await openRole(roleProvider(capable.executable, {}).registration, {
+      mcpServers,
+    });
+    expect(accepted.settled.type).toBe("session.ready");
+    await accepted.connection.close();
   });
 });

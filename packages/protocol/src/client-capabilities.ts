@@ -40,6 +40,10 @@ export const CLIENT_CAPS = {
   pluginTimelineItems: "plugin_timeline_items",
   // COMPAT(workspaceSetupBlocked): added in v0.8.0, remove after 2027-03-07 once client floor >= v0.8.0.
   workspaceSetupBlocked: "workspace_setup_blocked",
+  // COMPAT(pluginRoleLaunchHookReceipt): added in v0.8.0-paseo.6, remove after 2027-04-19.
+  // Old clients parse injectionMethod as a closed enum, so the daemon omits roleBinding
+  // receipts that use "plugin-role-launch-hook" unless the client advertises this.
+  pluginRoleLaunchHookReceipt: "plugin_role_launch_hook_receipt",
   browserHost: "browser_host",
 } as const;
 

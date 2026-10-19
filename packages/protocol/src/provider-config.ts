@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { AgentProvider } from "./agent-types.js";
 import { AgentProviderSchema } from "./provider-manifest.js";
-import { ProviderNativeRoleBindingConfigSchema } from "./role-binding.js";
+import {
+  ProviderNativeRoleBindingConfigSchema,
+  isProviderRoleBindingSupportedForRole,
+  type ProviderRoleBindingSupport,
+} from "./role-binding.js";
 
 const ProviderCommandDefaultSchema = z.object({
   mode: z.literal("default"),
@@ -198,5 +202,20 @@ export function isPaseoSupportedProvider(
     PASEO_SUPPORTED_PROVIDER_IDS.has(providerId) ||
     (!BUILTIN_PROVIDER_IDS.includes(providerId as (typeof BUILTIN_PROVIDER_IDS)[number]) &&
       override?.extends === "codex")
+  );
+}
+
+/** A plugin launch hook admits Peer only and never qualifies a no-write seat. */
+export function isPeerDelegationProviderAdmitted(input: {
+  providerId: string;
+  override?: Pick<ProviderOverride, "extends">;
+  roleBinding?: ProviderRoleBindingSupport | null;
+}): boolean {
+  const { providerId, override, roleBinding } = input;
+  return (
+    isPaseoSupportedProvider(providerId, override) ||
+    (roleBinding?.status === "supported" &&
+      roleBinding.injectionMethod === "plugin-role-launch-hook" &&
+      isProviderRoleBindingSupportedForRole(roleBinding, "peer"))
   );
 }

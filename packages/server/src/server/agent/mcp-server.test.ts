@@ -214,6 +214,7 @@ function buildAgentManagerSpies() {
     unarchiveSnapshot: vi.fn().mockResolvedValue(false),
     notifyAgentState: vi.fn(),
     getAgent: vi.fn(),
+    getProviderRoleBindingSupport: vi.fn(),
     listAgents: vi.fn().mockReturnValue([]),
     getTimeline: vi.fn().mockReturnValue([]),
     resumeAgentFromPersistence: vi.fn(),
@@ -7108,6 +7109,61 @@ describe("provider MCP tools", () => {
         },
       ],
     });
+  });
+
+  it("offers a Lead only plugin Peer routes whose provider declares the role launch hook", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const caller = createManagedAgent({
+      id: "lead-agent",
+      workspaceId: "wks_lead",
+      roleBinding: createTestRoleBinding("lead"),
+    });
+    spies.agentManager.getAgent.mockImplementation((agentId: string) =>
+      agentId === caller.id ? caller : null,
+    );
+    const pluginRoleSupport = {
+      status: "supported",
+      injectionMethod: "plugin-role-launch-hook",
+      roleIds: ["peer"],
+    } as const;
+    spies.agentManager.getProviderRoleBindingSupport.mockImplementation((provider: string) =>
+      provider === "plugin-declared" ? pluginRoleSupport : undefined,
+    );
+    const provStub = createProviderSnapshotManagerStub();
+    provStub.listRegisteredProviderIds.mockReturnValue(["plugin-declared", "plugin-plain"]);
+    provStub.listModels.mockImplementation(async ({ provider }) => [
+      { provider, id: "free-model", label: "Free model" },
+    ]);
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: provStub.manager,
+      daemonConfigStore: {
+        get: () =>
+          MutableDaemonConfigSchema.parse({
+            mcp: { injectIntoAgents: true },
+            peerDelegation: {
+              enabled: true,
+              runMode: "unattended",
+              allowedModels: [
+                { provider: "plugin-declared", model: "free-model" },
+                { provider: "plugin-plain", model: "free-model" },
+              ],
+            },
+          }),
+      },
+      callerAgentId: caller.id,
+      logger,
+    });
+    const tool = registeredTool(server, "list_models");
+
+    const declared = await tool.handler({ provider: "plugin-declared" });
+    const plain = await tool.handler({ provider: "plugin-plain" });
+
+    expect(declared.structuredContent.models.map((model: { id: string }) => model.id)).toEqual([
+      "free-model",
+    ]);
+    expect(plain.structuredContent.models).toEqual([]);
   });
 
   it("rejects disabled providers without fetching models", async () => {

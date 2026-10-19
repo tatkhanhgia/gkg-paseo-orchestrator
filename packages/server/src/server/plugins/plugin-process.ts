@@ -127,6 +127,9 @@ function providerMetadata(provider: ProviderRegistration) {
     description: provider.description,
     iconPath: provider.icon,
     hasCatalogCacheKey: provider.getCatalogCacheKey !== undefined,
+    roleBinding: provider.roleBinding
+      ? { roleIds: [...provider.roleBinding.roleIds], notice: provider.roleBinding.notice }
+      : undefined,
   };
 }
 

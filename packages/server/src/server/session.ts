@@ -193,6 +193,7 @@ import {
   type ChatScheduleSessionOptions,
 } from "./session/chat/chat-schedule-session.js";
 import { ProviderCatalogSession } from "./session/provider/provider-catalog-session.js";
+import { omitPluginRoleLaunchHookReceipts } from "./session/plugin-role-launch-hook-compat.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
 import { ProjectConfigSession } from "./session/project-config/project-config-session.js";
@@ -1077,6 +1078,8 @@ export class Session {
         emit: (msg) => this.emit(msg),
         isProviderVisibleToClient: (provider) => this.isProviderVisibleToClient(provider),
         supportsCustomModeIcons: () => this.supports(CLIENT_CAPS.customModeIcons),
+        supportsPluginRoleLaunchHookReceipt: () =>
+          this.supports(CLIENT_CAPS.pluginRoleLaunchHookReceipt),
         supportsCompactProviderSnapshots: () => this.supports(CLIENT_CAPS.compactProviderSnapshots),
         wantsSnapshotChanges: () => this.wantsEvent("providers_snapshot_update"),
         supportsProviderSnapshotReferences: () =>
@@ -8512,7 +8515,9 @@ export class Session {
     ) {
       if (this.clientCapabilitiesBySource.size > 0 && this.onMessageToSource) {
         for (const source of this.clientCapabilitiesBySource.keys()) {
-          if (this.wantsEvent(msg.type, source)) this.onMessageToSource(source, msg);
+          if (this.wantsEvent(msg.type, source)) {
+            this.onMessageToSource(source, this.pluginRoleLaunchHookMessageForClient(msg, source));
+          }
         }
         return;
       }
@@ -8539,7 +8544,21 @@ export class Session {
       }
       msg = this.workspaceSetupMessageForClient(msg);
     }
-    this.onMessage(msg);
+    this.onMessage(this.pluginRoleLaunchHookMessageForClient(msg));
+  }
+
+  // COMPAT(pluginRoleLaunchHookReceipt): added in v0.8.0-paseo.6, remove after 2027-04-19.
+  private pluginRoleLaunchHookMessageForClient(
+    message: SessionOutboundMessage,
+    source?: object,
+  ): SessionOutboundMessage {
+    const capability = CLIENT_CAPS.pluginRoleLaunchHookReceipt;
+    const sources = source ? [source] : [...this.clientCapabilitiesBySource.keys()];
+    const supported =
+      sources.length === 0
+        ? this.supports(capability)
+        : sources.every((candidate) => this.supportsForSource(capability, candidate));
+    return supported ? message : omitPluginRoleLaunchHookReceipts(message);
   }
 
   // COMPAT(workspaceSetupBlocked): added in v0.8.0, remove after 2027-03-07 once client floor >= v0.8.0.
@@ -8591,7 +8610,7 @@ export class Session {
       if (!this.authorization.allowsOutbound(msg)) {
         return;
       }
-      this.onMessageToSource(source, msg);
+      this.onMessageToSource(source, this.pluginRoleLaunchHookMessageForClient(msg, source));
       return;
     }
     this.emit(msg);

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { JsonValue, ProviderOptions } from "@getpaseo/protocol/agent-types";
 import { z } from "zod";
@@ -534,6 +534,7 @@ class ProviderRuntimeSession {
   config: ProviderConfigState = { models: [], modes: [], thinkingOptions: [], settings: [] };
   commands: Array<{ name: string; description: string; argumentHint?: string }> = [];
   persistence: ProviderPersistence | null = null;
+  roleBindingDigest: string | undefined;
 
   constructor(
     private readonly runtime: ProviderRuntime,
@@ -659,6 +660,7 @@ class ProviderRuntimeSession {
     }
     if (event.type === "session.opened") {
       this.capabilities = [...event.capabilities];
+      this.roleBindingDigest = event.roleBindingDigest;
       this.persistence = this.restoration === "core" ? (event.persistence ?? null) : null;
       return;
     }
@@ -801,6 +803,10 @@ export class PluginAgentClientRegistry {
     return this.providers.has(provider);
   }
 
+  roleBinding(provider: string): ProviderRegistration["roleBinding"] {
+    return this.providers.get(provider)?.registration.roleBinding;
+  }
+
   async shutdown(): Promise<void> {
     const providers = [...this.providers.values()];
     this.providers.clear();
@@ -825,7 +831,8 @@ function createPluginProviderDefinition(
     enabled: true,
     derivedFromProviderId: null,
     optionsSchema: PluginProviderOptionsSchema,
-    supportsExactMcpPreapproval: true,
+    // The ACP adapter never negotiates permission.tool_policy, so exact preapproval would fail role opens.
+    supportsExactMcpPreapproval: false,
     validateOptions: (options) =>
       options === undefined ? undefined : PluginProviderOptionsSchema.parse(options),
     applyOptions: (config, options) => ({ ...config, providerOptions: options }),
@@ -845,6 +852,7 @@ interface PendingChild {
 class PluginAgentClient implements AgentClient {
   readonly provider: string;
   private readonly runtime: ProviderRuntime;
+  private readonly declaresRoleBinding: boolean;
   private readonly rootsBySession = new Map<string, PluginAgentSession>();
   private readonly pendingChildren: PendingChild[] = [];
 
@@ -853,6 +861,7 @@ class PluginAgentClient implements AgentClient {
   constructor(registration: ProviderRegistration) {
     this.getCatalogCacheKey = registration.getCatalogCacheKey?.bind(registration);
     this.provider = registration.id;
+    this.declaresRoleBinding = registration.roleBinding !== undefined;
     this.runtime = new ProviderRuntime(registration);
     this.runtime.onSessionOpened((session, opened) => this.acceptChild(session, opened));
   }
@@ -979,12 +988,24 @@ class PluginAgentClient implements AgentClient {
     persist: boolean;
   }): Promise<PluginAgentSession> {
     const sessionId = randomUUID();
+    const config = mapSessionConfig(
+      input.config,
+      input.launchContext,
+      input.persist,
+      this.declaresRoleBinding,
+    );
     const bridge = await this.runtime.openSession({
       sessionId,
-      config: mapSessionConfig(input.config, input.launchContext, input.persist),
+      config,
       persistence: input.persistence,
       history: input.history,
     });
+    if (config.roleBinding && bridge.roleBindingDigest !== config.roleBinding.bindingDigest) {
+      await bridge.close().catch(() => undefined);
+      throw new Error(
+        `Plugin provider '${this.provider}' did not confirm the role binding digest for the session`,
+      );
+    }
     const session = new PluginAgentSession(this.provider, bridge, () => {
       this.rootsBySession.delete(bridge.id);
     });
@@ -1536,7 +1557,12 @@ function mapSessionConfig(
   config: AgentSessionConfig,
   launchContext: AgentLaunchContext | undefined,
   persist: boolean,
+  declaresRoleBinding: boolean,
 ): ProviderSessionConfig {
+  const role = launchContext?.roleBinding;
+  if (role && !declaresRoleBinding) {
+    throw new Error("Plugin provider declares no role launch hook; it cannot carry a Paseo role");
+  }
   return {
     cwd: config.cwd,
     env: { ...launchContext?.env },
@@ -1552,6 +1578,16 @@ function mapSessionConfig(
     providerOptions: config.providerOptions
       ? toJsonObject(config.providerOptions, "provider options")
       : undefined,
+    ...(role
+      ? {
+          roleBinding: {
+            roleId: role.roleId,
+            instructions: role.instructions,
+            bindingDigest: createHash("sha256").update(role.instructions).digest("hex"),
+            noWrite: role.noWrite === true,
+          },
+        }
+      : {}),
     title: config.title ?? undefined,
     persist,
   };

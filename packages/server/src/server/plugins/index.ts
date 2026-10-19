@@ -478,6 +478,7 @@ export class PluginService {
           id: provider.id,
           label: provider.label,
           description: provider.description,
+          roleBinding: provider.roleBinding,
           getCatalogCacheKey: provider.hasCatalogCacheKey
             ? (options) => {
                 if (!this.runtime.getProviderCatalogCacheKey)

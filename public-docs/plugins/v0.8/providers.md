@@ -351,6 +351,10 @@ export default function contribute(server: PluginServerContext) {
 The shim owns the ACP process, capability mapping, session lifecycle, prompts, permissions, and
 timeline conversion. Do not copy that machinery into the plugin.
 
+A command-backed ACP provider can accept the Paseo Peer role by passing `roleBinding: { roleIds,
+launch }`. Paseo admits Peer only; `launch` returns the environment that carries the role to the
+agent, and no-write assignments are refused. Requires Paseo 0.8.0-paseo.6 or later.
+
 Use `transformers` only for vendor differences ACP cannot describe. Validate vendor payloads with
 Zod and leave malformed or unrelated values unchanged:
 

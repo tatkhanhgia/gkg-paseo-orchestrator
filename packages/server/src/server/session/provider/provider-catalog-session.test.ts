@@ -22,6 +22,7 @@ type SnapshotChangeHandler = (transition: ProviderSnapshotTransition) => void;
 interface MakeOptions {
   visibleProviders?: Set<string>;
   supportsCustomModeIcons?: boolean;
+  supportsPluginRoleLaunchHookReceipt?: boolean;
   supportsCompactProviderSnapshots?: boolean;
   snapshot?: Partial<ProviderSnapshotManager>;
   usage?: { [K in keyof ProviderUsageService]?: unknown };
@@ -53,6 +54,7 @@ function makeSubsystem(options: MakeOptions = {}) {
     emit: (msg) => emitted.push(msg),
     isProviderVisibleToClient: (provider) => visible.has(provider),
     supportsCustomModeIcons: () => options.supportsCustomModeIcons ?? false,
+    supportsPluginRoleLaunchHookReceipt: () => options.supportsPluginRoleLaunchHookReceipt ?? false,
     supportsProviderSnapshotReferences: () => false,
     wantsSnapshotChanges: () => true,
     supportsCompactProviderSnapshots: () => options.supportsCompactProviderSnapshots ?? false,
@@ -84,6 +86,42 @@ function makeSubsystem(options: MakeOptions = {}) {
 }
 
 describe("ProviderCatalogSession", () => {
+  it("omits the plugin role launch hook receipt only for clients without the capability", () => {
+    const entries: ProviderSnapshotEntry[] = [
+      {
+        provider: "plugin-role",
+        status: "ready",
+        enabled: true,
+        roleBinding: {
+          status: "supported",
+          injectionMethod: "plugin-role-launch-hook",
+          roleIds: ["peer"],
+        },
+      },
+      {
+        provider: "codex",
+        status: "ready",
+        enabled: true,
+        roleBinding: { status: "unsupported", reason: "none" },
+      },
+    ];
+    const pushedEntries = (supportsPluginRoleLaunchHookReceipt: boolean) => {
+      const { subsystem, emitted, pushSnapshotChange } = makeSubsystem({
+        visibleProviders: new Set(["plugin-role", "codex"]),
+        supportsPluginRoleLaunchHookReceipt,
+      });
+      subsystem.start();
+      pushSnapshotChange(createProviderSnapshot(entries));
+      return findByType(emitted, "providers_snapshot_update")?.payload.entries;
+    };
+
+    expect(pushedEntries(true)).toEqual(entries);
+    expect(pushedEntries(false)).toEqual([
+      { provider: "plugin-role", status: "ready", enabled: true },
+      entries[1],
+    ]);
+  });
+
   it("PUSH gates invisible providers and downgrades unknown mode icons for legacy clients", () => {
     const { subsystem, emitted, pushSnapshotChange } = makeSubsystem({
       visibleProviders: new Set(["codex"]),
@@ -395,6 +433,7 @@ it("announces shared content without retransmitting models or hashing discovery 
         },
         isProviderVisibleToClient: () => true,
         supportsCustomModeIcons: () => true,
+        supportsPluginRoleLaunchHookReceipt: () => true,
         supportsCompactProviderSnapshots: () => true,
         wantsSnapshotChanges: () => true,
         supportsProviderSnapshotReferences: () => references,

@@ -9,7 +9,7 @@ import type {
   PeerSubrole,
 } from "@getpaseo/protocol/messages";
 import { resolvePeerDelegationProviderPriority } from "@getpaseo/protocol/peer-delegation-priority";
-import { isPaseoSupportedProvider } from "@getpaseo/protocol/provider-config";
+import { isPeerDelegationProviderAdmitted } from "@getpaseo/protocol/provider-config";
 import { AgentProfileGlyph } from "@/agent-profiles";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -112,14 +112,20 @@ function presentProfile(
   if (!modelId) {
     return { summary: profile.provider, available: false, unavailableReason: "Model required" };
   }
-  if (!isPaseoSupportedProvider(profile.provider, providers?.[profile.provider])) {
+  const entry = entries?.find((candidate) => candidate.provider === profile.provider);
+  if (
+    !isPeerDelegationProviderAdmitted({
+      providerId: profile.provider,
+      override: providers?.[profile.provider],
+      roleBinding: entry?.roleBinding,
+    })
+  ) {
     return {
       summary: `${profile.provider} · ${modelId}`,
       available: false,
       unavailableReason: "Provider cannot run Paseo tools",
     };
   }
-  const entry = entries?.find((candidate) => candidate.provider === profile.provider);
   const model = entry?.models?.find((candidate) => candidate.id === modelId);
   const available = entry?.enabled !== false && entry?.status === "ready" && model !== undefined;
   return {

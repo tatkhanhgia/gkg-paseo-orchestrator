@@ -273,6 +273,23 @@ function resolveConfiguredACPRoleBindingSupport(
   return null;
 }
 
+/** Core-owned ceiling: a plugin launch hook binds Peer only, whatever the plugin declares. */
+const PLUGIN_ROLE_CEILING: readonly PaseoRoleId[] = ["peer"];
+
+export function resolvePluginRoleBindingSupport(
+  declaration: { roleIds: readonly PaseoRoleId[]; notice?: string } | undefined,
+): ProviderRoleBindingSupport {
+  if (!declaration) {
+    return { status: "unsupported", reason: "Plugin provider declares no role launch hook" };
+  }
+  const roleIds = PLUGIN_ROLE_CEILING.filter((roleId) => declaration.roleIds.includes(roleId));
+  if (roleIds.length === 0) {
+    return { status: "unsupported", reason: "Plugin role launch hooks admit the Peer role only" };
+  }
+  const { notice } = declaration;
+  return { status: "supported", injectionMethod: "plugin-role-launch-hook", roleIds, notice };
+}
+
 // COMPAT(legacyProviderRoleDetection): fail-closed migration guard only. Delete after
 // 2026-09-30 together with Foundation legacy role-link inventory; no installer creates these.
 export const LEGACY_PROVIDER_ROLE_DETECTION_EXPIRES_AT = "2026-09-30";

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { Readable, Writable } from "node:stream";
 import {
   ClientSideConnection,
@@ -22,6 +23,7 @@ import { z } from "zod";
 import type {
   AcpConfigAccess,
   AcpConfigChange,
+  AcpRoleBinding,
   AcpToolCallSnapshot,
   AcpTransformer,
   AcpVendorUpdate,
@@ -297,13 +299,17 @@ async function openSession(
 ): Promise<void> {
   if (state.sessions.has(input.sessionId))
     throw new Error(`Session already exists: ${input.sessionId}`);
-  const runtime = await AcpRuntime.start({
-    options: state.options,
-    boundarySessionId: input.sessionId,
-    env: input.config.env,
-    emit: state.emit,
-  });
+  const roleLaunch = await launchRoleBinding(input, state.options);
+  let runtime: AcpRuntime | undefined;
   try {
+    runtime = await AcpRuntime.start({
+      options: state.options,
+      boundarySessionId: input.sessionId,
+      env: { ...input.config.env, ...roleLaunch?.env },
+      emit: state.emit,
+      dispose: roleLaunch?.dispose,
+    });
+    if (roleLaunch) assertAgentAcceptsMcpTransports(input.config, runtime.agentCapabilities);
     const capabilities = await runtime.open(input, state.capabilities);
     if (state.isClosed()) {
       await runtime.closeSession();
@@ -315,8 +321,50 @@ async function openSession(
       mutationLane: Promise.resolve(),
     });
   } catch (error) {
-    await runtime.close();
+    await (runtime ? runtime.close() : roleLaunch?.dispose?.());
     throw error;
+  }
+}
+
+async function launchRoleBinding(
+  input: Extract<ProviderInput, { type: "session.open" }>,
+  options: RunAcpProviderOptions,
+): Promise<Awaited<ReturnType<AcpRoleBinding["launch"]>> | null> {
+  const role = input.config.roleBinding;
+  if (!role) return null;
+  const hook = options.roleBinding;
+  if (!hook?.launch) throw new Error(`ACP provider ${options.id} has no role launch hook`);
+  if (role.noWrite) throw new Error("ACP role launch hook cannot enforce a no-write assignment");
+  if (!hook.roleIds.includes(role.roleId)) {
+    throw new Error(`ACP provider ${options.id} does not declare role ${role.roleId}`);
+  }
+  if (createHash("sha256").update(role.instructions).digest("hex") !== role.bindingDigest) {
+    throw new Error("Role instructions do not match their binding digest");
+  }
+  const launched = await hook.launch({
+    sessionId: input.sessionId,
+    cwd: input.config.cwd,
+    roleBinding: role,
+  });
+  const collision = Object.keys(launched.env).find((key) => key in input.config.env);
+  if (collision) {
+    await launched.dispose?.();
+    throw new Error(`Role launch hook env ${collision} collides with the session environment`);
+  }
+  let disposal: Promise<void> | undefined;
+  const dispose = launched.dispose?.bind(launched);
+  return { env: launched.env, dispose: dispose && (() => (disposal ??= dispose())) };
+}
+
+function assertAgentAcceptsMcpTransports(
+  config: ProviderSessionConfig,
+  agent: AgentCapabilities,
+): void {
+  const types = new Set(Object.values(config.mcpServers).map((server) => server.type));
+  for (const type of ["http", "sse"] as const) {
+    if (types.has(type) && agent.mcpCapabilities?.[type] !== true) {
+      throw new Error(`ACP agent lacks ${type} MCP support needed by the role session`);
+    }
   }
 }
 
@@ -340,6 +388,7 @@ interface StartRuntimeOptions {
   boundarySessionId: string;
   env: Readonly<Record<string, string>>;
   emit(event: ProviderEvent): void;
+  dispose?(): Promise<void>;
 }
 
 class AcpRuntime {
@@ -511,6 +560,9 @@ class AcpRuntime {
       persistence: nativePersistence(this.nativeSessionId),
       title: input.config.title,
       cwd: input.config.cwd,
+      ...(input.config.roleBinding
+        ? { roleBindingDigest: input.config.roleBinding.bindingDigest }
+        : {}),
     });
     this.emitConfig();
     if (this.options.options.acpOptions?.waitForInitialCommands) {
@@ -701,6 +753,14 @@ class AcpRuntime {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    try {
+      await this.terminate();
+    } finally {
+      await this.options.dispose?.();
+    }
+  }
+
+  private async terminate(): Promise<void> {
     this.settlePendingWork();
     await this.closeConnector();
     const child = this.child;
