@@ -21,6 +21,7 @@ import {
 import type { ProviderAvailability } from "../../agent/agent-manager.js";
 import type { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
 import { expandTilde } from "../../../utils/path.js";
+import { isPluginRoleLaunchHookReceipt } from "../plugin-role-launch-hook-compat.js";
 
 // COMPAT(customModeIcons): the only mode icons known to clients before v0.1.84. Any
 // other icon name is downgraded to "ShieldCheck" for those clients.
@@ -46,6 +47,8 @@ export interface ProviderCatalogSessionHost {
   isProviderVisibleToClient(provider: string): boolean;
   // COMPAT(customModeIcons): reads clientCapabilities live.
   supportsCustomModeIcons(): boolean;
+  // COMPAT(pluginRoleLaunchHookReceipt): reads clientCapabilities live.
+  supportsPluginRoleLaunchHookReceipt(): boolean;
   supportsCompactProviderSnapshots(): boolean;
   supportsProviderSnapshotReferences(): boolean;
   wantsSnapshotChanges(): boolean;
@@ -137,12 +140,17 @@ export class ProviderCatalogSession {
       ...(!isGlobalProviderSnapshotKey(snapshot.cwd) ? { cwd: snapshot.cwd } : {}),
       generatedAt: new Date().toISOString(),
     };
+    // COMPAT(pluginRoleLaunchHookReceipt): added in v0.8.0-paseo.6, remove after 2027-04-19.
+    const roleLaunchHookReceipt = this.host.supportsPluginRoleLaunchHookReceipt();
     const clientEntries = () =>
-      records.map(({ entry }) =>
-        entry.modes && !customModeIcons
-          ? { ...entry, modes: this.downgradeModeIconsForClient(entry.modes, customModeIcons) }
-          : entry,
-      );
+      records.map(({ entry }) => {
+        const { roleBinding, ...withoutRoleBinding } = entry;
+        const keep = roleLaunchHookReceipt || !isPluginRoleLaunchHookReceipt(roleBinding);
+        const base = keep ? entry : withoutRoleBinding;
+        return base.modes && !customModeIcons
+          ? { ...base, modes: this.downgradeModeIconsForClient(base.modes, customModeIcons) }
+          : base;
+      });
     if (!compact) {
       return { ...envelope, entries: clientEntries() };
     }
@@ -155,6 +163,7 @@ export class ProviderCatalogSession {
           "paseo.providers-snapshot/1",
           references ? "references" : "embedded",
           customModeIcons ? "icons" : "legacy-icons",
+          roleLaunchHookReceipt ? "role-launch-hook" : "no-role-launch-hook",
           records.map(({ entry, contentHash }) => [
             entry.provider,
             contentHash,

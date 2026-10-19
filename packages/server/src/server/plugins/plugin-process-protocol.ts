@@ -5,6 +5,7 @@ import type {
   ProviderInput,
 } from "@getpaseo/plugin/server/provider";
 import { ProviderEventSchema, ProviderInputSchema } from "@getpaseo/plugin/server/provider";
+import { PaseoRoleIdSchema, type PaseoRoleId } from "@getpaseo/protocol/role-binding";
 import { z } from "zod";
 
 export interface PluginProviderMetadata {
@@ -13,6 +14,7 @@ export interface PluginProviderMetadata {
   label: string;
   description?: string;
   iconPath?: string;
+  roleBinding?: { roleIds: PaseoRoleId[]; notice?: string };
 }
 
 export type PluginProcessRequest =
@@ -89,6 +91,13 @@ const providerMetadataSchema = z
     description: z.string().optional(),
     iconPath: z.string().optional(),
     hasCatalogCacheKey: z.boolean().optional(),
+    roleBinding: z
+      .object({
+        roleIds: z.array(PaseoRoleIdSchema).min(1),
+        notice: z.string().max(500).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 const providerConnectRequestSchema = z

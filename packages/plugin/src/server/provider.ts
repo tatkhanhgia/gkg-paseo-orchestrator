@@ -1,4 +1,5 @@
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
+import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 import { z } from "zod";
 
 export const PROVIDER_PROTOCOL_VERSION = 1 as const;
@@ -33,6 +34,7 @@ export interface ProviderRegistration {
   description?: string;
   /** Plugin-directory-relative path to a self-contained SVG file. */
   icon?: string;
+  roleBinding?: { roleIds: readonly PaseoRoleId[]; notice?: string };
   connect(request: ProviderConnectRequest): Promise<ProviderConnection>;
 }
 
@@ -88,6 +90,12 @@ export interface ProviderSessionConfig {
   thinkingOption?: string;
   settings: Readonly<Record<string, JsonValue>>;
   providerOptions?: Readonly<Record<string, JsonValue>>;
+  roleBinding?: {
+    roleId: PaseoRoleId;
+    instructions: string;
+    bindingDigest: string;
+    noWrite: boolean;
+  };
   title?: string;
   persist: boolean;
 }
@@ -538,6 +546,7 @@ export type ProviderEvent =
       title?: string;
       description?: string;
       cwd: string;
+      roleBindingDigest?: string;
     }
   | { type: "session.ready"; requestId?: string; sessionId: string }
   | { type: "session.closed"; sessionId: string; error?: ProviderError }
@@ -713,6 +722,15 @@ const sessionConfigSchema = z
     thinkingOption: z.string().optional(),
     settings: jsonObjectSchema,
     providerOptions: jsonObjectSchema.optional(),
+    roleBinding: z
+      .object({
+        roleId: z.enum(["lead", "peer", "supervisor"]),
+        instructions: z.string(),
+        bindingDigest: z.string(),
+        noWrite: z.boolean(),
+      })
+      .strict()
+      .optional(),
     title: z.string().optional(),
     persist: z.boolean(),
   })
@@ -1284,6 +1302,7 @@ export const ProviderEventSchema: z.ZodType<ProviderEvent> = z.discriminatedUnio
       title: z.string().optional(),
       description: z.string().optional(),
       cwd: z.string(),
+      roleBindingDigest: z.string().optional(),
     })
     .strip(),
   z

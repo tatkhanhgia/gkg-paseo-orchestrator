@@ -1058,6 +1058,10 @@ export class AgentManager {
     this.clients.set(provider, client);
   }
 
+  getProviderRoleBindingSupport(provider: AgentProvider): ProviderRoleBindingSupport | undefined {
+    return this.providerRoleBindingSupport.get(provider);
+  }
+
   updateProviderRegistry(input: {
     providerDefinitions: ProviderEnabledMap;
     clients: ProviderClientMap;

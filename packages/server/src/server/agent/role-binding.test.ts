@@ -11,6 +11,7 @@ import {
   LEGACY_PROVIDER_ROLE_DETECTION_EXPIRES_AT,
   policyOwnerForRoleBinding,
   preflightWorkspaceProtocolAdmission,
+  resolvePluginRoleBindingSupport,
   resolveProviderRoleBindingSupport,
   toRoleBindingReceipt,
   WORKSPACE_PROTOCOL_ADMISSION_ERROR,
@@ -69,6 +70,26 @@ function assignmentBinding(roleId: "lead" | "peer" | "supervisor", cwd: string) 
     assignmentAssigner: { kind: "human-session" as const },
   };
 }
+
+describe("plugin role launch hook support", () => {
+  test("admits Peer only, whatever the plugin declares, and nothing without a declaration", () => {
+    expect(
+      resolvePluginRoleBindingSupport({ roleIds: ["peer", "lead"], notice: "capsule" }),
+    ).toEqual({
+      status: "supported",
+      injectionMethod: "plugin-role-launch-hook",
+      roleIds: ["peer"],
+      notice: "capsule",
+    });
+    expect(resolvePluginRoleBindingSupport({ roleIds: ["lead", "supervisor"] }).status).toBe(
+      "unsupported",
+    );
+    expect(resolvePluginRoleBindingSupport(undefined)).toEqual({
+      status: "unsupported",
+      reason: "Plugin provider declares no role launch hook",
+    });
+  });
+});
 
 describe("native Foundation role materialization", () => {
   test("detects only exact legacy role transport commands", () => {

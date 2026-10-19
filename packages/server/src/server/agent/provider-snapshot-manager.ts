@@ -44,7 +44,11 @@ import {
   formatProviderDiagnosticError,
 } from "./providers/diagnostic-utils.js";
 import type { MutableDaemonConfig } from "../daemon-config-store.js";
-import { detectLegacyProviderRole, resolveProviderRoleBindingSupport } from "./role-binding.js";
+import {
+  detectLegacyProviderRole,
+  resolvePluginRoleBindingSupport,
+  resolveProviderRoleBindingSupport,
+} from "./role-binding.js";
 import type { HubExecutionAgentValidationIssue } from "@getpaseo/protocol/messages";
 import {
   type AgentConfigurationValidationInput,
@@ -833,6 +837,9 @@ export class ProviderSnapshotManager {
     overrides: Record<string, ProviderOverride> | undefined,
     clients: Record<AgentProvider, AgentClient>,
   ): ProviderRoleBindingSupport {
+    if (this.pluginProviders.has(provider)) {
+      return resolvePluginRoleBindingSupport(this.pluginProviders.roleBinding(provider));
+    }
     const providerOverride = overrides?.[provider];
     const legacyRoleId = detectLegacyProviderRole(providerOverride?.command);
     const client = definition ? this.ensureClient(provider, definition, clients) : null;

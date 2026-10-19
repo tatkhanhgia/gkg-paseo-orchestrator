@@ -181,7 +181,8 @@ import type {
 } from "./types.js";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 import {
-  isPaseoSupportedProvider,
+  isPeerDelegationProviderAdmitted,
+  type ProviderOverride,
   type ProviderPaseoToolsPolicy,
 } from "@getpaseo/protocol/provider-config";
 import { getUnattendedModeId } from "@getpaseo/protocol/provider-manifest";
@@ -2537,6 +2538,16 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     return { providerOptions: callerAgent.config.providerOptions };
   };
 
+  const isPeerProviderAdmitted = (
+    providerId: string,
+    override: Pick<ProviderOverride, "extends"> | undefined,
+  ) =>
+    isPeerDelegationProviderAdmitted({
+      providerId,
+      override,
+      roleBinding: agentManager.getProviderRoleBindingSupport(providerId),
+    });
+
   const resolvePeerDelegationAllowedRoutes = () => {
     const callerAgent = resolveCallerAgent();
     if (callerAgent?.roleBinding?.roleId !== "lead") return undefined;
@@ -2552,7 +2563,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         try {
           const route = resolveRequiredProviderModel(`${profile.provider}/${profile.model}`);
           if (!route.model) return [];
-          if (!isPaseoSupportedProvider(route.provider, config.providers?.[route.provider])) {
+          if (!isPeerProviderAdmitted(route.provider, config.providers?.[route.provider])) {
             return [];
           }
           const key = formatProviderModel(route.provider, route.model);
@@ -2565,7 +2576,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       });
     }
     return policy.allowedModels.filter((route) =>
-      isPaseoSupportedProvider(route.provider, config.providers?.[route.provider]),
+      isPeerProviderAdmitted(route.provider, config.providers?.[route.provider]),
     );
   };
 

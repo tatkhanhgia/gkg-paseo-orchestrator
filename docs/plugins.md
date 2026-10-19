@@ -340,6 +340,21 @@ For an ACP command, register `runAcpProvider({ id, label, command })` from
 whole provider event stream. The direct and ACP examples live in `plugin-examples/provider-direct`
 and `plugin-examples/provider-acp-transformer`.
 
+An ACP provider can bind the Paseo Peer role by passing `roleBinding: { roleIds, notice?, launch }` to
+`runAcpProvider`. The core admits only `peer` (`roleIds` is intersected with that ceiling), through
+the `plugin-role-launch-hook` injection method of [native role binding](native-role-binding.md).
+For a role session the adapter checks, before it spawns anything, that the registration uses
+`command` (not `connector`), the assignment is not `no-write`, the role is declared, the daemon's
+`bindingDigest` equals `sha256(instructions)`, and the hook env does not collide with `config.env`.
+It calls `launch({ sessionId, cwd, roleBinding })` and spawns the agent with the returned `env`
+applied last. `dispose` runs when the session's process closes or the open fails. After
+`initialize`, a role session that configures an `http` or `sse` MCP server fails unless the agent
+advertises `mcpCapabilities.http` or `.sse`. `session.opened` echoes `roleBindingDigest`, and the
+core fails the open when it does not equal the digest it sent. Role bytes travel only through
+`launch`; the adapter never puts them in `_meta._paseo`. The adapter does not negotiate
+`permission.tool_policy`, so plugin definitions set `supportsExactMcpPreapproval: false` and role
+sessions carry no exact MCP preapproval. Requires Paseo `>=0.8.0-paseo.6`.
+
 Provider-emitted plugin timeline items use the same renderer registration as transformed and
 daemon-appended plugin items. The direct example includes both sides. The renderer-only
 `plugin-examples/inline-thinking` example shows that timeline presentation remains independent of a

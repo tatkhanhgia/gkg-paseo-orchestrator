@@ -1,10 +1,12 @@
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
+import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 import type {
   ProviderCatalog,
   ProviderCommand,
   ProviderConfigState,
   ProviderNotice,
   ProviderRegistration,
+  ProviderSessionConfig,
   ProviderTimelineItem,
 } from "./provider.js";
 import { createAcpProviderConnection } from "./acp-internal/connection.js";
@@ -16,6 +18,18 @@ interface RunAcpProviderBaseOptions {
   icon?: string;
   acpOptions?: AcpOptions;
   transformers?: readonly AcpTransformer[];
+  roleBinding?: AcpRoleBinding;
+}
+
+/** The returned env is applied last at spawn; `dispose` runs when the session's process closes. */
+export interface AcpRoleBinding {
+  roleIds: readonly PaseoRoleId[];
+  notice?: string;
+  launch(context: {
+    sessionId: string;
+    cwd: string;
+    roleBinding: NonNullable<ProviderSessionConfig["roleBinding"]>;
+  }): Promise<{ env: Readonly<Record<string, string>>; dispose?(): Promise<void> }>;
 }
 
 export type RunAcpProviderOptions = RunAcpProviderBaseOptions &
@@ -104,6 +118,7 @@ export interface AcpTransformer {
 export function runAcpProvider(options: RunAcpProviderOptions): ProviderRegistration {
   const hasCommand = options.command !== undefined;
   const hasConnector = options.connector !== undefined;
+  const { roleBinding } = options;
   if (hasCommand === hasConnector) {
     throw new Error("ACP provider requires exactly one command or SDK connector");
   }
@@ -115,6 +130,9 @@ export function runAcpProvider(options: RunAcpProviderOptions): ProviderRegistra
     label: options.label,
     description: options.description,
     icon: options.icon,
+    ...(roleBinding?.launch
+      ? { roleBinding: { roleIds: roleBinding.roleIds, notice: roleBinding.notice } }
+      : {}),
     connect(request) {
       return createAcpProviderConnection(options, request);
     },
