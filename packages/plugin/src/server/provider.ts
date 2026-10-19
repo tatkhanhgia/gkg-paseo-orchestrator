@@ -34,6 +34,7 @@ export interface ProviderRegistration {
   description?: string;
   /** Plugin-directory-relative path to a self-contained SVG file. */
   icon?: string;
+  /** Set by runAcpProvider's role launch hook. The SDK applies the hook; it does not vouch for the model. */
   roleBinding?: { roleIds: readonly PaseoRoleId[]; notice?: string };
   connect(request: ProviderConnectRequest): Promise<ProviderConnection>;
 }
@@ -546,6 +547,7 @@ export type ProviderEvent =
       title?: string;
       description?: string;
       cwd: string;
+      /** The SDK applied the launch hook and echoes the digest; not proof the model read the bytes. */
       roleBindingDigest?: string;
     }
   | { type: "session.ready"; requestId?: string; sessionId: string }

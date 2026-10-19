@@ -831,8 +831,7 @@ function createPluginProviderDefinition(
     enabled: true,
     derivedFromProviderId: null,
     optionsSchema: PluginProviderOptionsSchema,
-    // The ACP adapter never negotiates permission.tool_policy (acp-internal/connection.ts
-    // ADAPTER_CAPABILITIES), so claiming exact preapproval would fail every role-bound open.
+    // The ACP adapter never negotiates permission.tool_policy, so exact preapproval would fail role opens.
     supportsExactMcpPreapproval: false,
     validateOptions: (options) =>
       options === undefined ? undefined : PluginProviderOptionsSchema.parse(options),

@@ -8515,7 +8515,9 @@ export class Session {
     ) {
       if (this.clientCapabilitiesBySource.size > 0 && this.onMessageToSource) {
         for (const source of this.clientCapabilitiesBySource.keys()) {
-          if (this.wantsEvent(msg.type, source)) this.onMessageToSource(source, msg);
+          if (this.wantsEvent(msg.type, source)) {
+            this.onMessageToSource(source, this.pluginRoleLaunchHookMessageForClient(msg, source));
+          }
         }
         return;
       }

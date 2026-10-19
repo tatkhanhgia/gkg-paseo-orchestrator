@@ -212,6 +212,8 @@ configuration and persistence. Providers re-read external state during `session.
 
 Use `runAcpProvider()` from `@getpaseo/plugin/server/acp` to adapt a command-backed ACP. Add transformer
 hooks only for a vendor's discovery, configuration, notification, or tool-call differences.
+`runAcpProvider({ roleBinding })` lets a command-backed ACP provider accept the Peer role (Peer
+only, no-write unsupported); see the [provider guide](providers.md#adapt-an-acp-agent).
 
 `ProviderRegistration.icon` is a file path relative to the plugin directory, such as `icon.svg`.
 It must resolve inside that directory to a regular SVG file no larger than 64 KiB. The SVG must be

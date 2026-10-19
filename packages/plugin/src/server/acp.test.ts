@@ -1086,7 +1086,7 @@ lines.on("line", (line) => {
       const agent = await roleAgent();
       const { registration, disposals } = roleProvider(agent.executable, {});
 
-      const { connection, events } = await openRole(registration, { env: { OTHER: "kept" } });
+      const { connection, events } = await openRole(registration, {});
 
       const opened = events.find((event) => event.type === "session.opened");
       expect(opened).toMatchObject({
@@ -1111,6 +1111,17 @@ lines.on("line", (line) => {
       ["digest", {}, { roleBinding: { ...roleBinding, bindingDigest: "0".repeat(64) } }, /digest/u],
       ["env collision", {}, { env: { ROLE_CAPSULE: "caller" } }, /collides/u],
     ];
+
+    expect(() =>
+      runAcpProvider({
+        id: "role-acp",
+        label: "Role ACP",
+        roleBinding: { roleIds: ["peer"], launch: async () => ({ env: {} }) },
+        connector: () => {
+          throw new Error("unused");
+        },
+      }),
+    ).toThrow(/spawned command/u);
 
     for (const [name, hook, config, message] of rows) {
       const { registration, disposals } = roleProvider(agent.executable, hook ?? undefined);

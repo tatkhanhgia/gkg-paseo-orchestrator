@@ -660,4 +660,25 @@ test("agent role receipts using the plugin launch hook reach only clients that a
   expect(await deliver({})).toEqual([
     { ...message, payload: { requestId: "r1", error: null, agent: { id: "agent-1" } } },
   ]);
+
+  // The capable socket registers last, so its capabilities are the session's current ones.
+  const legacy = {};
+  const capable = {};
+  const delivered = new Map<object, SessionOutboundMessage[]>();
+  const session = createSessionForWireCompatTest({
+    onMessageToSource: (source, sent) =>
+      delivered.set(source, [...(delivered.get(source) ?? []), sent]),
+  });
+  session.updateClientCapabilities({}, legacy);
+  session.updateClientCapabilities({ [CLIENT_CAPS.pluginRoleLaunchHookReceipt]: true }, capable);
+  const update = {
+    type: "providers_snapshot_update",
+    payload: { generatedAt: "now", entries: [{ provider: "plugin-role", roleBinding }] },
+  } as unknown as SessionOutboundMessage;
+  session.publish(update);
+  await session.cleanup();
+  expect(delivered.get(capable)).toEqual([update]);
+  expect(delivered.get(legacy)).toEqual([
+    { ...update, payload: { generatedAt: "now", entries: [{ provider: "plugin-role" }] } },
+  ]);
 });

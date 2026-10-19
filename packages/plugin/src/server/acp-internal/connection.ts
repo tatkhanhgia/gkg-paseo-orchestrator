@@ -326,7 +326,6 @@ async function openSession(
   }
 }
 
-/** Every refusal happens before the hook runs or anything is spawned, except an env collision. */
 async function launchRoleBinding(
   input: Extract<ProviderInput, { type: "session.open" }>,
   options: RunAcpProviderOptions,
@@ -335,7 +334,6 @@ async function launchRoleBinding(
   if (!role) return null;
   const hook = options.roleBinding;
   if (!hook?.launch) throw new Error(`ACP provider ${options.id} has no role launch hook`);
-  if (!options.command) throw new Error("A role launch hook requires a spawned ACP command");
   if (role.noWrite) throw new Error("ACP role launch hook cannot enforce a no-write assignment");
   if (!hook.roleIds.includes(role.roleId)) {
     throw new Error(`ACP provider ${options.id} does not declare role ${role.roleId}`);
@@ -353,7 +351,9 @@ async function launchRoleBinding(
     await launched.dispose?.();
     throw new Error(`Role launch hook env ${collision} collides with the session environment`);
   }
-  return launched;
+  let disposal: Promise<void> | undefined;
+  const dispose = launched.dispose?.bind(launched);
+  return { env: launched.env, dispose: dispose && (() => (disposal ??= dispose())) };
 }
 
 function assertAgentAcceptsMcpTransports(

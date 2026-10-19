@@ -1,14 +1,12 @@
 // COMPAT(pluginRoleLaunchHookReceipt): added in v0.8.0-paseo.6, remove after 2027-04-19.
-// Clients that predate "plugin-role-launch-hook" parse injectionMethod as a closed enum and
-// reject the whole message. Deepest holder: message > payload > entries > [i] > agent > roleBinding.
-const MAX_DEPTH = 5;
+// Old clients parse injectionMethod as a closed enum and reject the whole message.
+const HOOK = "plugin-role-launch-hook";
+const MAX_DEPTH = 5; // message > payload > entries > [i] > agent > roleBinding
 
 export function isPluginRoleLaunchHookReceipt(receipt: unknown): boolean {
-  const method = (receipt as { injectionMethod?: unknown } | null)?.injectionMethod;
-  return method === "plugin-role-launch-hook";
+  return (receipt as { injectionMethod?: unknown } | null)?.injectionMethod === HOOK;
 }
 
-/** Returns the same reference when nothing needs omitting. */
 export function omitPluginRoleLaunchHookReceipts<T>(value: T, depth = 0): T {
   if (typeof value !== "object" || value === null || depth > MAX_DEPTH) return value;
   if (Array.isArray(value)) {

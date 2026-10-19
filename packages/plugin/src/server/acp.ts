@@ -125,6 +125,9 @@ export function runAcpProvider(options: RunAcpProviderOptions): ProviderRegistra
   if (options.command && (options.command.length === 0 || options.command[0].trim().length === 0)) {
     throw new Error("ACP provider command must contain an executable");
   }
+  if (roleBinding && hasConnector) {
+    throw new Error("An ACP role launch hook requires a spawned command, not an SDK connector");
+  }
   return {
     id: options.id,
     label: options.label,

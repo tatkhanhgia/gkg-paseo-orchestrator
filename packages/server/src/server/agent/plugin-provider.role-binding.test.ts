@@ -15,7 +15,7 @@ import { createProjectHarnessBindingService } from "../project/harness-binding-s
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import { PluginAgentClientRegistry } from "./plugin-provider.js";
-import { resolvePluginRoleBindingSupport } from "./role-binding.js";
+import { ProviderSnapshotManager } from "./provider-snapshot-manager.js";
 
 const PROVIDER = "plugin-role";
 const INSTRUCTIONS = "# Peer\nexact role bytes\n";
@@ -71,7 +71,7 @@ function roleProvider(options: { declares: boolean; confirm: boolean }) {
   };
   const registry = new PluginAgentClientRegistry(createTestLogger());
   registry.replace([registration]);
-  return { registry, client: registry.clients()[PROVIDER]!, opens, closes };
+  return { registration, client: registry.clients()[PROVIDER]!, opens, closes };
 }
 
 const roleLaunchContext = {
@@ -104,17 +104,13 @@ test("a role payload reaches only declaring plugins and must be confirmed by the
 test("a Peer opens on a plugin provider without negotiating permission.tool_policy", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "plugin-role-peer-"));
   writeFileSync(join(workdir, "WORKSPACE_PROTOCOL.md"), buildWorkspaceProtocolTemplate(workdir));
-  const { registry, opens } = roleProvider({ declares: true, confirm: true });
-  const definition = registry.definitions()[PROVIDER]!;
+  const { registration, opens } = roleProvider({ declares: true, confirm: true });
+  const pluginState = new ProviderSnapshotManager({
+    logger: createTestLogger(),
+  }).replacePluginProviders([registration]);
   const manager = new AgentManager({
-    clients: registry.clients(),
-    providerDefinitions: {
-      [PROVIDER]: {
-        enabled: true,
-        supportsExactMcpPreapproval: definition.supportsExactMcpPreapproval,
-        roleBindingSupport: resolvePluginRoleBindingSupport({ roleIds: ["peer", "lead"] }),
-      },
-    },
+    clients: pluginState.clients,
+    providerDefinitions: pluginState.providerDefinitions,
     registry: new AgentStorage(join(workdir, "agents"), createTestLogger()),
     resolveHarnessBinding: createProjectHarnessBindingService({
       workspaceRegistry: {
@@ -130,6 +126,12 @@ test("a Peer opens on a plugin provider without negotiating permission.tool_poli
     verifyRoleResourceGrants: async () => undefined,
     mcpBaseUrl: "http://127.0.0.1:6767/mcp/agents",
     logger: createTestLogger(),
+  });
+
+  expect(pluginState.providerDefinitions[PROVIDER]?.roleBindingSupport).toEqual({
+    status: "supported",
+    injectionMethod: "plugin-role-launch-hook",
+    roleIds: ["peer"],
   });
 
   try {
