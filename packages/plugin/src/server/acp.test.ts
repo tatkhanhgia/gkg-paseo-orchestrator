@@ -1103,41 +1103,17 @@ lines.on("line", (line) => {
 
   it("fails closed before spawning when the role cannot be delivered safely", async () => {
     const agent = await roleAgent();
-    const cases: Array<{
-      name: string;
-      hook?: Partial<AcpRoleBinding> | null;
-      config: Parameters<typeof openRole>[1];
-      message: RegExp;
-    }> = [
-      { name: "no hook", hook: null, config: {}, message: /no role launch hook/u },
-      {
-        name: "no-write",
-        config: { roleBinding: { ...roleBinding, noWrite: true } },
-        message: /no-write/u,
-      },
-      {
-        name: "undeclared role",
-        hook: { roleIds: ["supervisor"] },
-        config: {},
-        message: /does not declare role peer/u,
-      },
-      {
-        name: "digest mismatch",
-        config: { roleBinding: { ...roleBinding, bindingDigest: "0".repeat(64) } },
-        message: /binding digest/u,
-      },
-      {
-        name: "env collision",
-        config: { env: { ROLE_CAPSULE: "caller" } },
-        message: /collides/u,
-      },
+    type Row = [string, Partial<AcpRoleBinding> | null, Parameters<typeof openRole>[1], RegExp];
+    const rows: Row[] = [
+      ["no hook", null, {}, /no role launch hook/u],
+      ["no-write", {}, { roleBinding: { ...roleBinding, noWrite: true } }, /no-write/u],
+      ["undeclared role", { roleIds: ["supervisor"] }, {}, /does not declare role peer/u],
+      ["digest", {}, { roleBinding: { ...roleBinding, bindingDigest: "0".repeat(64) } }, /digest/u],
+      ["env collision", {}, { env: { ROLE_CAPSULE: "caller" } }, /collides/u],
     ];
 
-    for (const { name, hook, config, message } of cases) {
-      const { registration, disposals } = roleProvider(
-        agent.executable,
-        hook === null ? undefined : (hook ?? {}),
-      );
+    for (const [name, hook, config, message] of rows) {
+      const { registration, disposals } = roleProvider(agent.executable, hook ?? undefined);
       const { connection, settled } = await openRole(registration, config);
       expect(settled, name).toMatchObject({
         type: "request.failed",
