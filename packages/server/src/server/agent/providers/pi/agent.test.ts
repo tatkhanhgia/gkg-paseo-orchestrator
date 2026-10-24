@@ -2585,7 +2585,7 @@ describe("PiRpcAgentClient", () => {
     expect(pi.latestSession().treeNavigationRequests).toEqual(["entry-1"]);
   });
 
-  test("injects MCP servers without replacing the Pi global MCP config", async () => {
+  test("injects the Paseo MCP bridge and config env without replacing the Pi global MCP config", async () => {
     const agentDir = mkdtempSync(path.join(tmpdir(), "paseo-pi-agent-"));
     onTestFinished(() => rmSync(agentDir, { recursive: true, force: true }));
     writeFileSync(
@@ -2601,14 +2601,6 @@ describe("PiRpcAgentClient", () => {
       }),
     );
     const pi = new FakePi();
-    pi.queueCommands([
-      {
-        name: "mcp",
-        description: "Show MCP server status",
-        source: "extension",
-        sourceInfo: { source: "npm:pi-mcp-adapter" },
-      },
-    ]);
     const client = createClient(pi);
 
     const session = await client.createSession(
@@ -2629,29 +2621,28 @@ describe("PiRpcAgentClient", () => {
       { env: { PI_CODING_AGENT_DIR: agentDir } },
     );
 
-    expect(pi.recordedLaunches).toHaveLength(2);
-    expect(pi.recordedLaunches[0]).toMatchObject({
-      cwd: "/tmp/paseo-pi-rpc-test",
-      argv: ["pi", "--mode", "rpc"],
-    });
-    const actualLaunch = pi.recordedLaunches[1]!;
-    expect(actualLaunch.extensionPaths).toHaveLength(1);
+    expect(pi.recordedLaunches).toHaveLength(1);
+    const actualLaunch = pi.recordedLaunches[0]!;
+    expect(actualLaunch.extensionPaths).toHaveLength(2);
     expect(actualLaunch.argv).toEqual([
       "pi",
       "--mode",
       "rpc",
       "--thinking",
       "medium",
-      "--mcp-config",
-      actualLaunch.mcpConfigPath,
       "--extension",
       actualLaunch.extensionPaths[0],
+      "--extension",
+      actualLaunch.extensionPaths[1],
     ]);
+    expect(actualLaunch.env?.PASEO_MCP_CONFIG).toEqual(expect.any(String));
     expect(session.capabilities.supportsMcpServers).toBe(true);
 
-    const configPath = actualLaunch.mcpConfigPath;
-    expect(configPath).toEqual(expect.any(String));
-    const injectedConfig = JSON.parse(readUtf8File(configPath!)) as {
+    expect(actualLaunch.env?.PASEO_MCP_CONFIG).toEqual(expect.any(String));
+    expect(session.capabilities.supportsMcpServers).toBe(true);
+
+    const configPath = actualLaunch.env?.PASEO_MCP_CONFIG ?? "";
+    const injectedConfig = JSON.parse(readUtf8File(configPath)) as {
       mcpServers: Record<string, unknown>;
     };
     expect(injectedConfig).toEqual({
@@ -2675,7 +2666,8 @@ describe("PiRpcAgentClient", () => {
     });
 
     await session.close();
-    expect(existsSync(configPath!)).toBe(false);
+    expect(existsSync(configPath)).toBe(false);
+    expect(existsSync(actualLaunch.extensionPaths[1]!)).toBe(false);
   });
 
   test("reports the path of a malformed Pi global MCP config", async () => {
@@ -2684,7 +2676,6 @@ describe("PiRpcAgentClient", () => {
     const configPath = path.join(agentDir, "mcp.json");
     writeFileSync(configPath, "{ invalid");
     const pi = new FakePi();
-    pi.queueCommands([{ name: "mcp", source: "extension" }]);
     const client = createClient(pi);
 
     await expect(
@@ -2699,24 +2690,14 @@ describe("PiRpcAgentClient", () => {
     ).rejects.toThrow(`Failed to parse Pi MCP config: ${configPath}`);
   });
 
-  test("does not pass MCP config when pi-mcp-adapter is not loaded", async () => {
+  test("does not inject the MCP bridge when no MCP servers are configured", async () => {
     const pi = new FakePi();
-    pi.queueCommands([]);
     const client = createClient(pi);
 
-    const session = await client.createSession(
-      createConfig({
-        mcpServers: {
-          paseo: {
-            type: "http",
-            url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
-          },
-        },
-      }),
-    );
+    const session = await client.createSession(createConfig());
 
-    expect(pi.recordedLaunches).toHaveLength(2);
-    const actualLaunch = pi.recordedLaunches[1]!;
+    expect(pi.recordedLaunches).toHaveLength(1);
+    const actualLaunch = pi.recordedLaunches[0]!;
     expect(actualLaunch.extensionPaths).toHaveLength(1);
     expect(actualLaunch.argv).toEqual([
       "pi",
@@ -2727,7 +2708,7 @@ describe("PiRpcAgentClient", () => {
       "--extension",
       actualLaunch.extensionPaths[0],
     ]);
-    expect(actualLaunch.mcpConfigPath).toBeUndefined();
+    expect(actualLaunch.env?.PASEO_MCP_CONFIG).toBeUndefined();
     expect(session.capabilities.supportsMcpServers).toBe(false);
   });
 });

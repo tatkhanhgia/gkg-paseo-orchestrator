@@ -19,7 +19,6 @@ export interface PiRuntimeLaunch {
   modeId?: string;
   session?: string;
   noSession?: boolean;
-  mcpConfigPath?: string;
   extensionPaths?: string[];
   extraArgs?: string[];
 }
@@ -34,7 +33,6 @@ export interface PiStartSessionInput {
   modeId?: string;
   session?: string;
   noSession?: boolean;
-  mcpConfigPath?: string;
   extensionPaths?: string[];
   extraArgs?: string[];
 }
@@ -107,7 +105,6 @@ export function buildPiLaunch(input: {
     modeId: input.session.modeId,
     session: input.session.session,
     noSession: input.session.noSession,
-    mcpConfigPath: input.session.mcpConfigPath,
     extensionPaths: input.session.extensionPaths,
     extraArgs: input.session.extraArgs,
   };
@@ -134,9 +131,6 @@ function appendPiLaunchArgs(
     argv.push("--no-session");
   } else if (session.session) {
     argv.push("--session", session.session);
-  }
-  if (session.mcpConfigPath) {
-    argv.push("--mcp-config", session.mcpConfigPath);
   }
   for (const extensionPath of session.extensionPaths ?? []) {
     argv.push("--extension", extensionPath);
