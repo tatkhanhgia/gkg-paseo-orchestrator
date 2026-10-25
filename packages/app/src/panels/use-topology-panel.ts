@@ -13,7 +13,10 @@ import {
   buildProjectTopology,
   type TopologyNode,
 } from "@/panels/topology-model";
-import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
+import {
+  normalizeWorkspaceOpaqueId,
+  resolveWorkspaceMapKeyByIdentity,
+} from "@/utils/workspace-identity";
 
 function formatWorkspaceLabel(
   workspaces: Map<string, WorkspaceDescriptor> | undefined,
@@ -88,7 +91,9 @@ export function useTopologyPanelState() {
     return {
       seedId: lineageSeed.id,
       seedTitle: seedNode?.title ?? lineageSeed.id.slice(0, 8),
-      workspaceCount: new Set(topology.nodes.map((node) => node.workspaceId)).size,
+      workspaceCount: new Set(
+        topology.nodes.flatMap((node) => normalizeWorkspaceOpaqueId(node.workspaceId) ?? []),
+      ).size,
       workspaceLabelOf: (node: TopologyNode) => workspaceLabelByNodeId.get(node.id) ?? null,
     };
   }, [lineageSeed, topology.nodes, workspaces]);
