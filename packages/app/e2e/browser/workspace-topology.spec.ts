@@ -3,7 +3,7 @@ import type { AssignmentEnvelope } from "@getpaseo/protocol/assignment-contract"
 import type { PaseoRoleId } from "@getpaseo/protocol/role-binding";
 import { buildHostWorkspaceRoute } from "@/utils/host-routes";
 import { expect, test } from "../support/fixtures";
-import { seedWorkspace } from "../support/helpers/seed-client";
+import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
 
 function assignmentFor(roleId: PaseoRoleId, issueIds: string[] = []): AssignmentEnvelope {
@@ -96,8 +96,9 @@ test.describe("workspace topology", () => {
   test("follows an unbound root's lineage into another project's workspace", async ({ page }) => {
     test.setTimeout(120_000);
     const rootWorkspace = await seedWorkspace({ repoPrefix: "topology-lineage-root-" });
-    const projectWorkspace = await seedWorkspace({ repoPrefix: "topology-lineage-project-" });
+    let projectWorkspace: SeededWorkspace | null = null;
     try {
+      projectWorkspace = await seedWorkspace({ repoPrefix: "topology-lineage-project-" });
       const root = await rootWorkspace.client.createAgent({
         provider: "mock",
         cwd: rootWorkspace.repoPath,
@@ -157,7 +158,7 @@ test.describe("workspace topology", () => {
       await topology.getByTestId("topology-show-project").click();
       await expect(topology.getByText("1 agents · 0 relationships", { exact: true })).toBeVisible();
     } finally {
-      await projectWorkspace.cleanup();
+      await projectWorkspace?.cleanup();
       await rootWorkspace.cleanup();
     }
   });
