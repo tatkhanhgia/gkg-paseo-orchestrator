@@ -3,7 +3,15 @@ import type { Agent } from "@/stores/session-store";
 import { normalizeWorkspaceOpaqueId } from "@/utils/workspace-identity";
 
 export type TopologyRole = PaseoRoleId | "unbound";
-export type TopologyEdgeKind = "delegation" | "supervision";
+export type TopologyEdgeKind = "delegation" | "supervision" | "orchestration";
+
+// An unbound parent (no role binding or launch receipt, e.g. a root orchestrator session)
+// launching a child is orchestration, not a role contract the topology should flag.
+export const TOPOLOGY_EDGE_LABELS: Record<TopologyEdgeKind, { verb: string; byline: string }> = {
+  delegation: { verb: "delegates", byline: "Delegated" },
+  supervision: { verb: "supervises", byline: "Supervised" },
+  orchestration: { verb: "orchestrates", byline: "Orchestrated" },
+};
 
 export interface TopologyNode {
   id: string;
@@ -136,15 +144,7 @@ export function buildWorkspaceTopology(
     .filter((agent) => normalizeWorkspaceOpaqueId(agent.workspaceId) === normalizedWorkspaceId)
     .map((agent) => agent.id);
   const selectedIds = selectTopologyAgentIds(visibleAgents, workspaceSeedIds);
-
-  const workspaceAgents = visibleAgents
-    .filter((agent) => selectedIds.has(agent.id))
-    .sort(
-      (left, right) =>
-        left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id),
-    );
-
-  return buildTopology(workspaceAgents);
+  return buildTopology(selectedInCreationOrder(visibleAgents, selectedIds));
 }
 
 export function buildProjectTopology(
@@ -161,25 +161,42 @@ export function buildProjectTopology(
     )
     .map((agent) => agent.id);
   const selectedIds = selectTopologyAgentIds(visibleAgents, projectSeedIds, false);
-  const projectAgents = visibleAgents
-    .filter((agent) => selectedIds.has(agent.id))
-    .sort(
-      (left, right) =>
-        left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id),
-    );
-  return buildTopology(projectAgents);
+  return buildTopology(selectedInCreationOrder(visibleAgents, selectedIds));
+}
+
+/**
+ * The derivation tree rooted at one agent: its exact ancestors plus every descendant,
+ * followed across workspace and project boundaries.
+ */
+export function buildLineageTopology(
+  agents: ReadonlyMap<string, Agent> | undefined,
+  seedAgentId: string,
+): WorkspaceTopology {
+  const visibleAgents = [...(agents?.values() ?? [])].filter((agent) => !agent.archivedAt);
+  const seedIds = visibleAgents.some((agent) => agent.id === seedAgentId) ? [seedAgentId] : [];
+  const selectedIds = selectTopologyAgentIds(visibleAgents, seedIds);
+  return buildTopology(selectedInCreationOrder(visibleAgents, selectedIds));
 }
 
 export function buildHostTopology(
   agents: ReadonlyMap<string, Agent> | undefined,
 ): WorkspaceTopology {
-  const visibleAgents = [...(agents?.values() ?? [])]
-    .filter((agent) => !agent.archivedAt)
+  const visibleAgents = [...(agents?.values() ?? [])].filter((agent) => !agent.archivedAt);
+  return buildTopology(
+    selectedInCreationOrder(visibleAgents, new Set(visibleAgents.map((agent) => agent.id))),
+  );
+}
+
+function selectedInCreationOrder(
+  visibleAgents: readonly Agent[],
+  selectedIds: ReadonlySet<string>,
+): Agent[] {
+  return visibleAgents
+    .filter((agent) => selectedIds.has(agent.id))
     .sort(
       (left, right) =>
         left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id),
     );
-  return buildTopology(visibleAgents);
 }
 
 function buildTopology(topologyAgents: readonly Agent[]): WorkspaceTopology {
@@ -211,9 +228,12 @@ function buildTopology(topologyAgents: readonly Agent[]): WorkspaceTopology {
       warnings.push({ code: "missing_parent", agentId: agent.id });
       continue;
     }
+    const isOrchestration = roleOf(parent) === "unbound";
     const isSupervision = roleOf(parent) === "supervisor" && roleOf(agent) === "lead";
     const isDelegation = roleOf(parent) === "lead" && roleOf(agent) === "peer";
-    const kind: TopologyEdgeKind = isSupervision ? "supervision" : "delegation";
+    let kind: TopologyEdgeKind = "delegation";
+    if (isOrchestration) kind = "orchestration";
+    else if (isSupervision) kind = "supervision";
     edges.push({
       id: `${kind}:${parent.id}:${agent.id}`,
       source: parent.id,
@@ -221,7 +241,7 @@ function buildTopology(topologyAgents: readonly Agent[]): WorkspaceTopology {
       kind,
       provenance: "exact",
     });
-    if (!isSupervision && !isDelegation) {
+    if (!isOrchestration && !isSupervision && !isDelegation) {
       warnings.push({ code: "role_mismatch", agentId: agent.id });
     }
   }

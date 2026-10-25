@@ -1,14 +1,30 @@
 import { Network } from "lucide-react-native";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/shallow";
 import type { BeadsIssue } from "@getpaseo/protocol/beads/rpc-schemas";
 import { useHostFeature } from "@/runtime/host-features";
 import { useIssuesQuery } from "@/issues/data";
 import { usePaneContext } from "@/panels/pane-context";
 import type { PanelDescriptor } from "@/panels/panel-registry";
-import { useSessionStore } from "@/stores/session-store";
+import { useSessionStore, type WorkspaceDescriptor } from "@/stores/session-store";
 import { useProjectWorkspaceIds, useWorkspace } from "@/stores/session-store-hooks";
-import { buildProjectTopology } from "@/panels/topology-model";
+import {
+  buildLineageTopology,
+  buildProjectTopology,
+  type TopologyNode,
+} from "@/panels/topology-model";
+import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
+
+function formatWorkspaceLabel(
+  workspaces: Map<string, WorkspaceDescriptor> | undefined,
+  workspaceId: string | null,
+): string {
+  if (!workspaceId) return "No workspace";
+  const key = resolveWorkspaceMapKeyByIdentity({ workspaces, workspaceId });
+  const workspace = key ? workspaces?.get(key) : undefined;
+  if (!workspace) return workspaceId;
+  return `${workspace.projectDisplayName} · ${workspace.title?.trim() || workspace.name}`;
+}
 
 export function useTopologyPanelDescriptor(
   _target: { kind: "topology" },
@@ -50,10 +66,34 @@ export function useTopologyPanelState() {
       hydrated: state.sessions[serverId]?.hasHydratedAgents ?? false,
     })),
   );
+  const workspaces = useSessionStore((state) => state.sessions[serverId]?.workspaces);
+  const [lineageSeedId, setLineageSeedId] = useState<string | null>(null);
+  const lineageSeedAgent = lineageSeedId ? session.agents?.get(lineageSeedId) : undefined;
+  // An archived or vanished seed falls back to the project view instead of an empty lineage.
+  const lineageSeed =
+    lineageSeedAgent && !lineageSeedAgent.archivedAt ? lineageSeedAgent : undefined;
   const topology = useMemo(
-    () => buildProjectTopology(session.agents, projectWorkspaceIds),
-    [projectWorkspaceIds, session.agents],
+    () =>
+      lineageSeed
+        ? buildLineageTopology(session.agents, lineageSeed.id)
+        : buildProjectTopology(session.agents, projectWorkspaceIds),
+    [lineageSeed, projectWorkspaceIds, session.agents],
   );
+  const lineage = useMemo(() => {
+    if (!lineageSeed) return null;
+    const seedNode = topology.nodes.find((node) => node.id === lineageSeed.id);
+    const workspaceLabelByNodeId = new Map<string, string>(
+      topology.nodes.map((node) => [node.id, formatWorkspaceLabel(workspaces, node.workspaceId)]),
+    );
+    return {
+      seedId: lineageSeed.id,
+      seedTitle: seedNode?.title ?? lineageSeed.id.slice(0, 8),
+      workspaceCount: new Set(topology.nodes.map((node) => node.workspaceId)).size,
+      workspaceLabelOf: (node: TopologyNode) => workspaceLabelByNodeId.get(node.id) ?? null,
+    };
+  }, [lineageSeed, topology.nodes, workspaces]);
+  const viewLineage = useCallback((agentId: string) => setLineageSeedId(agentId), []);
+  const showProjectTopology = useCallback(() => setLineageSeedId(null), []);
   const issueById = useMemo(
     () =>
       new Map<string, BeadsIssue>(
@@ -73,6 +113,9 @@ export function useTopologyPanelState() {
     ...session,
     topology,
     projectName: workspace?.projectDisplayName ?? "Project",
+    lineage,
+    viewLineage,
+    showProjectTopology,
     openAgent,
     issueById,
     grantedIssueCount,

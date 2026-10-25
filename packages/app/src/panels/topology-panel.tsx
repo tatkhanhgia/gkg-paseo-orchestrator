@@ -7,6 +7,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { PanelRegistration } from "@/panels/panel-registry";
 import {
   formatTopologyAssignment,
+  TOPOLOGY_EDGE_LABELS,
   type TopologyEdge,
   type TopologyNode,
   type TopologyRole,
@@ -37,15 +38,22 @@ function TopologyNodeRow({
   issueById,
   parentTitle,
   relationship,
+  workspaceLabel,
+  isLineageSeed,
+  viewLineage,
 }: {
   node: TopologyNode;
   openAgent: (agentId: string) => void;
   issueById: ReadonlyMap<string, BeadsIssue>;
   parentTitle?: string;
   relationship?: TopologyEdge["kind"];
+  workspaceLabel: string | null;
+  isLineageSeed: boolean;
+  viewLineage: (agentId: string) => void;
 }) {
   const assignmentLabel = formatTopologyAssignment(node);
   const handleOpen = useCallback(() => openAgent(node.id), [node.id, openAgent]);
+  const handleViewLineage = useCallback(() => viewLineage(node.id), [node.id, viewLineage]);
   return (
     <Pressable
       accessibilityRole="button"
@@ -55,7 +63,20 @@ function TopologyNodeRow({
     >
       <View style={styles.nodeHeading}>
         <Text style={styles.roleLabel}>{node.role.toUpperCase()}</Text>
-        <View style={[styles.statusDot, styles[`status_${node.status}`]]} />
+        <View style={styles.nodeHeadingActions}>
+          {isLineageSeed ? null : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`View lineage from ${node.title}`}
+              onPress={handleViewLineage}
+              style={styles.lineageAction}
+              testID={`topology-view-lineage-${node.id}`}
+            >
+              <Text style={styles.lineageActionText}>Lineage</Text>
+            </Pressable>
+          )}
+          <View style={[styles.statusDot, styles[`status_${node.status}`]]} />
+        </View>
       </View>
       <Text style={styles.nodeTitle} numberOfLines={1}>
         {node.title}
@@ -73,9 +94,14 @@ function TopologyNodeRow({
           {assignmentLabel}
         </Text>
       ) : null}
+      {workspaceLabel ? (
+        <Text style={styles.nodeWorkspace} numberOfLines={1}>
+          {workspaceLabel}
+        </Text>
+      ) : null}
       {parentTitle && relationship ? (
         <Text style={styles.nodeRelation} numberOfLines={1}>
-          {relationship === "delegation" ? "Delegated" : "Supervised"} by {parentTitle}
+          {TOPOLOGY_EDGE_LABELS[relationship].byline} by {parentTitle}
         </Text>
       ) : null}
       {node.issueIds.length > 0 ? (
@@ -99,8 +125,18 @@ function TopologyNodeRow({
 }
 
 function TopologyPanel() {
-  const { topology, hydrated, openAgent, issueById, grantedIssueCount, issuesError, projectName } =
-    useTopologyPanelState();
+  const {
+    topology,
+    hydrated,
+    openAgent,
+    issueById,
+    grantedIssueCount,
+    issuesError,
+    projectName,
+    lineage,
+    viewLineage,
+    showProjectTopology,
+  } = useTopologyPanelState();
   const nodeById = new Map(topology.nodes.map((node) => [node.id, node]));
   const parentByChild = new Map(topology.edges.map((edge) => [edge.target, edge]));
   if (!hydrated) {
@@ -126,14 +162,29 @@ function TopologyPanel() {
       testID="workspace-topology-panel"
     >
       <View style={styles.summaryRow}>
-        <Text style={styles.summaryTitle}>Project topology · {projectName}</Text>
+        <Text style={styles.summaryTitle}>
+          {lineage ? `Lineage · ${lineage.seedTitle}` : `Project topology · ${projectName}`}
+        </Text>
         <Text style={styles.summaryMeta}>
           {topology.nodes.length} agents · {topology.edges.length} relationship
           {topology.edges.length === 1 ? "" : "s"}
+          {lineage
+            ? ` · ${lineage.workspaceCount} workspace${lineage.workspaceCount === 1 ? "" : "s"}`
+            : ""}
         </Text>
         <Text style={styles.summaryMeta}>
           {grantedIssueCount} assigned issue{grantedIssueCount === 1 ? "" : "s"}
         </Text>
+        {lineage ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={showProjectTopology}
+            style={styles.lineageAction}
+            testID="topology-show-project"
+          >
+            <Text style={styles.lineageActionText}>Back to project topology</Text>
+          </Pressable>
+        ) : null}
       </View>
       {topology.warnings.length > 0 ? (
         <View style={styles.warning}>
@@ -169,6 +220,9 @@ function TopologyPanel() {
                     issueById={issueById}
                     parentTitle={parent?.title}
                     relationship={relationship?.kind}
+                    workspaceLabel={lineage?.workspaceLabelOf(node) ?? null}
+                    isLineageSeed={node.id === lineage?.seedId}
+                    viewLineage={viewLineage}
                   />
                 );
               })}
@@ -260,6 +314,26 @@ const styles = StyleSheet.create((theme) => ({
   },
   nodeRelation: {
     color: theme.colors.accent,
+    fontSize: theme.fontSize.xs,
+  },
+  nodeWorkspace: {
+    color: theme.colors.foregroundExtraMuted,
+    fontSize: theme.fontSize.xs,
+  },
+  nodeHeadingActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  lineageAction: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.full,
+    paddingHorizontal: theme.spacing[2],
+  },
+  lineageActionText: {
+    color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.xs,
   },
   nodeIssues: {
