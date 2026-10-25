@@ -92,4 +92,73 @@ test.describe("workspace topology", () => {
       await workspace.cleanup();
     }
   });
+
+  test("follows an unbound root's lineage into another project's workspace", async ({ page }) => {
+    test.setTimeout(120_000);
+    const rootWorkspace = await seedWorkspace({ repoPrefix: "topology-lineage-root-" });
+    const projectWorkspace = await seedWorkspace({ repoPrefix: "topology-lineage-project-" });
+    try {
+      const root = await rootWorkspace.client.createAgent({
+        provider: "mock",
+        cwd: rootWorkspace.repoPath,
+        workspaceId: rootWorkspace.workspaceId,
+        title: "Lineage Root",
+        modeId: "load-test",
+        model: "ten-second-stream",
+      });
+      const lead = await projectWorkspace.client.createAgent({
+        provider: "mock",
+        cwd: projectWorkspace.repoPath,
+        workspaceId: projectWorkspace.workspaceId,
+        title: "Lineage Lead",
+        modeId: "load-test",
+        model: "ten-second-stream",
+        roleId: "lead",
+        assignment: assignmentFor("lead"),
+        labels: { [PARENT_AGENT_ID_LABEL]: root.id },
+      });
+      await projectWorkspace.client.createAgent({
+        provider: "mock",
+        cwd: projectWorkspace.repoPath,
+        workspaceId: projectWorkspace.workspaceId,
+        title: "Lineage Peer",
+        modeId: "load-test",
+        model: "ten-second-stream",
+        roleId: "peer",
+        assignment: assignmentFor("peer"),
+        labels: { [PARENT_AGENT_ID_LABEL]: lead.id },
+      });
+
+      await page.goto(buildHostWorkspaceRoute(getServerId(), rootWorkspace.workspaceId));
+      await expect(page.getByTestId("workspace-header-topology")).toBeVisible({
+        timeout: 30_000,
+      });
+      await page.getByTestId("workspace-header-topology").click();
+
+      const topology = page.getByTestId("project-topology-panel");
+      await expect(topology).toBeVisible({ timeout: 30_000 });
+      await expect(topology.getByText("1 agents · 0 relationships", { exact: true })).toBeVisible();
+      await expect(topology.getByLabel(/Open Lineage Lead, lead,/u)).toHaveCount(0);
+
+      await topology.getByTestId(`topology-view-lineage-${root.id}`).click();
+      await expect(topology.getByText("Lineage · Lineage Root", { exact: true })).toBeVisible();
+      await expect(
+        topology.getByText("3 agents · 2 relationships · 2 workspaces", { exact: true }),
+      ).toBeVisible();
+      await expect(topology.getByLabel(/Open Lineage Lead, lead,/u)).toBeVisible();
+      await expect(topology.getByLabel(/Open Lineage Peer, peer,/u)).toBeVisible();
+      await expect(topology.getByText("orchestrates", { exact: true })).toBeVisible();
+      await expect(topology.getByText("delegates", { exact: true })).toBeVisible();
+      await expect(
+        topology.getByText("Orchestrated by Lineage Root", { exact: true }),
+      ).toBeVisible();
+      await expect(topology.getByText(/need review/u)).toHaveCount(0);
+
+      await topology.getByTestId("topology-show-project").click();
+      await expect(topology.getByText("1 agents · 0 relationships", { exact: true })).toBeVisible();
+    } finally {
+      await projectWorkspace.cleanup();
+      await rootWorkspace.cleanup();
+    }
+  });
 });
