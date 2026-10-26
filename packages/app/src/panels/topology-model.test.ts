@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Agent } from "@/stores/session-store";
 import {
   buildHostTopology,
+  buildLineageTopology,
   buildProjectTopology,
   buildWorkspaceTopology,
   formatTopologyAssignment,
@@ -295,6 +296,83 @@ describe("buildHostTopology", () => {
     expect(topology.nodes.map((node) => node.id)).toEqual(["lead", "peer", "legacy", "supervisor"]);
     expect(topology.edges.map((edge) => edge.kind)).toEqual(["supervision", "delegation"]);
     expect(topology.counts).toEqual({ lead: 1, peer: 1, supervisor: 1, unbound: 1 });
+  });
+
+  it("treats unbound-parent launches as orchestration but still flags role mismatches", () => {
+    const topology = buildHostTopology(
+      agentMap(
+        agent({ id: "root" }),
+        agent({ id: "peer-direct", role: "peer", parentAgentId: "root" }),
+        agent({ id: "lead", role: "lead" }),
+        agent({ id: "lead-nested", role: "lead", parentAgentId: "lead" }),
+      ),
+    );
+
+    expect(topology.edges.map((edge) => edge.id).sort()).toEqual([
+      "delegation:lead:lead-nested",
+      "orchestration:root:peer-direct",
+    ]);
+    expect(topology.warnings).toEqual([{ code: "role_mismatch", agentId: "lead-nested" }]);
+  });
+});
+
+describe("buildLineageTopology", () => {
+  // An unbound root session in a parent workspace launches Leads into separate project
+  // workspaces, and those Leads launch Peers into their own worktrees.
+  const lineageAgents = () =>
+    agentMap(
+      agent({ id: "jarvis", workspaceId: "root" }),
+      agent({ id: "lead-a", role: "lead", parentAgentId: "jarvis", workspaceId: "project-a" }),
+      agent({
+        id: "peer-a",
+        role: "peer",
+        parentAgentId: "lead-a",
+        workspaceId: "project-a-worktree",
+      }),
+      agent({ id: "lead-b", role: "lead", assignerId: "jarvis", workspaceId: "project-b" }),
+      agent({ id: "peer-b", role: "peer", parentAgentId: "lead-b", workspaceId: "project-b" }),
+      agent({ id: "lead-other", role: "lead", workspaceId: "project-a" }),
+      agent({
+        id: "peer-other",
+        role: "peer",
+        parentAgentId: "lead-other",
+        workspaceId: "project-a",
+      }),
+      agent({ id: "lead-gone", role: "lead", parentAgentId: "jarvis", archived: true }),
+      agent({ id: "peer-orphan", role: "peer", parentAgentId: "lead-gone" }),
+    );
+
+  it.each([
+    {
+      seed: "jarvis",
+      expected: ["jarvis", "lead-a", "lead-b", "peer-a", "peer-b"],
+    },
+    { seed: "lead-a", expected: ["jarvis", "lead-a", "peer-a"] },
+    { seed: "lead-gone", expected: [] },
+    { seed: "missing", expected: [] },
+  ])("selects the exact derivation tree seeded at $seed", ({ seed, expected }) => {
+    const topology = buildLineageTopology(lineageAgents(), seed);
+
+    expect(topology.nodes.map((node) => node.id).sort()).toEqual(expected);
+  });
+
+  it("keeps each node's own workspace and draws orchestration from the unbound root", () => {
+    const topology = buildLineageTopology(lineageAgents(), "jarvis");
+
+    expect(Object.fromEntries(topology.nodes.map((node) => [node.id, node.workspaceId]))).toEqual({
+      jarvis: "root",
+      "lead-a": "project-a",
+      "peer-a": "project-a-worktree",
+      "lead-b": "project-b",
+      "peer-b": "project-b",
+    });
+    expect(topology.edges.map((edge) => edge.id).sort()).toEqual([
+      "delegation:lead-a:peer-a",
+      "delegation:lead-b:peer-b",
+      "orchestration:jarvis:lead-a",
+      "orchestration:jarvis:lead-b",
+    ]);
+    expect(topology.warnings).toEqual([]);
   });
 });
 

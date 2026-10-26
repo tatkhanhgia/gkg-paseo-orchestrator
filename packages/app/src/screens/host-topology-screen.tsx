@@ -10,6 +10,7 @@ import { SearchField } from "@/components/ui/search-field";
 import {
   buildHostTopology,
   formatTopologyAssignment,
+  TOPOLOGY_EDGE_LABELS,
   type TopologyEdge,
   type TopologyNode,
 } from "@/panels/topology-model";
@@ -125,7 +126,7 @@ function TopologyAgentCard({
       ) : null}
       {parent && edge ? (
         <Text style={styles.relation}>
-          {edge.kind === "supervision" ? "supervised" : "delegated"} by {parent.title}
+          {TOPOLOGY_EDGE_LABELS[edge.kind].byline.toLowerCase()} by {parent.title}
         </Text>
       ) : null}
     </Pressable>
