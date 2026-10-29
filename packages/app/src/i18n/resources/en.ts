@@ -1,14 +1,39 @@
 export const en = {
+  paneFind: {
+    connectionFailure: "Could not search this chat. Check the host connection and retry.",
+    historyChangedFailure: "The chat changed while searching. Search again.",
+    revealFailure: "Could not show this match. Retry.",
+    searching: "Searching…",
+    loading: "Loading…",
+    failed: "Failed",
+    retry: "Retry",
+    title: "Find",
+    placeholder: "Find in pane",
+    close: "Close Find",
+    matches: "Find matches",
+    previous: "Previous match",
+    next: "Next match",
+    toggleReplace: "Toggle replace",
+    replaceWith: "Replace with",
+    replace: "Replace",
+    replaceAll: "Replace all",
+    noMatches: "No matches",
+    position: "{{current}} of {{total}}",
+    total: "{{total}} matches",
+  },
   common: {
+    bottomSheetBackdrop: "Bottom sheet backdrop",
     back: "Back",
     loading: "Loading...",
     actions: {
+      save: "Save",
       back: "Back",
       cancel: "Cancel",
       close: "Close",
       copy: "Copy",
       copyLine: "Copy line",
       dismiss: "Dismiss",
+      reload: "Reload",
       retry: "Retry",
       search: "Search",
       select: "Select",
@@ -95,6 +120,8 @@ export const en = {
     input: {
       accessibilityLabel: "Message agent...",
       terminalAccessibilityLabel: "Terminal prompt",
+      fullscreen: "Fullscreen",
+      exitFullscreen: "Exit fullscreen",
       focusHint: "{{shortcut}} to focus",
       addAttachment: "Add attachment",
       interruptAgent: "Interrupt agent",
@@ -150,7 +177,7 @@ export const en = {
       initialPromptRequired: "Initial prompt is required",
       alreadyLoading: "Already loading",
       uploadFailed: "Failed to upload file",
-      noClipboardImage: "No image in clipboard",
+      noClipboardImage: "No image in the current clipboard. Try pasting from your keyboard.",
       pasteImageFailed: "Failed to paste image",
       fileTooLarge: "{{fileName}} is too large (max {{size}})",
     },
@@ -212,6 +239,10 @@ export const en = {
     historyLoadFailed: "Couldn't load agent history",
     messageCapped: "This message was capped ({{bytes}} bytes).",
     permission: {
+      rejectedPlan: "Rejected plan",
+      approvedPlan: "Approved plan",
+      canceledPlan: "Canceled plan",
+
       plan: "Plan",
       required: "Permission Required",
       deny: "Deny",
@@ -225,7 +256,8 @@ export const en = {
     states: {
       notFound: "Agent not found",
       failedToLoad: "Failed to load agent",
-      reconnecting: "Reconnecting",
+      reconnecting: "Reconnecting to host",
+      updating: "Updating messages",
       timelineSyncFailed: "Couldn't refresh agent history.",
       timelineSyncRetrying: "Retrying…",
       archivingTitle: "Archiving agent...",
@@ -379,6 +411,7 @@ export const en = {
       details: "Details",
     },
     dictation: {
+      paused: "Microphone interrupted. Waiting to resume…",
       start: "Start voice dictation",
       cancel: "Cancel dictation",
       retry: "Retry dictation",
@@ -388,6 +421,7 @@ export const en = {
       failedRetry: "Dictation failed. Tap retry.",
     },
     question: {
+      responseFailed: "Could not send your response. Try again.",
       submit: "Submit",
       next: "Next",
       answerPlaceholder: "Type your answer...",
@@ -403,6 +437,9 @@ export const en = {
         started: "Started",
         completed: "Completed",
       },
+    },
+    turnFooter: {
+      workedFor: "Worked for {{duration}}",
     },
     compaction: {
       loading: "Compacting...",
@@ -462,7 +499,9 @@ export const en = {
       recovery: {
         archivedTitle: "Workspace archived",
         restoreDescription:
-          "{{workspaceName}} was archived and its worktree was removed. Restore branch {{branch}} to open it again.",
+          "Restore {{workspaceName}} to return to its agents. Its worktree will use branch {{branch}}.",
+        restoreWithoutBranchDescription:
+          "Restore {{workspaceName}} to return to its agents. A new branch will start from the saved base or the repository default.",
         unarchiveDescription: "{{workspaceName}} is archived. Unarchive it to open it again.",
         restoreAction: "Restore",
         unarchiveAction: "Unarchive",
@@ -550,6 +589,7 @@ export const en = {
       },
     },
     setup: {
+      updateHost: "Update the host to view workspace setup details",
       descriptor: {
         label: "Setup",
         completed: "Setup completed",
@@ -626,6 +666,12 @@ export const en = {
       hostDisconnected: "Host is not connected",
       updateHost: "Update the host to use the native terminal renderer.",
       unableToSubscribe: "Unable to subscribe to terminal",
+      fileUploaded: "File uploaded",
+      pasteFileFailed: "Failed to paste file: {{reason}}",
+      uploadingFile: "Uploading file…",
+    },
+    sheet: {
+      openAsTab: "Open as tab",
     },
     tabs: {
       loading: "Loading...",
@@ -642,7 +688,7 @@ export const en = {
       },
       switcher: {
         trigger: "Switch tabs ({{count}} open)",
-        title: "Switch tab",
+        title: "Workspace tabs",
         searchPlaceholder: "Search tabs",
       },
       menu: {
@@ -738,6 +784,7 @@ export const en = {
     header: {
       actions: {
         workspaceActions: "Workspace actions",
+        workspaceActionsUnhealthy: "Workspace actions, a service is unhealthy",
         newAgent: "New agent",
         newTerminal: "New terminal",
         newBrowser: "New browser tab",
@@ -785,6 +832,8 @@ export const en = {
         exitCode: "exit {{code}}",
         startFailed: "Failed to start {{scriptName}}",
         stopFailed: "Failed to stop {{scriptName}}",
+        running: "Running",
+        runningCount: "{{count}} running",
       },
     },
     tree: {
@@ -942,6 +991,9 @@ export const en = {
         openChangesTab: "Open Changes tab",
         openDiffTab: "Open Diff tab",
         closeChangesTab: "Close Changes tab",
+        jumpToFile: {
+          title: "Jump to file",
+        },
         binaryFile: "Binary file",
         tooLarge: "Diff too large to display",
         previewTooLargeTitle: "This diff is too large to preview",
@@ -969,6 +1021,7 @@ export const en = {
         checkingRepository: "Checking repository...",
         notRepository: "Not a git repository",
         diffMode: "Diff mode",
+        all: "All changes",
         uncommitted: "Uncommitted",
         committed: "Committed",
         branchUnknown: "Unknown",
@@ -998,6 +1051,47 @@ export const en = {
         actions: {
           viewPullRequest: "View",
           openOn: "Open on {{brand}}",
+          addToChat: "Add to chat",
+          addAllToChat: "Add all to chat",
+          addingToChat: "Adding...",
+        },
+        checksOverview: {
+          headline: {
+            actionRequired: "Some checks need your attention",
+            failure: "Some checks were not successful",
+            pending: "Some checks haven't completed yet",
+            success: "All checks have passed",
+            none: "No checks",
+          },
+          count: {
+            actionRequired: "{{count}} needs action",
+            warning: "{{count}} warning",
+            failure: "{{count}} failing",
+            pending: "{{count}} in progress",
+            manual: "{{count}} manual",
+            success: "{{count}} successful",
+            ignored: "{{count}} skipped",
+          },
+          detailOne: "{{parts}} check",
+          detailMany: "{{parts}} checks",
+          groupOne: {
+            actionRequired: "{{count}} needs action check",
+            warning: "{{count}} warning check",
+            failure: "{{count}} failing check",
+            pending: "{{count}} in progress check",
+            manual: "{{count}} manual check",
+            success: "{{count}} successful check",
+            ignored: "{{count}} skipped check",
+          },
+          groupMany: {
+            actionRequired: "{{count}} needs action checks",
+            warning: "{{count}} warning checks",
+            failure: "{{count}} failing checks",
+            pending: "{{count}} in progress checks",
+            manual: "{{count}} manual checks",
+            success: "{{count}} successful checks",
+            ignored: "{{count}} skipped checks",
+          },
         },
         checksSummary: {
           passedLabel: "passed",
@@ -1011,17 +1105,21 @@ export const en = {
           checks: "Checks",
           pipeline: "Pipeline",
           reviews: "Reviews",
+          activity: "Activity",
         },
         empty: {
           noJobs: "No jobs",
           loadingPipeline: "Loading pipeline…",
           pipelineJobsLoadFailed: "Could not load pipeline jobs",
           allowedToFail: "allowed to fail",
+          noActivity: "No activity yet",
         },
         approvals: "{{given}} of {{required}} approvals",
         accessibility: {
           pullRequest: "Pull request #{{number}}",
           pullRequest_mr: "Merge request !{{number}}",
+          commentActions: "Comment actions",
+          threadActions: "Thread actions",
           checkStatus: {
             passed: "Passed",
             failed: "Failed",
@@ -1050,6 +1148,8 @@ export const en = {
         },
         thread: {
           discussion: "Discussion thread",
+          resolved: "Resolved",
+          outdated: "Outdated",
         },
         errors: {
           statusLoadFailed: "Unable to load pull request status",
@@ -1116,9 +1216,25 @@ export const en = {
     },
   },
   sidebar: {
+    statusGroupAccessibility: "{{label}} group",
+    statusBucket: {
+      needsInput: "Needs input",
+      failed: "Failed",
+      readyToReview: "Ready to review",
+      working: "Working",
+      done: "Done",
+    },
     display: {
+      showBackground: "Show background",
       trigger: "Display preferences",
       heading: "Display",
+      sort: {
+        label: "Sort",
+        created: "Created",
+        manual: "Manual",
+        lastPrompt: "Last prompt",
+        updateHost: "Update hosts to sort workspaces",
+      },
       grouping: {
         label: "Grouping",
         project: "Project",
@@ -1175,6 +1291,9 @@ export const en = {
       hosts: "Hosts",
       settings: "Settings",
       closeSidebar: "Close sidebar",
+    },
+    footer: {
+      usage: "Usage",
     },
     help: {
       trigger: "Help and support",
@@ -1294,8 +1413,9 @@ export const en = {
     },
     fields: {
       project: "Project",
-      base: "Base",
+      branch: "Branch",
       baseNotApplicable: "Not applicable",
+      host: "Host",
     },
     titlePlaceholder: "Title (optional)",
     errors: {
@@ -1342,6 +1462,23 @@ export const en = {
     },
     daemon: {
       title: "Daemon",
+      lifecycle: {
+        owned: "Launched by this Desktop session",
+        attached: "Attached to an existing daemon",
+        ownedMessage: "This daemon was launched by this Desktop session.",
+        attachedMessage: "This daemon was not launched by this Desktop session.",
+        stopTitle: "Stop local daemon?",
+        stopMessage:
+          "{{ownership}}\nHome: {{home}}\nSupervisor PID: {{pid}}\nRunning agent work will be interrupted.",
+        stop: "Stop daemon",
+        stopping: "Stopping…",
+        stopFailed: "Unable to stop daemon",
+        pauseAttached: "Pause automatic daemon management? The attached daemon will keep running.",
+        pause: "Pause management",
+        workerUpdated: "Worker updated to {{version}}",
+        supervisorRefresh:
+          "The running supervisor retains its original code. Its launcher must stop and start it to refresh the supervisor.",
+      },
       status: {
         title: "Status",
         builtInOnly: "Only the built-in desktop daemon is shown here",
@@ -1558,6 +1695,8 @@ export const en = {
     noFiles: "No files or directories found",
     noCommands: "No commands found",
     failedToLoad: "Failed to load",
+    chooseProjectForCommands: "Choose a project to see commands",
+    chooseModelForCommands: "Select a model to see commands",
   },
   loadOlderHistory: {
     failed: "Couldn't load older history",
@@ -1626,13 +1765,18 @@ export const en = {
     title: "Add provider",
     search: "Search providers",
     noProviders: "No providers found",
+    clearSearch: "Clear search",
     actions: {
       add: "Add",
+      addProvider: "Add {{provider}}",
       adding: "Adding",
       installed: "Installed",
       cancel: "Cancel",
       installInstructions: "Install instructions",
       installInstructionsFor: "{{provider}} install instructions",
+    },
+    types: {
+      acp: "ACP",
     },
     errors: {
       unableToInstall: "Unable to install provider",
@@ -1655,6 +1799,21 @@ export const en = {
     },
   },
   pairing: {
+    hostPassword: {
+      title: "Password for {{host}}",
+      label: "Host password",
+    },
+    hostConfirmation: {
+      title: "Connect to this host?",
+      description:
+        "This host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      descriptionChanged:
+        "This link changes how you connect to this host. The host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      hostLabel: "Host",
+      fingerprintLabel: "Key fingerprint",
+      relayLabel: "Relay",
+      connect: "Connect",
+    },
     connectionMethods: {
       title: "Add connection",
       direct: {
@@ -1721,6 +1880,12 @@ export const en = {
       helper: "Connect to a Paseo daemon running on the remote host.",
       fields: {
         target: "SSH host",
+        password: "Daemon password",
+        optional: "Optional",
+      },
+      passwordVisibility: {
+        show: "Show password",
+        hide: "Hide password",
       },
       actions: {
         cancel: "Cancel",
@@ -1854,14 +2019,35 @@ export const en = {
       creatingAgent: "Creating agent",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "Open .{{extension}} files with",
+        pickerTitleFilename: "Open {{filename}} with",
+        dontAskAgain: "Don't ask me again",
+        use: "Use",
+        openWith: "Open with…",
+        alwaysUseExtension: "Always use for .{{extension}}",
+        alwaysUseFilename: "Always use for {{filename}}",
+        option: "{{title}} — {{owner}}",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "Image",
+          source: "Source",
+        },
+      },
       directoryMissing: "Workspace directory not found.",
       loading: "Loading file...",
       noPreview: "No preview available",
       binaryPreviewUnavailable: "Binary preview unavailable",
       tooLargeToDisplay: "This file is too large to display",
+      documentUnsupported: "{{type}} files can't be shown on this device",
       failedToLoad: "Failed to load file",
+      notFound: "File not found",
       failedToLoadPreview: "Failed to load file preview",
       editor: {
+        preview: "Preview",
+        source: "Source",
         fileSize: "File size {{size}}",
         lines: "{{count}} lines",
         editorStatus: "Editor status {{status}}",
@@ -1871,10 +2057,7 @@ export const en = {
         changedOnDisk: "Changed on disk",
         vimMode: "Vim mode {{mode}}",
         cursor: "Line {{line}}, column {{column}}",
-        preview: "Preview",
-        source: "Source",
         deletedTitle: "File deleted on disk",
-        checkFailedTitle: "Couldn't check file on disk",
         preservedDescription: "The open copy is preserved.",
         conflictDescription: "The local buffer was preserved. Choose which version to keep.",
         overwrite: "Overwrite",
@@ -1960,6 +2143,8 @@ export const en = {
     dismiss: "Dismiss",
   },
   contextWindow: {
+    noData: "No context data",
+    accessibilityNoData: "Context window: No context data",
     title: "Context window",
     used: "{{percentage}}% used",
     tokens: "{{used}} / {{max}} tokens",
@@ -1967,6 +2152,17 @@ export const en = {
     accessibility: "Context window {{percentage}}% used",
   },
   review: {
+    feedback: {
+      send: "Send feedback ({{count}})",
+      sending: "Sending feedback ({{count}})",
+      chooseAgent: "Choose an agent",
+      sent: "Feedback sent to {{recipient}}",
+      "no-agents": "Open an agent tab in this workspace to send feedback.",
+      disconnected: "Connect to the host to send feedback.",
+      "no-context": "Saved comments no longer match this diff.",
+      failed: "Failed to send feedback. Try again.",
+      prompt: "Please address this code review.",
+    },
     comment: {
       add: "Add review comment",
       edit: "Edit review comment",
@@ -1977,6 +2173,70 @@ export const en = {
       cancelAccessibility: "Cancel review comment",
       save: "Comment",
       saveAccessibility: "Save review comment",
+    },
+  },
+  providerUsage: {
+    options: "Settings",
+    refreshFailed: "Unable to refresh usage",
+    noHosts: "No connected hosts",
+    agentError: "Unable to load usage: {{reason}}",
+    pin: "Pin",
+    unpin: "Unpin",
+    displayAs: "Percentages",
+    displayUsed: "Used",
+    displayRemaining: "Remaining",
+    showInSidebar: "Summary in sidebar",
+    showInSidebarHint: "Pinned windows show in the sidebar footer",
+    runToRefresh: "Run {{command}} to refresh it.",
+    signInAgain: "Sign in again.",
+    loginRejected: "Login rejected (HTTP {{status}}). {{remedy}}",
+    loginExpired: "Login expired {{relativeTime}}. {{remedy}}",
+    title: "Plan usage",
+    refresh: "Refresh",
+    refreshAll: "Refresh all",
+    refreshing: "Refreshing...",
+    loading: "Loading usage...",
+    empty: "No usage data",
+    errorTitle: "Unable to load usage",
+    hostUnavailable: "Connect to {{host}} to see usage",
+    hostUpgradeRequired: "Update {{host}} to see usage",
+    clientUnavailable: "Host connection is not ready",
+    retry: "Try again",
+    tooltipLoading: "Loading plan usage...",
+    status: {
+      error: "Error",
+      unavailable: "Unavailable",
+    },
+    values: {
+      used: "{{percentage}} used",
+      remaining: "{{amount}} left",
+    },
+    labels: {
+      session: "Session",
+      weekly: "Weekly",
+      monthly: "Monthly",
+      codeReview: "Code review",
+      credits: "Credits",
+      monthlyCredits: "Monthly credits",
+    },
+    duration: {
+      days: "{{value}}d",
+      hours: "{{value}}h",
+      minutes: "{{value}}m",
+    },
+    timing: {
+      lastUpdated: "Last updated {{relativeTime}}",
+      noSuccessfulUpdate: "No successful update",
+      resetTimePassed: "Reset time passed",
+      resettingNow: "resetting now",
+      resetsIn: "resets {{duration}}",
+      runsOutNow: "runs out now",
+      runsOutIn: "runs out {{duration}}",
+      justNow: "just now",
+      daysAgo: "{{value}}d ago",
+      hoursAgo: "{{value}}h ago",
+      minutesAgo: "{{value}}m ago",
+      updated: "Updated {{relativeTime}}",
     },
   },
   settings: {
@@ -2001,9 +2261,13 @@ export const en = {
     groupInfo: "About {{title}}",
     sections: {
       general: "General",
+      chat: "Chat",
       appearance: "Appearance",
-      layout: "Layout",
+      sidebar: "Sidebar",
       editor: "Editor",
+      files: "Files",
+      terminal: "Terminal",
+      browser: "Browser",
       shortcuts: "Shortcuts",
       integrations: "Integrations",
       notifications: "Notifications",
@@ -2021,28 +2285,31 @@ export const en = {
         },
         sources: {
           explorerFiles: {
-            label: "Selecting a file in Explorer",
+            label: "Clicking a file in the Explorer sidebar",
             description: "Open files selected in the Explorer sidebar beside your work",
           },
           diffs: {
-            label: "Opening a diff",
+            label: "Clicking a change in the Explorer sidebar or a chat",
             description: "Open diffs from Explorer and agent conversations beside your work",
           },
           chatFiles: {
-            label: "Opening a file from an agent chat",
+            label: "Clicking a file in an agent chat",
             description: "Open file links and tool-call files beside the conversation",
           },
           diffFiles: {
-            label: "Opening a file from Changes",
+            label: "Clicking a file in a diff",
             description: "Open source files selected from a diff beside it",
           },
           subagents: {
-            label: "Opening a subagent",
+            label: "Clicking a subagent in an agent chat",
             description: "Open subagents beside their parent agent",
           },
           pullRequests: {
-            label: "Opening a pull request from Changes",
+            label: "Clicking a pull request in the Explorer sidebar",
             description: "Open pull request details beside Changes",
+          },
+          serviceUrls: {
+            label: "Clicking a script's service URL",
           },
         },
       },
@@ -2051,6 +2318,14 @@ export const en = {
       title: "Editor",
       vimKeybindings: "Vim keybindings",
       vimHint: "Applies to source files on web and desktop.",
+    },
+    files: {
+      title: "Files",
+      askEveryTime: "Ask every time",
+      askAgain: "Ask again",
+      askAgainFor: "Ask again for {{label}}",
+      unavailable: "Not on a connected host",
+      empty: "File panels appear here when a plugin adds one",
     },
     notifications: {
       title: "Notifications",
@@ -2086,18 +2361,17 @@ export const en = {
         offline: "Connect to this host to open plugin settings.",
         update: "Update this host to use plugin settings.",
         unavailable: "This plugin settings screen is unavailable.",
+        backToPlugins: "Back to plugins",
       },
       trustedTitle: "Plugins are trusted code",
       trustedDescription:
         "They run on this host and inside the app without sandboxing. Install only code you trust.",
       globalTitle: "Enable plugins",
       globalHint: "Global switch for every configured plugin",
-      directoryLabel: "Plugin directory",
-      directoryPlaceholder: "/absolute/path/on/host",
-      idLabel: "Plugin installation ID",
-      idHint: "Leave blank to use paseo-plugin.json",
-      idPlaceholder: "Manifest default",
-      install: "Install directory",
+      sourceLabel: "Plugin source",
+      sourcePlaceholder: "owner/slug, directory, Git URL, or npm package",
+      docs: "Docs",
+      install: "Install plugin",
       installing: "Installing…",
       logs: {
         action: "Logs",
@@ -2110,6 +2384,7 @@ export const en = {
       },
       status: { running: "running", disabled: "disabled", failed: "failed" },
       actions: {
+        menu: "Actions for {{id}}",
         reload: "Reload",
         reloading: "Reloading…",
         enable: "Enable",
@@ -2135,6 +2410,7 @@ export const en = {
         offlineTitle: "Plugin host is offline",
         offlineDescription: "Reconnect to this host to manage its plugins.",
         updateTitle: "Update this host to manage plugins",
+        sourceUpdateTitle: "Update this host to install plugins",
         loading: "Loading plugins…",
         errorTitle: "Unable to load plugins",
         retry: "Retry",
@@ -2151,12 +2427,13 @@ export const en = {
       automaticHint: "Paseo picks a fast available model",
       preferredHint: "Choose the model Paseo uses",
       model: "Model",
-      fallbackHint: "If it is unavailable, Paseo falls back to another available model",
+      modelHint: "Only this model is used. If it fails, Paseo does not try another model",
       docs: "Docs",
       saveError: "Unable to update metadata generation",
     },
     general: {
       title: "General",
+      sending: "Sending",
       browserData: {
         title: "Browser data",
         siteData: "Cookies and site data",
@@ -2183,8 +2460,6 @@ export const en = {
         },
       },
       serviceUrls: {
-        label: "Service URLs",
-        description: "Where to open URLs from running scripts",
         options: {
           ask: "Ask",
           inApp: "In Paseo",
@@ -2203,7 +2478,6 @@ export const en = {
       toolCallDetail: {
         label: "Tool call display",
         description: "How tool calls appear in the timeline",
-        accessibilityLabel: "Select tool call display ({{value}})",
         options: {
           overview: "Summary",
           detailed: "Full detail",
@@ -2228,11 +2502,6 @@ export const en = {
     },
     diagnostics: {
       title: "Diagnostics",
-      legacyTerminalRenderer: {
-        label: "Use legacy terminal renderer",
-        description: "Use the previous WebView terminal after reopening a terminal",
-        accessibilityLabel: "Use legacy terminal renderer",
-      },
       testAudio: "Test audio",
       playTest: "Play test",
       playing: "Playing...",
@@ -2306,8 +2575,15 @@ export const en = {
         description: "Show an outline for jumping between prompts",
       },
       sidebar: {
-        title: "Sidebar",
-        description: "Choose which items appear at the top of the sidebar and in what order",
+        header: {
+          title: "Header",
+          description: "Choose which items appear at the top of the sidebar and in what order",
+        },
+        footer: {
+          title: "Footer",
+          description:
+            "Choose which rows appear at the bottom of the sidebar and in what order. Add project and the icon row always show",
+        },
         moveUp: "Move up",
         moveDown: "Move down",
       },
@@ -2331,6 +2607,14 @@ export const en = {
         codeSizeHint: "Used for code, diffs, and terminal output",
         codeSizeAccessibility: "Code font size",
       },
+      layout: {
+        title: "Layout",
+        contentWidth: "Content width",
+        contentWidthHint: "Max width of chat and Markdown files on wide screens",
+        contentWidthAccessibility: "Content width in pixels",
+        reset: "Reset",
+        resetAccessibility: "Reset content width to default",
+      },
       syntax: {
         title: "Syntax",
         highlightTheme: "Highlight theme",
@@ -2345,6 +2629,7 @@ export const en = {
       searchPlaceholder: "Search shortcuts",
       unavailableOnMobile: "Keyboard shortcuts are only available on desktop",
       capturePrompt: "Press shortcut...",
+      captureIndexPrompt: "End with a number from 1 to 9.",
       unassigned: "Not set",
       actions: {
         menu: "Actions for {{name}}",
@@ -2440,6 +2725,9 @@ export const en = {
       },
     },
     host: {
+      password: {
+        guidance: "Remove this host and add it again with the password this daemon asks for.",
+      },
       appearance: {
         title: "Appearance",
         name: {
@@ -3015,4 +3303,18 @@ type WidenStringLeaves<T> = {
   [K in keyof T]: T[K] extends string ? string : WidenStringLeaves<T[K]>;
 };
 
-export type TranslationResources = WidenStringLeaves<typeof en>;
+type TranslationResourcesBase = WidenStringLeaves<typeof en>;
+type PluralCategory = "zero" | "one" | "two" | "few" | "many" | "other";
+type DurationPluralKey = `${"days" | "hours" | "minutes"}_${PluralCategory}`;
+type AgoPluralKey = `${"daysAgo" | "hoursAgo" | "minutesAgo"}_${PluralCategory}`;
+
+// i18next plural categories differ by locale, so locale catalogs may add the
+// explicit v4 suffixes they need while retaining the canonical fallback keys.
+export type TranslationResources = TranslationResourcesBase & {
+  providerUsage: TranslationResourcesBase["providerUsage"] & {
+    duration: TranslationResourcesBase["providerUsage"]["duration"] &
+      Partial<Record<DurationPluralKey, string>>;
+    timing: TranslationResourcesBase["providerUsage"]["timing"] &
+      Partial<Record<AgoPluralKey, string>>;
+  };
+};

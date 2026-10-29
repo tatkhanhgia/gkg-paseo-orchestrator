@@ -9,14 +9,21 @@ export interface ResolveAgentIdentifierInput {
 
 export type ResolveAgentIdentifierResult =
   | { ok: true; agentId: string }
-  | { ok: false; error: string };
+  | { ok: false; notFound: boolean; error: string };
 
 export async function resolveAgentIdentifier(
   input: ResolveAgentIdentifierInput,
 ): Promise<ResolveAgentIdentifierResult> {
   const trimmed = input.identifier.trim();
   if (!trimmed) {
-    return { ok: false, error: "Agent identifier cannot be empty" };
+    return { ok: false, notFound: false, error: "Agent identifier cannot be empty" };
+  }
+
+  // An internal agent, live or recently archived, is addressable by its exact
+  // id and nothing else: the caller that created it holds the id, and no
+  // listing ever includes it.
+  if (input.agentManager.getAgent(trimmed) || input.agentManager.getRetiredInternalAgent(trimmed)) {
+    return { ok: true, agentId: trimmed };
   }
 
   const stored = await input.agentStorage.list();
@@ -37,6 +44,7 @@ export async function resolveAgentIdentifier(
   if (prefixMatches.length > 1) {
     return {
       ok: false,
+      notFound: false,
       error: `Agent identifier "${trimmed}" is ambiguous (${formatAgentIds(prefixMatches)})`,
     };
   }
@@ -48,13 +56,14 @@ export async function resolveAgentIdentifier(
   if (titleMatches.length > 1) {
     return {
       ok: false,
+      notFound: false,
       error: `Agent title "${trimmed}" is ambiguous (${formatAgentIds(
         titleMatches.map((record) => record.id),
       )})`,
     };
   }
 
-  return { ok: false, error: `Agent not found: ${trimmed}` };
+  return { ok: false, notFound: true, error: `Agent not found: ${trimmed}` };
 }
 
 function formatAgentIds(agentIds: string[]): string {

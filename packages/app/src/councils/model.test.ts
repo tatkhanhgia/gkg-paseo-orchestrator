@@ -115,6 +115,8 @@ const workspace: WorkspaceDescriptor = {
   status: "done",
   statusEnteredAt: null,
   archivingAt: null,
+  createdAt: null,
+  lastUserMessageAt: null,
   diffStat: null,
   scripts: [],
 };

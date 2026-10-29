@@ -1,3 +1,4 @@
+import { configurationEnvironment } from "./config-environment.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,15 @@ import { resolveSpeechConfig } from "./speech/speech-config-resolver.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { mergeHostnames, parseHostnamesEnv, type HostnamesConfig } from "./hostnames.js";
 import { resolveGitProcessPolicy } from "../utils/git-process-scheduler.js";
+
+export {
+  loadPersistedConfig,
+  readPersistedConfig,
+  savePersistedConfig,
+  getPersistedConfigValue,
+  editPersistedConfig,
+  type PersistedConfig,
+} from "./persisted-config.js";
 
 const DEFAULT_PORT = 6767;
 const DEFAULT_RELAY_ENDPOINT = "relay.paseo.sh:443";
@@ -265,6 +275,7 @@ interface ResolveRelayInput {
 interface ResolvedRelay {
   enabled: boolean;
   enabledMutable: boolean;
+  requireProtectedSecurity: boolean;
   endpoint: string;
   publicEndpoint: string;
   useTls: boolean;
@@ -287,6 +298,21 @@ function resolveTlsFromEnv(
   return persistedValue ?? fallback;
 }
 
+function resolveRelayEndpoints(input: ResolveRelayInput): {
+  endpoint: string;
+  publicEndpoint: string;
+} {
+  const endpoint =
+    input.env.PASEO_RELAY_ENDPOINT ??
+    input.persisted.daemon?.relay?.endpoint ??
+    DEFAULT_RELAY_ENDPOINT;
+  const publicEndpoint =
+    input.env.PASEO_RELAY_PUBLIC_ENDPOINT ??
+    input.persisted.daemon?.relay?.publicEndpoint ??
+    endpoint;
+  return { endpoint, publicEndpoint };
+}
+
 function resolveRelayConfig(input: ResolveRelayInput): ResolvedRelay {
   const environmentEnabled = parseBooleanEnv(input.env.PASEO_RELAY_ENABLED);
   // COMPAT(relayOptInDefault): daemons whose startup config omitted this field
@@ -296,14 +322,7 @@ function resolveRelayConfig(input: ResolveRelayInput): ResolvedRelay {
     environmentEnabled ??
     input.persisted.daemon?.relay?.enabled ??
     input.enabledFallback;
-  const endpoint =
-    input.env.PASEO_RELAY_ENDPOINT ??
-    input.persisted.daemon?.relay?.endpoint ??
-    DEFAULT_RELAY_ENDPOINT;
-  const publicEndpoint =
-    input.env.PASEO_RELAY_PUBLIC_ENDPOINT ??
-    input.persisted.daemon?.relay?.publicEndpoint ??
-    endpoint;
+  const { endpoint, publicEndpoint } = resolveRelayEndpoints(input);
   const useTls =
     input.cliRelayUseTls ??
     resolveTlsFromEnv(
@@ -319,6 +338,7 @@ function resolveRelayConfig(input: ResolveRelayInput): ResolvedRelay {
   return {
     enabled,
     enabledMutable: input.cliRelayEnabled === undefined && environmentEnabled === undefined,
+    requireProtectedSecurity: input.persisted.daemon?.relay?.requireProtectedSecurity ?? false,
     endpoint,
     publicEndpoint,
     useTls,
@@ -587,7 +607,7 @@ export function resolveConfigFromPersisted(
   options?: ResolveConfigFromPersistedOptions,
 ): PaseoDaemonConfig {
   const resolvedOptions = options ?? {};
-  const env = resolvedOptions.env ?? process.env;
+  const env = configurationEnvironment(resolvedOptions.env ?? process.env);
   const cli = resolvedOptions.cli;
   const relayEnabledFallback =
     resolvedOptions.relayEnabledFallback ?? persisted.daemon?.relay?.enabled === undefined;
@@ -663,6 +683,8 @@ export function resolveConfigFromPersisted(
     skillSelection: persisted.agents?.skills?.selection,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     plugins: persisted.plugins,
+    pluginRegistries: persisted.pluginRegistries,
+    pluginRegistryUrl: env.PASEO_PLUGIN_REGISTRY,
     mcpDebug: env.MCP_DEBUG === "1",
     isDev: resolvePaseoNodeEnv(env) === "development",
     agentStoragePath: path.join(paseoHome, "agents"),
@@ -670,6 +692,7 @@ export function resolveConfigFromPersisted(
     agentClients: {},
     relayEnabled: relay.enabled,
     relayEnabledMutable: relay.enabledMutable,
+    relayRequireProtectedSecurity: relay.requireProtectedSecurity,
     relayEndpoint: relay.endpoint,
     relayPublicEndpoint: relay.publicEndpoint,
     relayUseTls: relay.useTls,

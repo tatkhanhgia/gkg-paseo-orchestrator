@@ -12,7 +12,7 @@ export async function runCreateCommand(
   options: ChatCreateOptions,
   _command: Command,
 ): Promise<SingleResult<ChatRoomRow>> {
-  const { client } = await connectChatClient(options.host);
+  const { client } = await connectChatClient(options.daemonTarget);
   try {
     const payload = await client.createChatRoom({
       name,

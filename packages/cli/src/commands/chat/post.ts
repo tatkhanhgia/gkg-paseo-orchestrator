@@ -19,7 +19,7 @@ export async function runPostCommand(
   options: ChatPostOptions,
   _command: Command,
 ): Promise<SingleResult<ChatMessageRow>> {
-  const { client } = await connectChatClient(options.host);
+  const { client } = await connectChatClient(options.daemonTarget);
   try {
     const payload = await client.postChatMessage({
       room,

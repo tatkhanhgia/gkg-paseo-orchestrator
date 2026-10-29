@@ -1,550 +1,158 @@
-import type { Command } from "commander";
-import { createRequire } from "node:module";
-import { getOrCreateServerId, findExecutable, execCommand } from "@getpaseo/server";
-import { connectToDaemon } from "../../utils/client.js";
-import type { CommandOptions, ListResult, OutputSchema } from "../../output/index.js";
-import { resolveLocalDaemonState } from "./local-daemon.js";
-import { resolveNodePathFromPid } from "./runtime-toolchain.js";
+import { Command } from "commander";
+import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
+import {
+  readDaemonInstance,
+  daemonLogPath,
+  isSameDaemonInstance,
+  DaemonInstanceError,
+} from "@getpaseo/server/daemon-control";
+import { readPersistedConfig, resolveConfigFromPersisted } from "@getpaseo/server/configuration";
+import { connectToDaemon, buildDaemonConnectionCommandError } from "../../utils/client.js";
+import { withOutput, toCommandError, type CommandOptions } from "../../output/index.js";
+import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
+import { describeDaemonTarget, type DaemonTarget } from "../../utils/daemon-target.js";
 
-const DAEMON_STATUS_PROBE_TIMEOUT_MS = 1500;
-type ConnectedDaemonClient = Awaited<ReturnType<typeof connectToDaemon>>;
-type ReportedDaemonStatus = Awaited<ReturnType<ConnectedDaemonClient["getDaemonStatus"]>>;
-
-interface ProviderBinaryStatus {
-  label: string;
-  path: string | null;
-  version: string | null;
-  source?: "daemon" | "local";
+export function daemonStatusCommand(): Command {
+  return addJsonAndDaemonHostOptions(
+    new Command("status").description("Observe the selected daemon and its published endpoint"),
+  ).action(withOutput(runStatusCommand));
 }
 
-interface DaemonStatus {
-  serverId: string | null;
-  localDaemon: "running" | "stopped" | "stale_pid" | "unresponsive";
-  connectedDaemon: "reachable" | "unreachable" | "auth_required" | "auth_failed" | "not_probed";
-  connectedServerId: string | null;
-  connectedPid: number | null;
-  connectedListen: string | null;
-  home: string;
-  listen: string;
-  relay: string;
-  hostname: string | null;
-  pid: number | null;
-  startedAt: string | null;
-  owner: string | null;
-  logPath: string;
-  daemonNode: string;
-  cliNode: string;
-  cliVersion: string;
-  daemonVersion: string | null;
-  sourceRoot: string | null;
-  sourceCommit: string | null;
-  sourceDirty: boolean | null;
-  sourceFingerprint: string | null;
-  builtAt: string | null;
-  desktopManaged: boolean;
-  providers: ProviderBinaryStatus[];
-  note?: string;
-}
-
-interface StatusRow {
-  key: string;
-  value: string;
-}
-
-interface CliPackageJson {
-  version?: unknown;
-}
-
-const require = createRequire(import.meta.url);
-
-function normalizeError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function shortenMessage(message: string, max = 120): string {
-  const normalized = message.replace(/\s+/g, " ").trim();
-  if (normalized.length <= max) {
-    return normalized;
-  }
-  return `${normalized.slice(0, max - 3)}...`;
-}
-
-function appendNote(current: string | undefined, next: string | undefined): string | undefined {
-  if (!next) return current;
-  if (!current) return next;
-  return `${current}; ${next}`;
-}
-
-function resolveCliVersion(): string {
-  try {
-    const packageJson = require("../../../package.json") as CliPackageJson;
-    if (typeof packageJson.version === "string" && packageJson.version.trim().length > 0) {
-      return packageJson.version.trim();
-    }
-  } catch {
-    // Fall through.
-  }
-  return "unknown";
-}
-
-function createStatusSchema(status: DaemonStatus): OutputSchema<StatusRow> {
+export async function runStatusCommand(options: CommandOptions, _command: Command) {
+  const target = options.daemonTarget;
+  const instance = target.kind === "instance" ? await readDaemonInstance(target.home) : null;
+  const local =
+    target.kind === "instance"
+      ? localStatus(target.home, instance)
+      : { host: describeDaemonTarget(target) };
+  const observed =
+    target.kind === "endpoint" || instance?.listen
+      ? await probeDaemonStatus(target, instance, local)
+      : { connectedDaemon: "not_probed" };
+  const data: Record<string, unknown> = { ...local, ...observed };
   return {
-    idField: "key",
-    columns: [
-      { header: "KEY", field: "key" },
-      {
-        header: "VALUE",
-        field: "value",
-        color: (_, item) => {
-          if (item.key === "Local Daemon") {
-            if (item.value === "running") return "green";
-            if (item.value === "unresponsive") return "yellow";
-            return "red";
-          }
-          if (item.key === "Connected Daemon") {
-            if (item.value === "reachable") return "green";
-            if (item.value === "not_probed" || item.value === "auth_required") return "yellow";
-            return "red";
-          }
-          if (item.key.startsWith("  ")) {
-            if (item.value === "not found" || item.value === "not found (daemon)") return "red";
-            if (item.value.endsWith("(--version failed)")) return "yellow";
-            return "green";
-          }
-          return undefined;
-        },
-      },
-    ],
-    serialize: () => status,
+    type: "single" as const,
+    data,
+    schema: {
+      idField: () => "daemon",
+      columns: [],
+      renderHuman: () =>
+        Object.entries(data)
+          .filter(([, value]) => value !== undefined)
+          .map(
+            ([key, value]) =>
+              `${key}: ${typeof value === "object" ? JSON.stringify(value) : value}`,
+          )
+          .join("\n"),
+    },
   };
 }
 
-function formatStatusValue(value: string | number | boolean | null): string {
-  return value === null ? "-" : String(value);
-}
-
-function toStatusRows(status: DaemonStatus): StatusRow[] {
-  const rows: StatusRow[] = [
-    { key: "Server ID", value: formatStatusValue(status.serverId) },
-    { key: "Local Daemon", value: status.localDaemon },
-    { key: "Connected Daemon", value: status.connectedDaemon },
-    { key: "Connected Server ID", value: formatStatusValue(status.connectedServerId) },
-    { key: "Connected PID", value: formatStatusValue(status.connectedPid) },
-    { key: "Connected Listen", value: formatStatusValue(status.connectedListen) },
-    { key: "Home", value: status.home },
-    { key: "Listen", value: status.listen },
-    { key: "Relay", value: status.relay },
-    { key: "Hostname", value: formatStatusValue(status.hostname) },
-    { key: "PID", value: formatStatusValue(status.pid) },
-    { key: "Started", value: formatStatusValue(status.startedAt) },
-    { key: "Owner", value: formatStatusValue(status.owner) },
-    { key: "Logs", value: status.logPath },
-    { key: "Daemon Node", value: status.daemonNode },
-    { key: "CLI Node", value: status.cliNode },
-    { key: "CLI", value: status.cliVersion },
-    { key: "Daemon Version", value: formatStatusValue(status.daemonVersion) },
-    { key: "Source Root", value: formatStatusValue(status.sourceRoot) },
-    { key: "Source Commit", value: formatStatusValue(status.sourceCommit) },
-    { key: "Source Dirty", value: formatStatusValue(status.sourceDirty) },
-    { key: "Source Fingerprint", value: formatStatusValue(status.sourceFingerprint) },
-    { key: "Built At", value: formatStatusValue(status.builtAt) },
-  ];
-
-  if (status.note) {
-    rows.push({ key: "Note", value: status.note });
-  }
-
-  rows.push({ key: "", value: "" });
-  rows.push({ key: "Providers", value: "" });
-  for (const provider of status.providers) {
-    if (provider.source === "daemon") {
-      if (!provider.path) {
-        rows.push({ key: `  ${provider.label}`, value: "not found (daemon)" });
-      } else {
-        rows.push({ key: `  ${provider.label}`, value: `${provider.path} (daemon)` });
-      }
-    } else if (!provider.path) {
-      rows.push({ key: `  ${provider.label}`, value: "not found" });
-    } else if (!provider.version) {
-      rows.push({ key: `  ${provider.label}`, value: `${provider.path} (--version failed)` });
-    } else {
-      rows.push({ key: `  ${provider.label}`, value: `${provider.path} (${provider.version})` });
-    }
-  }
-
-  return rows;
-}
-
-const PROVIDER_BINARIES: { label: string; binary: string }[] = [
-  { label: "Claude", binary: "claude" },
-  { label: "Codex", binary: "codex" },
-  { label: "OpenCode", binary: "opencode" },
-];
-
-async function checkProviderBinary(
-  binary: string,
-): Promise<{ path: string | null; version: string | null }> {
-  const binaryPath = await findExecutable(binary);
-  if (!binaryPath) {
-    return { path: null, version: null };
-  }
+async function probeDaemonStatus(
+  target: DaemonTarget,
+  instance: Awaited<ReturnType<typeof readDaemonInstance>>,
+  local: Record<string, unknown>,
+) {
+  let connectedDaemon = "unreachable";
+  let note: string | undefined;
+  let live: Record<string, unknown> = {};
+  let client: Awaited<ReturnType<typeof connectToDaemon>> | undefined;
   try {
-    const { stdout } = await execCommand(binaryPath, ["--version"], {
-      timeout: 5000,
+    client = await connectToDaemon({ target, instance: instance ?? undefined, timeout: 1_500 });
+  } catch (error) {
+    const failure = buildDaemonConnectionCommandError({ target, error });
+    if (target.kind === "endpoint") throw failure;
+    connectedDaemon = "unreachable";
+    if (failure.code === "AUTH_REQUIRED") connectedDaemon = "auth_required";
+    if (failure.code === "AUTH_FAILED") connectedDaemon = "auth_failed";
+    note = failure.message;
+  }
+  if (!client) return { connectedDaemon, note };
+  try {
+    let requestError: unknown;
+    const status = await client.getDaemonStatus({ timeout: 1_500 }).catch((error: unknown) => {
+      requestError = error;
+      return null;
     });
-    return { path: binaryPath, version: stdout.trim() || null };
-  } catch {
-    return { path: binaryPath, version: null };
+    // Recheck even when the RPC times out before combining local and live observations.
+    const current = target.kind === "instance" ? await readDaemonInstance(target.home) : null;
+    if (instance && (!current || !isSameDaemonInstance(instance, current)))
+      throw new DaemonInstanceError(
+        "DAEMON_REPLACED",
+        "Supervisor exited or was replaced during status observation.",
+      );
+    const info = client.getLastServerInfoMessage();
+    live = { serverId: info?.serverId, daemonVersion: info?.version };
+    connectedDaemon = client.isConnected ? "reachable" : "unreachable";
+    if (!status) {
+      const failure = toCommandError(requestError);
+      note = `Status details unavailable (${failure.code}): ${failure.message}`;
+      if (
+        target.kind === "endpoint" ||
+        !client.isConnected ||
+        !(requestError instanceof DaemonConnectionError) ||
+        requestError.code !== "DAEMON_REQUEST_TIMEOUT"
+      ) {
+        throw { ...failure, message: note, details: { ...local, ...live, connectedDaemon } };
+      }
+    } else {
+      live = {
+        ...live,
+        daemonVersion: status.version,
+        workerPid: status.pid,
+        daemonNode: status.nodePath,
+        providers: status.providers,
+        relay: status.relay,
+        ...buildProvenance(status),
+      };
+    }
+  } finally {
+    await client.close();
   }
+  return { ...live, connectedDaemon, note };
 }
 
-async function checkProviderBinaries(): Promise<ProviderBinaryStatus[]> {
-  const results = await Promise.all(
-    PROVIDER_BINARIES.map(async ({ label, binary }) => {
-      const result = await checkProviderBinary(binary);
-      return Object.assign({ label }, result);
-    }),
-  );
-  return results;
-}
-
-function resolveOwnerLabel(uid: number | undefined, hostname: string | undefined): string | null {
-  if (uid === undefined && !hostname) {
-    return null;
-  }
-  const uidPart = uid === undefined ? "?" : String(uid);
-  const hostPart = hostname ?? "unknown-host";
-  return `${uidPart}@${hostPart}`;
-}
-
-interface DaemonProbeResult {
-  connectedDaemon: DaemonStatus["connectedDaemon"];
-  connectedServerId?: string;
-  connectedPid?: number;
-  connectedListen?: string | null;
-  localDaemonOverride?: DaemonStatus["localDaemon"];
-  daemonVersion?: string | null;
+// GKG build provenance: local-stack.sh compares these, not version strings.
+function buildProvenance(status: {
+  serverId: string;
+  pid: number;
+  listen: string | null;
   sourceRoot?: string | null;
   sourceCommit?: string | null;
   sourceDirty?: boolean | null;
   sourceFingerprint?: string | null;
   builtAt?: string | null;
-  daemonNodeOverride?: string;
-  daemonProviders?: ProviderBinaryStatus[];
-  relayStatus?: string;
-  note?: string;
-}
-
-type DaemonAuthProbeFailure = "auth_required" | "auth_failed";
-
-function classifyDaemonAuthProbeFailure(error: unknown): DaemonAuthProbeFailure | null {
-  if (!(error instanceof Error)) return null;
-  if (error.message === "Password required") return "auth_required";
-  if (error.message === "Incorrect password") return "auth_failed";
-  return null;
-}
-
-function describeDaemonAuthProbeFailure(host: string, failure: DaemonAuthProbeFailure): string {
-  if (failure === "auth_required") {
-    return `Daemon is reachable at ${host} but requires a password. Set PASEO_PASSWORD and retry.`;
-  }
-  return `Daemon is reachable at ${host} but the supplied password was rejected. Check PASEO_PASSWORD and retry.`;
-}
-
-function buildReachableDaemonProbe(
-  status: ReportedDaemonStatus,
-  handshakeVersion: string | null,
-  state: ReturnType<typeof resolveLocalDaemonState>,
-): DaemonProbeResult {
-  const labelMap = new Map(PROVIDER_BINARIES.map((provider) => [provider.binary, provider.label]));
-  const daemonProviders = status.providers.map((provider) => ({
-    label: labelMap.get(provider.provider) ?? provider.provider,
-    path: provider.available ? "available" : null,
-    version: provider.available ? null : (provider.error ?? null),
-    source: "daemon" as const,
-  }));
-  const result: DaemonProbeResult = {
-    connectedDaemon: "reachable",
+}) {
+  return {
     connectedServerId: status.serverId,
     connectedPid: status.pid,
     connectedListen: status.listen,
-    daemonVersion: status.version ?? handshakeVersion,
     sourceRoot: status.sourceRoot ?? null,
     sourceCommit: status.sourceCommit ?? null,
     sourceDirty: status.sourceDirty ?? null,
     sourceFingerprint: status.sourceFingerprint ?? null,
     builtAt: status.builtAt ?? null,
-    daemonNodeOverride: status.nodePath,
-    daemonProviders,
   };
-  if (status.relay != null) {
-    result.relayStatus = selectRelayStatus({
-      persisted: relayConfigFromLocalState(state),
-      live: status.relay,
-    });
-  }
-  if (!state.running) {
-    result.note = state.pidInfo
-      ? `Connected daemon is reachable even though local daemon PID ${state.pidInfo.pid} is stale`
-      : "Connected daemon is reachable but no local daemon PID file was found";
-  }
-  return result;
 }
 
-async function probeDaemonOverWebsocket(args: {
-  host: string;
-  state: ReturnType<typeof resolveLocalDaemonState>;
-}): Promise<DaemonProbeResult> {
-  const { host, state } = args;
-  let client: ConnectedDaemonClient;
-  try {
-    client = await connectToDaemon({ host, timeout: 1500 });
-  } catch (error) {
-    const authFailure = classifyDaemonAuthProbeFailure(error);
-    if (authFailure) {
-      return {
-        connectedDaemon: authFailure,
-        note: describeDaemonAuthProbeFailure(host, authFailure),
-      };
-    }
-
-    if (state.running) {
-      return {
-        connectedDaemon: "unreachable",
-        localDaemonOverride: "unresponsive",
-        note: `Local daemon PID is running but websocket at ${host} is not reachable`,
-      };
-    }
-    return { connectedDaemon: "unreachable" };
-  }
-
-  const daemonVersion = client.getLastServerInfoMessage()?.version ?? null;
-  try {
-    const statusPayload = await client.getDaemonStatus({
-      timeout: DAEMON_STATUS_PROBE_TIMEOUT_MS,
-    });
-    return buildReachableDaemonProbe(statusPayload, daemonVersion, state);
-  } catch {
-    return {
-      connectedDaemon: "reachable",
-      daemonVersion,
-      note: state.running
-        ? `Local daemon PID is running but daemon detail request to ${host} failed`
-        : `Connected daemon websocket is reachable at ${host} but daemon status request failed`,
-    };
-  } finally {
-    await client.close().catch(() => {});
-  }
-}
-
-interface ProbeMergeState {
-  probe: DaemonProbeResult;
-  connectedDaemon: DaemonStatus["connectedDaemon"];
-  connectedServerId: string | null;
-  connectedPid: number | null;
-  connectedListen: string | null;
-  localDaemon: DaemonStatus["localDaemon"];
-  daemonNode: string;
-  daemonVersion: string | null;
-  sourceRoot: string | null;
-  sourceCommit: string | null;
-  sourceDirty: boolean | null;
-  sourceFingerprint: string | null;
-  builtAt: string | null;
-  daemonProviders: ProviderBinaryStatus[] | undefined;
-  relayStatus: string;
-  note: string | undefined;
-}
-
-function applyProbeToStatus(input: ProbeMergeState): Omit<ProbeMergeState, "probe"> {
-  const { probe } = input;
+function localStatus(home: string, instance: Awaited<ReturnType<typeof readDaemonInstance>>) {
+  const config = resolveConfigFromPersisted(
+    home,
+    readPersistedConfig(home, { defaultsIfMissing: true }),
+    { env: {} },
+  );
+  let localDaemon = "stopped";
+  if (instance) localDaemon = instance.listen ? "running" : "not_ready";
   return {
-    connectedDaemon: probe.connectedDaemon,
-    connectedServerId: probe.connectedServerId ?? input.connectedServerId,
-    connectedPid: probe.connectedPid ?? input.connectedPid,
-    connectedListen:
-      probe.connectedListen !== undefined ? probe.connectedListen : input.connectedListen,
-    localDaemon: probe.localDaemonOverride ?? input.localDaemon,
-    daemonNode: probe.daemonNodeOverride ?? input.daemonNode,
-    daemonVersion: probe.daemonVersion !== undefined ? probe.daemonVersion : input.daemonVersion,
-    sourceRoot: probe.sourceRoot !== undefined ? probe.sourceRoot : input.sourceRoot,
-    sourceCommit: probe.sourceCommit !== undefined ? probe.sourceCommit : input.sourceCommit,
-    sourceDirty: probe.sourceDirty !== undefined ? probe.sourceDirty : input.sourceDirty,
-    sourceFingerprint:
-      probe.sourceFingerprint !== undefined ? probe.sourceFingerprint : input.sourceFingerprint,
-    builtAt: probe.builtAt !== undefined ? probe.builtAt : input.builtAt,
-    daemonProviders: probe.daemonProviders ?? input.daemonProviders,
-    relayStatus: probe.relayStatus ?? input.relayStatus,
-    note: probe.note ? appendNote(input.note, probe.note) : input.note,
-  };
-}
-
-function resolveServerIdSafely(home: string): { serverId: string | null; error: string | null } {
-  try {
-    return { serverId: getOrCreateServerId(home), error: null };
-  } catch (error) {
-    return {
-      serverId: null,
-      error: `serverId unavailable: ${shortenMessage(normalizeError(error))}`,
-    };
-  }
-}
-
-async function resolveDaemonNodeLabel(
-  state: ReturnType<typeof resolveLocalDaemonState>,
-): Promise<string> {
-  if (!state.running) return "-";
-  if (!state.pidInfo?.pid) return "unknown (no PID available)";
-  const fromPid = await resolveNodePathFromPid(state.pidInfo.pid);
-  return fromPid.nodePath ?? `unknown (${fromPid.error ?? "could not resolve from PID"})`;
-}
-
-interface RelayStatusConfig {
-  enabled: boolean;
-  endpoint: string;
-  publicEndpoint: string;
-  useTls: boolean;
-  publicUseTls: boolean;
-}
-
-function relayConfigFromLocalState(
-  state: ReturnType<typeof resolveLocalDaemonState>,
-): RelayStatusConfig {
-  return {
-    enabled: state.relayEnabled,
-    endpoint: state.relayEndpoint,
-    publicEndpoint: state.relayEndpoint,
-    useTls: state.relayUseTls,
-    publicUseTls: state.relayPublicUseTls,
-  };
-}
-
-export function selectRelayStatus(input: {
-  persisted: RelayStatusConfig;
-  live?: RelayStatusConfig;
-}): string {
-  const relay = input.live ?? input.persisted;
-  if (!relay.enabled) return "disabled";
-  const scheme = relay.publicUseTls ? "wss" : "ws";
-  return `${scheme}://${relay.publicEndpoint}`;
-}
-
-export type StatusResult = ListResult<StatusRow>;
-
-export async function runStatusCommand(
-  options: CommandOptions,
-  _command: Command,
-): Promise<StatusResult> {
-  const home = typeof options.home === "string" ? options.home : undefined;
-  const state = resolveLocalDaemonState({ home });
-  const daemonTarget = state.listen.trim();
-
-  const owner = resolveOwnerLabel(state.pidInfo?.uid, state.pidInfo?.hostname);
-  let daemonNode = await resolveDaemonNodeLabel(state);
-  const cliNode = process.execPath;
-  let localDaemon: DaemonStatus["localDaemon"] = state.running ? "running" : "stopped";
-  let connectedDaemon: DaemonStatus["connectedDaemon"] = "not_probed";
-  let connectedServerId: string | null = null;
-  let connectedPid: number | null = null;
-  let connectedListen: string | null = null;
-  let daemonVersion: string | null = null;
-  let sourceRoot: string | null = null;
-  let sourceCommit: string | null = null;
-  let sourceDirty: boolean | null = null;
-  let sourceFingerprint: string | null = null;
-  let builtAt: string | null = null;
-  let daemonProviders: ProviderBinaryStatus[] | undefined;
-  let relayStatus = selectRelayStatus({ persisted: relayConfigFromLocalState(state) });
-  let note: string | undefined;
-
-  if (!state.running && state.stalePidFile && state.pidInfo) {
-    localDaemon = "stale_pid";
-    note = `Stale PID file found for PID ${state.pidInfo.pid}`;
-  }
-
-  if (daemonTarget) {
-    const probe = await probeDaemonOverWebsocket({ host: daemonTarget, state });
-    ({
-      connectedDaemon,
-      connectedServerId,
-      connectedPid,
-      connectedListen,
-      localDaemon,
-      daemonNode,
-      daemonVersion,
-      sourceRoot,
-      sourceCommit,
-      sourceDirty,
-      sourceFingerprint,
-      builtAt,
-      daemonProviders,
-      relayStatus,
-      note,
-    } = applyProbeToStatus({
-      probe,
-      connectedDaemon,
-      connectedServerId,
-      connectedPid,
-      connectedListen,
-      localDaemon,
-      daemonNode,
-      daemonVersion,
-      sourceRoot,
-      sourceCommit,
-      sourceDirty,
-      sourceFingerprint,
-      builtAt,
-      daemonProviders,
-      relayStatus,
-      note,
-    }));
-  }
-
-  const cliVersion = resolveCliVersion();
-
-  const serverIdResult = resolveServerIdSafely(state.home);
-  const serverId = serverIdResult.serverId;
-  if (serverIdResult.error) {
-    note = appendNote(note, serverIdResult.error);
-  }
-
-  const providers = daemonProviders ?? (await checkProviderBinaries());
-
-  const daemonStatus: DaemonStatus = {
-    serverId,
+    home,
+    pid: instance?.pid ?? null,
+    startedAt: instance?.startedAt ?? null,
+    listen: instance?.listen ?? null,
+    serverId: instance?.serverId ?? undefined,
+    hostname: instance?.hostname ?? null,
+    configuredListen: config.listen,
     localDaemon,
-    connectedDaemon,
-    connectedServerId,
-    connectedPid,
-    connectedListen,
-    home: state.home,
-    listen: state.listen,
-    relay: relayStatus,
-    hostname: state.pidInfo?.hostname ?? null,
-    pid: state.pidInfo?.pid ?? null,
-    startedAt: state.pidInfo?.startedAt ?? null,
-    owner,
-    logPath: state.logPath,
-    daemonNode,
-    cliNode,
-    cliVersion,
-    daemonVersion,
-    sourceRoot,
-    sourceCommit,
-    sourceDirty,
-    sourceFingerprint,
-    builtAt,
-    desktopManaged: state.pidInfo?.desktopManaged === true,
-    providers,
-    note,
-  };
-
-  return {
-    type: "list",
-    data: toStatusRows(daemonStatus),
-    schema: createStatusSchema(daemonStatus),
+    desktopManaged: instance?.desktopManaged === true,
+    logPath: daemonLogPath(home),
   };
 }

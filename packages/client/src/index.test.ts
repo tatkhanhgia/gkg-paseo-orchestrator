@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { createPaseoApi, createPaseoClient } from "./index.js";
 import { DaemonClient } from "./daemon-client.js";
@@ -24,6 +26,17 @@ class FakeWebSocket {
 
   send(data: string | ArrayBuffer | Uint8Array): void {
     this.sent.push(data);
+    const frame = JSON.parse(String(data));
+    if (frame.message?.type === "subscription.release.request")
+      this.message(
+        sessionMessage({
+          type: "subscription.release.response",
+          payload: {
+            requestId: frame.message.requestId,
+            subscriptionId: frame.message.subscriptionId,
+          },
+        }),
+      );
   }
 
   close(): void {
@@ -86,11 +99,12 @@ async function connectClient(
   features: Record<string, boolean> = {
     providerUsageList: true,
     providersSnapshotCwd: true,
+    ownedSubscriptions: true,
   },
 ): Promise<{ client: PaseoClient; ws: FakeWebSocket }> {
-  vi.stubGlobal("WebSocket", FakeWebSocket);
   const client = createPaseoClient({
     url: "ws://daemon.test",
+    webSocketFactory: (url) => new FakeWebSocket(url),
     reconnect: { enabled: false },
   });
 
@@ -119,6 +133,27 @@ async function connectClient(
   await connectPromise;
 
   return { client, ws };
+}
+
+function acknowledgeObservation(ws: FakeWebSocket, subscriptionId: string): void {
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  ws.message(
+    sessionMessage({
+      type: request.type.replace(/([._])request$/, "$1response"),
+      payload: {
+        requestId: request.requestId,
+        subscriptionId,
+        entries: [],
+        pageInfo: { nextCursor: null, prevCursor: null, hasMore: false },
+      },
+    }),
+  );
+}
+
+async function observeAgents(client: PaseoClient, ws: FakeWebSocket): Promise<string> {
+  const ready = client.agents.list({ subscribe: {} });
+  acknowledgeObservation(ws, "agents-sdk");
+  return (await ready).subscriptionId!;
 }
 
 function createWorkspace(input: Partial<PaseoWorkspace> = {}): PaseoWorkspace {
@@ -231,6 +266,9 @@ test("createPaseoApi borrows daemon capabilities without exposing connection own
   expect(Object.keys(paseo).sort()).toEqual([
     "agents",
     "config",
+    "dispose",
+    "hosts",
+    "observeEvents",
     "projects",
     "providers",
     "roleProfiles",
@@ -345,11 +383,17 @@ test("project actions subscribe to existing project updates", async () => {
   const unsubscribe = client.projects.subscribe((update) => {
     updates.push(update.kind === "upsert" ? update.project.projectDisplayName : update.projectId);
   });
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "session.events.set_subscription.request",
+    events: ["project.update"],
+  });
+  acknowledgeObservation(ws, "projects-sdk");
 
   ws.message(
     sessionMessage({
       type: "project.update",
       payload: {
+        subscriptionId: "projects-sdk",
         kind: "upsert",
         project: {
           projectId: "project_sdk",
@@ -371,6 +415,7 @@ test("project actions subscribe to existing project updates", async () => {
     sessionMessage({
       type: "project.update",
       payload: {
+        subscriptionId: "projects-sdk",
         kind: "remove",
         projectId: "project_removed",
         generation: "daemon-generation",
@@ -386,6 +431,7 @@ test("project actions subscribe to existing project updates", async () => {
     sessionMessage({
       type: "project.update",
       payload: {
+        subscriptionId: "projects-sdk",
         kind: "remove",
         projectId: "project_after_unsubscribe",
       },
@@ -523,6 +569,9 @@ test("workspace handles keep identity and refresh snapshots through existing dri
   await expect(refetchPromise).resolves.toEqual(refreshedWorkspace);
   expect(workspace.current()).toEqual(refreshedWorkspace);
 
+  const directoryReady = client.workspaces.list({ subscribe: {} });
+  acknowledgeObservation(ws, "workspaces-sdk");
+  await directoryReady;
   const updates: string[] = [];
   const unsubscribe = workspace.subscribe((update) => {
     if (update.kind === "upsert") {
@@ -533,10 +582,7 @@ test("workspace handles keep identity and refresh snapshots through existing dri
   ws.message(
     sessionMessage({
       type: "workspace_update",
-      payload: {
-        kind: "upsert",
-        workspace: pushedWorkspace,
-      },
+      payload: { subscriptionId: "workspaces-sdk", kind: "upsert", workspace: pushedWorkspace },
     }),
   );
   expect(updates).toEqual(["sdk pushed"]);
@@ -568,6 +614,7 @@ test("workspace handles keep identity and refresh snapshots through existing dri
     sessionMessage({
       type: "workspace_update",
       payload: {
+        subscriptionId: "workspaces-sdk",
         kind: "upsert",
         workspace: createWorkspace({ name: "sdk after unsubscribe" }),
       },
@@ -646,6 +693,61 @@ test("plugin-shaped PR workspace create and agent create use the existing daemon
   await client.close();
 });
 
+test("agents.create forwards internal on the request, outside the agent config", async () => {
+  const { client, ws } = await connectClient({
+    providerUsageList: true,
+    providersSnapshotCwd: true,
+    ownedSubscriptions: true,
+    backgroundWorkspaces: true,
+  });
+
+  const createPromise = client.agents.create({
+    config: { provider: "codex/gpt-5.4" },
+    cwd: "/repo/sdk",
+    title: "Summary helper",
+    background: true,
+    autoArchive: true,
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "create_agent_request",
+    config: { provider: "codex", model: "gpt-5.4", cwd: "/repo/sdk", title: "Summary helper" },
+    background: true,
+    autoArchive: true,
+  });
+  expect(request.config).not.toHaveProperty("internal");
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_created",
+        requestId: request.requestId,
+        agentId: "agent_helper",
+        agent: createAgent({ id: "agent_helper" }),
+      },
+    }),
+  );
+
+  const agent = await createPromise;
+  expect(agent.id).toBe("agent_helper");
+  await client.close();
+});
+
+test("agents.create with internal fails before sending on a host without internal agents", async () => {
+  const { client, ws } = await connectClient();
+  const sentBefore = ws.sent.length;
+
+  await expect(
+    client.agents.create({
+      config: { provider: "codex/gpt-5.4" },
+      cwd: "/repo/sdk",
+      background: true,
+    }),
+  ).rejects.toThrow("Update the host to use background workspaces.");
+  expect(ws.sent).toHaveLength(sentBefore);
+  await client.close();
+});
+
 test("agent handles delegate create, send, timeline refetch, archive, and local updates", async () => {
   const { client, ws } = await connectClient();
   const createdAgent = createAgent();
@@ -682,6 +784,7 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
   expect(agent.id).toBe("agent_sdk");
   expect(agent.current()).toEqual(createdAgent);
 
+  await observeAgents(client, ws);
   const updatedAgents: string[] = [];
   const unsubscribe = agent.subscribe((update) => {
     if (update.kind === "upsert") {
@@ -692,23 +795,23 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
   ws.message(
     sessionMessage({
       type: "agent_update",
-      payload: {
-        kind: "upsert",
-        agent: updatedAgent,
-        project: null,
-      },
+      payload: { subscriptionId: "agents-sdk", kind: "upsert", agent: updatedAgent, project: null },
     }),
   );
   expect(updatedAgents).toEqual(["Updated"]);
   expect(agent.current()).toEqual(updatedAgent);
 
-  const sendPromise = agent.send("hello", { messageId: "message-sdk" });
+  const sendPromise = agent.send("hello", {
+    messageId: "message-sdk",
+    activeTurnBehavior: "steer",
+  });
   const sendRequest = parseSentSessionMessage(ws.sent.at(-1));
   expect(sendRequest).toMatchObject({
     type: "send_agent_message_request",
     agentId: "agent_sdk",
     text: "hello",
     messageId: "message-sdk",
+    activeTurnBehavior: "steer",
   });
 
   ws.message(
@@ -726,6 +829,7 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
 
   const runPromise = agent.run("finish the task", {
     messageId: "run-message-sdk",
+    activeTurnBehavior: "interrupt",
     timeoutMs: 30_000,
   });
   const runSendRequest = parseSentSessionMessage(ws.sent.at(-1));
@@ -734,6 +838,7 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
     agentId: "agent_sdk",
     text: "finish the task",
     messageId: "run-message-sdk",
+    activeTurnBehavior: "interrupt",
   });
   ws.message(
     sessionMessage({
@@ -960,11 +1065,13 @@ test("agent handles expose the observed snapshot through readonly properties", a
     runtimeInfo: { provider: "codex", sessionId: "session-sdk", model: "gpt-5.4" },
     archivedAt: "2026-05-16T02:00:00.000Z",
   });
+  await observeAgents(client, ws);
   const unsubscribe = agent.subscribe(() => {});
   ws.message(
     sessionMessage({
       type: "agent_update",
       payload: {
+        subscriptionId: "agents-sdk",
         kind: "upsert",
         agent: observedAgent,
         project: null,
@@ -1139,6 +1246,8 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
   });
 
   const readyPromise = client.providers.waitForReady({ cwd: "/repo/sdk", timeoutMs: 5_000 });
+  acknowledgeObservation(ws, "provider-wait");
+  await new Promise((resolve) => setTimeout(resolve, 0));
   const readyRequest = parseSentSessionMessage(ws.sent.at(-1));
   expect(readyRequest).toMatchObject({
     type: "get_providers_snapshot_request",
@@ -1159,6 +1268,7 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
     sessionMessage({
       type: "providers_snapshot_update",
       payload: {
+        subscriptionId: "provider-wait",
         cwd: "/repo/other",
         entries: [{ provider: "codex", status: "ready", enabled: true }],
         generatedAt: "2026-05-16T00:00:30.000Z",
@@ -1169,6 +1279,7 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
     sessionMessage({
       type: "providers_snapshot_update",
       payload: {
+        subscriptionId: "provider-wait",
         cwd: "/repo/sdk",
         entries: [{ provider: "codex", status: "ready", enabled: true }],
         generatedAt: "2026-05-16T00:00:01.000Z",
@@ -1185,11 +1296,14 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
     cwd: "/repo/./sdk",
     timeoutMs: 5_000,
   });
+  acknowledgeObservation(ws, "provider-canonical-wait");
+  await new Promise((resolve) => setTimeout(resolve, 0));
   const canonicalReadyRequest = parseSentSessionMessage(ws.sent.at(-1));
   ws.message(
     sessionMessage({
       type: "providers_snapshot_update",
       payload: {
+        subscriptionId: "provider-canonical-wait",
         cwd: "/repo/sdk",
         entries: [{ provider: "codex", status: "ready", enabled: true }],
         generatedAt: "2026-05-16T00:00:02.000Z",
@@ -1324,10 +1438,16 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
     snapshotUpdates.push(update.generatedAt);
     snapshotModelDefaults.push(update.entries[0]?.models?.[0]?.defaultThinkingOptionId);
   });
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "session.events.set_subscription.request",
+    events: ["providers_snapshot_update"],
+  });
+  acknowledgeObservation(ws, "provider-updates");
   ws.message(
     sessionMessage({
       type: "providers_snapshot_update",
       payload: {
+        subscriptionId: "provider-updates",
         cwd: "/repo/sdk",
         entries: [
           {
@@ -1355,15 +1475,25 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
   await client.close();
 });
 
-test("waitForReady requires canonical provider snapshot identity from the host", async () => {
+test("waitForReady reads an older host on the existing connection", async () => {
   const { client, ws } = await connectClient({});
-  const sentBeforeWait = ws.sent.length;
-
-  await expect(client.providers.waitForReady({ cwd: "/repo/./sdk" })).rejects.toThrow(
-    "Update the host to wait for provider discovery.",
+  const waiting = client.providers.waitForReady({ cwd: "/repo/./sdk" });
+  await expect
+    .poll(() => parseSentSessionMessage(ws.sent.at(-1)).type)
+    .toBe("get_providers_snapshot_request");
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  ws.message(
+    sessionMessage({
+      type: "get_providers_snapshot_response",
+      payload: {
+        requestId: request.requestId,
+        entries: [],
+        generatedAt: "2026-09-11T00:00:00.000Z",
+      },
+    }),
   );
-  expect(ws.sent).toHaveLength(sentBeforeWait);
-
+  await expect(waiting).resolves.toMatchObject({ entries: [] });
+  expect(FakeWebSocket.instances).toHaveLength(1);
   await client.close();
 });
 
@@ -1554,4 +1684,98 @@ test("agent config requires provider/model syntax", async () => {
   ).rejects.toThrow('Expected config.provider in "provider/model" format');
 
   await client.close();
+});
+
+test("canceled timeline handles and captured state are collectible while their API stays alive", async () => {
+  const source = `
+    import assert from "node:assert/strict";
+    import { createPaseoApi } from ${JSON.stringify(new URL("./index.ts", import.meta.url).href)};
+    import { DaemonClient } from ${JSON.stringify(new URL("./daemon-client.ts", import.meta.url).href)};
+    const drivers = [], apis = [];
+    let errors = 0;
+    async function batch(mode) {
+      const driver = new DaemonClient({ url: "ws://127.0.0.1:1/ws", clientId: mode, reconnect: { enabled: false } });
+      const scope = new AbortController();
+      const api = createPaseoApi(driver, { signal: scope.signal });
+      drivers.push(driver); apis.push(api);
+      const refs = [], ready = [];
+      for (let i = 0; i < 100; i++) {
+        const state = { bytes: new Uint8Array(64 * 1024) };
+        const handle = api.agents.ref("unconnected-agent").timeline.subscribe(update => {
+          if (update.event.type === "error") errors++;
+          return state.bytes[0];
+        });
+        refs.push({ handle: new WeakRef(handle), state: new WeakRef(state) });
+        ready.push(handle.ready.catch(() => {}));
+        if (mode === "callable") handle();
+        if (mode === "release") await handle.release();
+      }
+      if (mode === "scope-abort") scope.abort();
+      if (mode === "client-close") await driver.close();
+      if (mode !== "active") await Promise.all(ready);
+      return refs;
+    }
+    const groups = {};
+    for (const mode of ["callable", "release", "scope-abort", "client-close", "active"]) groups[mode] = await batch(mode);
+    async function collect() {
+      for (let i = 0; i < 12; i++) { await new Promise(r => setImmediate(r)); global.gc(); }
+    }
+    const count = refs => ({ handles: refs.filter(r => r.handle.deref()).length, states: refs.filter(r => r.state.deref()).length });
+    await collect();
+    const live = Object.fromEntries(Object.entries(groups).map(([mode, refs]) => [mode, count(refs)]));
+    console.log(JSON.stringify({ phase: "API alive", live, errors }));
+    for (const api of apis) await api.dispose();
+    await collect();
+    const disposed = Object.fromEntries(Object.entries(groups).map(([mode, refs]) => [mode, count(refs)]));
+    console.log(JSON.stringify({ phase: "API disposed", disposed }));
+    for (const driver of drivers) await driver.close();
+    for (const mode of ["callable", "release", "scope-abort", "client-close"]) assert.deepEqual(live[mode], { handles: 0, states: 0 }, mode);
+    assert.deepEqual(live.active, { handles: 100, states: 100 }, "active ownership is retained");
+    assert.equal(errors, 100, "client shutdown reports failure; explicit cancellation does not");
+    for (const result of Object.values(disposed)) assert.deepEqual(result, { handles: 0, states: 0 });
+  `;
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !/^(PASEO_|EXPO_|E2E_|AGENT_BROWSER_)/.test(key)),
+  );
+  const result = await promisify(execFile)(
+    process.execPath,
+    ["--expose-gc", "--import", "tsx", "--input-type=module", "-e", source],
+    { env, timeout: 15000 },
+  );
+  expect(result.stdout).toContain('"phase":"API alive"');
+}, 20000);
+
+test("qualified parents preserve foreign identity without resolving an equal local agent ID", async () => {
+  const { client, ws } = await connectClient();
+  const localParent = client.agents.ref("same-parent");
+  expect(localParent.address).toEqual({ serverId: "srv_sdk_test", agentId: "same-parent" });
+  const creating = client.agents.create({
+    config: { provider: "codex/gpt-5.4" },
+    cwd: "/repo/sdk",
+    parent: { serverId: "srv_parent_elsewhere", agentId: "same-parent" },
+    labels: { task: "preserved" },
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).not.toHaveProperty("callerAgentId");
+  expect(request).toMatchObject({
+    labels: {
+      task: "preserved",
+      "paseo.parent-agent-id": "same-parent",
+      "paseo.parent-server-id": "srv_parent_elsewhere",
+    },
+  });
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_created",
+        requestId: request.requestId,
+        agentId: "agent_sdk",
+        agent: createAgent(),
+      },
+    }),
+  );
+  await creating;
+  await client.close();
+  expect(localParent.address).toEqual({ serverId: "srv_sdk_test", agentId: "same-parent" });
 });

@@ -14,20 +14,26 @@ function storedAgent(
   } as StoredAgentRecord;
 }
 
-function liveAgent(id: string): ManagedAgent {
-  return { id, internal: false } as ManagedAgent;
+function liveAgent(id: string, options: { internal?: boolean } = {}): ManagedAgent {
+  return { id, internal: options.internal ?? false } as ManagedAgent;
 }
 
 async function resolve(input: {
   identifier: string;
   stored?: StoredAgentRecord[];
   live?: ManagedAgent[];
+  retiredInternalIds?: string[];
 }) {
   const agentStorage = {
     list: async () => input.stored ?? [],
   } as unknown as AgentStorage;
+  const live = input.live ?? [];
   const agentManager = {
-    listAgents: () => input.live ?? [],
+    // Like AgentManager, listAgents omits internal agents while getAgent finds them.
+    listAgents: () => live.filter((agent) => !agent.internal),
+    getAgent: (id: string) => live.find((agent) => agent.id === id) ?? null,
+    getRetiredInternalAgent: (id: string) =>
+      input.retiredInternalIds?.includes(id) ? { agentId: id } : null,
   } as unknown as AgentManager;
   return resolveAgentIdentifier({
     identifier: input.identifier,
@@ -64,11 +70,30 @@ describe("resolveAgentIdentifier", () => {
 
     await expect(resolve({ identifier: "agent-alpha", stored })).resolves.toEqual({
       ok: false,
+      notFound: false,
       error: expect.stringContaining("ambiguous"),
     });
     await expect(resolve({ identifier: "Hidden", stored })).resolves.toEqual({
       ok: false,
+      notFound: true,
       error: "Agent not found: Hidden",
+    });
+  });
+
+  test("addresses live and retired internal agents only by exact ID", async () => {
+    const live = [liveAgent("internal-live-123", { internal: true })];
+    const retiredInternalIds = ["internal-retired-456"];
+
+    await expect(
+      resolve({ identifier: "internal-live-123", live, retiredInternalIds }),
+    ).resolves.toEqual({ ok: true, agentId: "internal-live-123" });
+    await expect(
+      resolve({ identifier: "internal-retired-456", live, retiredInternalIds }),
+    ).resolves.toEqual({ ok: true, agentId: "internal-retired-456" });
+    await expect(resolve({ identifier: "internal-", live, retiredInternalIds })).resolves.toEqual({
+      ok: false,
+      notFound: true,
+      error: "Agent not found: internal-",
     });
   });
 });

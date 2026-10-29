@@ -21,7 +21,7 @@ export async function runWaitCommand(
   _command: Command,
 ): Promise<ListResult<ChatMessageRow>> {
   const timeoutMs = parseTimeoutMs(options.timeout);
-  const { client } = await connectChatClient(options.host);
+  const { client } = await connectChatClient(options.daemonTarget);
   const deadline = typeof timeoutMs === "number" ? Date.now() + timeoutMs : null;
   const hasExplicitTimeout = deadline !== null;
   const remainingTimeoutMs = () =>

@@ -64,7 +64,7 @@ export async function requestWorkspaceDraftAgent(
   return result;
 }
 
-function assertRoleLaunchReceipt(
+export function assertRoleLaunchReceipt(
   result: AgentSnapshotPayload,
   roleId: PaseoRoleId | null | undefined,
 ): void {

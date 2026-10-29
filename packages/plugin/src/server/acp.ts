@@ -58,6 +58,8 @@ export type AcpConnector = () => AcpStream | Promise<AcpStream>;
 export interface AcpOptions {
   protocol?: "auto" | "v1";
   startupTimeoutMs?: number;
+  /** Global discovery initializes ACP but returns an empty catalog without opening a session. */
+  workspaceOnlyCatalog?: boolean;
   waitForInitialCommands?: boolean;
   initialCommandsTimeoutMs?: number;
 }
@@ -136,6 +138,7 @@ export function runAcpProvider(options: RunAcpProviderOptions): ProviderRegistra
     ...(roleBinding?.launch
       ? { roleBinding: { roleIds: roleBinding.roleIds, notice: roleBinding.notice } }
       : {}),
+    command: options.command,
     connect(request) {
       return createAcpProviderConnection(options, request);
     },

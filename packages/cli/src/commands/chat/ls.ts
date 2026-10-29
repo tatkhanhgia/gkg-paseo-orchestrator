@@ -7,7 +7,7 @@ export async function runLsCommand(
   options: ChatCommandOptions,
   _command: Command,
 ): Promise<ListResult<ChatRoomRow>> {
-  const { client } = await connectChatClient(options.host);
+  const { client } = await connectChatClient(options.daemonTarget);
   try {
     const payload = await client.listChatRooms();
     return {

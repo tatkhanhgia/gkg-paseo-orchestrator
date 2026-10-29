@@ -35,7 +35,7 @@ export async function runReadCommand(
   options: ChatReadOptions,
   _command: Command,
 ): Promise<ListResult<ChatMessageRow>> {
-  const { client } = await connectChatClient(options.host);
+  const { client } = await connectChatClient(options.daemonTarget);
   try {
     const payload = await client.readChatMessages({
       room,

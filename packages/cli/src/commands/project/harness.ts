@@ -379,8 +379,8 @@ function resolveReleaseSelectors(options: ProjectHarnessReleaseOptions): {
 }
 
 async function connectHarnessClient(options: ProjectHarnessTargetOptions) {
-  return connectToDaemon({ host: options.host }).catch((error: unknown) => {
-    throw buildDaemonConnectionCommandError({ host: options.host, error });
+  return connectToDaemon({ target: options.daemonTarget }).catch((error: unknown) => {
+    throw buildDaemonConnectionCommandError({ target: options.daemonTarget, error });
   });
 }
 

@@ -16,6 +16,15 @@ import type {
   AgentTimelineStore,
 } from "./agent-timeline-store-types.js";
 
+interface CommittedTimeline {
+  epoch: string;
+  rows: AgentTimelineRow[];
+}
+
+function cloneRow(row: AgentTimelineRow): AgentTimelineRow {
+  return { ...row };
+}
+
 interface TimelinePaths {
   root: string;
   rows: string;
@@ -52,7 +61,10 @@ function parseRow(agentId: string, value: unknown): AgentTimelineRow {
 }
 
 export class FileAgentTimelineStore implements AgentTimelineStore {
+  // `memory` is the projected read view (collapsed rows, paged fetches). Committed rows stay raw
+  // in `committed`: writes, conflict checks, and readback must see one row per sequence.
   private readonly memory = new InMemoryAgentTimelineStore();
+  private readonly committed = new Map<string, CommittedTimeline>();
   private readonly historyComplete = new Map<string, boolean>();
   private readonly loaded = new Set<string>();
   private readonly tails = new Map<string, Promise<void>>();
@@ -73,9 +85,9 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   ): Promise<AgentTimelineRow> {
     return this.withAgent(agentId, async () => {
       await this.prepare(agentId);
-      const fetched = this.memory.fetch(agentId, { direction: "tail", limit: 0 });
+      const fetched = this.committedTimeline(agentId);
       const row: AgentTimelineRow = {
-        seq: fetched.window.nextSeq,
+        seq: (fetched.rows.at(-1)?.seq ?? 0) + 1,
         timestamp: options?.timestamp ?? new Date().toISOString(),
         item,
         ...(options?.turnId ? { turnId: options.turnId } : {}),
@@ -99,14 +111,14 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   async getLatestCommittedSeq(agentId: string): Promise<number> {
     return this.withAgent(agentId, async () => {
       await this.prepare(agentId);
-      return this.memory.fetch(agentId, { direction: "tail", limit: 0 }).window.maxSeq;
+      return this.committedTimeline(agentId).rows.at(-1)?.seq ?? 0;
     });
   }
 
   async getCommittedRows(agentId: string): Promise<AgentTimelineRow[]> {
     return this.withAgent(agentId, async () => {
       await this.prepare(agentId);
-      return this.memory.getRows(agentId);
+      return this.committedTimeline(agentId).rows.map(cloneRow);
     });
   }
 
@@ -114,7 +126,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     return this.withAgent(agentId, async () => {
       await this.prepare(agentId);
       return {
-        rows: this.memory.getRows(agentId),
+        rows: this.committedTimeline(agentId).rows.map(cloneRow),
         historyComplete: this.historyComplete.get(agentId) ?? false,
       };
     });
@@ -137,6 +149,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   async deleteAgent(agentId: string): Promise<void> {
     return this.withAgent(agentId, async () => {
       this.memory.delete(agentId);
+      this.committed.delete(agentId);
       this.historyComplete.delete(agentId);
       this.loaded.delete(agentId);
       await fs.rm(this.paths(agentId).root, { recursive: true, force: true });
@@ -147,7 +160,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     if (rows.length === 0) return;
     return this.withAgent(agentId, async () => {
       await this.prepare(agentId);
-      const fetched = this.memory.fetch(agentId, { direction: "tail", limit: 0 });
+      const fetched = this.committedTimeline(agentId);
       const existingBySeq = new Map(fetched.rows.map((row) => [row.seq, row]));
       const uniqueRows = [...new Map(rows.map((row) => [row.seq, row])).values()];
       for (const row of uniqueRows) {
@@ -168,7 +181,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   async replaceCommittedSnapshot(agentId: string, snapshot: AgentTimelineSnapshot): Promise<void> {
     return this.withAgent(agentId, async () => {
       await this.prepare(agentId);
-      const fetched = this.memory.fetch(agentId, { direction: "tail", limit: 0 });
+      const fetched = this.committedTimeline(agentId);
       const rows = [...new Map(snapshot.rows.map((row) => [row.seq, row])).values()].toSorted(
         (left, right) => left.seq - right.seq,
       );
@@ -180,13 +193,13 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   async updateCommittedRow(agentId: string, row: AgentTimelineRow): Promise<void> {
     return this.withAgent(agentId, async () => {
       await this.prepare(agentId);
-      const fetched = this.memory.fetch(agentId, { direction: "tail", limit: 0 });
+      const fetched = this.committedTimeline(agentId);
       const index = fetched.rows.findIndex((candidate) => candidate.seq === row.seq);
       if (index < 0) {
         throw new Error(`Cannot update missing timeline row sequence ${row.seq}`);
       }
       await this.persistRows(agentId, [row]);
-      const updated = [...fetched.rows];
+      const updated: AgentTimelineRow[] = [...fetched.rows];
       updated[index] = row;
       this.replaceMemory(agentId, fetched.epoch, updated);
     });
@@ -308,7 +321,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
         await fs.rm(paths.rows, { recursive: true, force: true });
       }
       await this.commitRows(agentId, rows);
-      const fetched = this.memory.fetch(agentId, { direction: "tail", limit: 0 });
+      const fetched = this.committedTimeline(agentId);
       this.replaceMemory(
         agentId,
         epoch,
@@ -324,7 +337,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const normalized = [...new Map(rows.map((row) => [row.seq, row])).values()];
     if (normalized.length === 0) return;
     await fs.mkdir(paths.pending, { recursive: true });
-    const epoch = this.memory.fetch(agentId, { direction: "tail", limit: 0 }).epoch;
+    const epoch = this.committedTimeline(agentId).epoch;
     const manifestPath = path.join(paths.pending, `${randomUUID()}.json`);
     const historyComplete = this.historyComplete.get(agentId) ?? false;
     await this.writeJson(manifestPath, {
@@ -386,12 +399,19 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
     const ordered = [...new Map(rows.map((row) => [row.seq, row])).values()].toSorted(
       (left, right) => left.seq - right.seq,
     );
+    this.committed.set(agentId, { epoch, rows: ordered.map(cloneRow) });
     this.memory.initialize(agentId, {
       epoch,
       rows: ordered,
       nextSeq: (ordered.at(-1)?.seq ?? 0) + 1,
     });
     this.historyComplete.set(agentId, historyComplete);
+  }
+
+  private committedTimeline(agentId: string): CommittedTimeline {
+    const timeline = this.committed.get(agentId);
+    if (!timeline) throw new Error(`Durable timeline for agent ${agentId} is not loaded`);
+    return timeline;
   }
 
   private paths(agentId: string): TimelinePaths {

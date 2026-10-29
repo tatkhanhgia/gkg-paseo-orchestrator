@@ -48,6 +48,13 @@ async function getAvailablePort(): Promise<number> {
   });
 }
 
+export async function getAvailableHostDaemonPort(): Promise<number> {
+  const primaryPort = Number(process.env.E2E_DAEMON_PORT ?? 0);
+  let port = await getAvailablePort();
+  while (port === 6767 || port === 6768 || port === primaryPort) port = await getAvailablePort();
+  return port;
+}
+
 async function waitForServer(port: number, child: ChildProcess): Promise<void> {
   const deadline = Date.now() + 90_000;
   let lastError: unknown = null;
@@ -127,9 +134,7 @@ export async function startIsolatedHostDaemon(
   serverId: string,
   options: IsolatedHostDaemonOptions = {},
 ): Promise<IsolatedHostDaemon> {
-  const primaryPort = Number(process.env.E2E_DAEMON_PORT ?? 0);
-  let port = await getAvailablePort();
-  while (port === 6767 || port === primaryPort) port = await getAvailablePort();
+  const port = await getAvailableHostDaemonPort();
   let beadsCentralPort = await getAvailablePort();
   while (beadsCentralPort === port || beadsCentralPort === 6769) {
     beadsCentralPort = await getAvailablePort();

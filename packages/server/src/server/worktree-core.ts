@@ -5,7 +5,7 @@ import {
   createWorktree,
   slugify,
   validateBranchSlug,
-  type WorktreeConfig,
+  type CreatedWorktree,
 } from "../utils/worktree.js";
 import {
   resolveWorktreeCreationIntent,
@@ -28,7 +28,6 @@ export interface CreateWorktreeCoreInput {
   firstAgentContext?: FirstAgentContext;
   paseoHome?: string;
   worktreesRoot?: string;
-  runSetup?: boolean;
 }
 
 export interface CreateWorktreeCoreDeps {
@@ -41,7 +40,7 @@ export interface CreateWorktreeCoreDeps {
 }
 
 export interface CreateWorktreeCoreResult {
-  worktree: WorktreeConfig;
+  worktree: CreatedWorktree;
   intent: WorktreeCreationIntent;
   repoRoot: string;
   created: boolean;
@@ -120,7 +119,6 @@ async function createWorktreeCoreWithPriority(
       cwd: repoRoot,
       worktreeSlug: normalizedSlug,
       source: intent,
-      runSetup: input.runSetup ?? true,
       paseoHome: input.paseoHome,
       worktreesRoot: input.worktreesRoot,
     }),
