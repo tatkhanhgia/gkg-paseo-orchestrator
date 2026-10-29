@@ -1,6 +1,6 @@
 import { buildHostAgentDetailRoute, buildHostWorkspaceRoute } from "@/utils/host-routes";
 import { expect, test } from "../support/fixtures";
-import { createIdleAgent, openWorkspaceWithAgents } from "../support/helpers/archive-tab";
+import { createMockIdleAgent, openWorkspaceWithAgents } from "../support/helpers/archive-tab";
 import { waitForTabBar, expectAgentTabActive } from "../support/helpers/launcher";
 import { seedWorkspace } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
@@ -8,6 +8,16 @@ import { getServerId } from "../support/helpers/server-id";
 async function pressSettingsToggleShortcut(page: import("@playwright/test").Page) {
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+Comma`);
+}
+
+async function openComposerTab(page: import("@playwright/test").Page, agentId: string) {
+  await page
+    .getByTestId(`workspace-tab-agent_${agentId}`)
+    .filter({ visible: true })
+    .first()
+    .click();
+  await expectAgentTabActive(page, agentId);
+  await expect(page.getByRole("textbox", { name: "Message agent..." })).toBeVisible();
 }
 
 interface ComposerFrame {
@@ -27,7 +37,9 @@ async function startComposerFrameCapture(page: import("@playwright/test").Page) 
 
     const sample = () => {
       if (capture.stopped) return;
-      const root = document.querySelector<HTMLElement>('[data-testid="message-input-root"]');
+      const root = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-testid="message-input-root"]'),
+      ).find((candidate) => candidate.offsetParent !== null);
       const input = root?.querySelector<HTMLTextAreaElement>("textarea");
       if (root && input) {
         const style = getComputedStyle(input);
@@ -104,12 +116,12 @@ test.describe("Settings toggle tab regression", () => {
     const workspace = await seedWorkspace({ repoPrefix: "settings-toggle-tab-" });
 
     try {
-      const firstAgent = await createIdleAgent(workspace.client, {
+      const firstAgent = await createMockIdleAgent(workspace.client, {
         cwd: workspace.repoPath,
         workspaceId: workspace.workspaceId,
         title: `settings-toggle-a-${Date.now()}`,
       });
-      const secondAgent = await createIdleAgent(workspace.client, {
+      const secondAgent = await createMockIdleAgent(workspace.client, {
         cwd: workspace.repoPath,
         workspaceId: workspace.workspaceId,
         title: `settings-toggle-b-${Date.now()}`,
@@ -165,12 +177,12 @@ test.describe("Settings toggle tab regression", () => {
     const workspace = await seedWorkspace({ repoPrefix: "settings-composer-height-" });
 
     try {
-      const firstAgent = await createIdleAgent(workspace.client, {
+      const firstAgent = await createMockIdleAgent(workspace.client, {
         cwd: workspace.repoPath,
         workspaceId: workspace.workspaceId,
         title: `settings-composer-height-a-${Date.now()}`,
       });
-      const secondAgent = await createIdleAgent(workspace.client, {
+      const secondAgent = await createMockIdleAgent(workspace.client, {
         cwd: workspace.repoPath,
         workspaceId: workspace.workspaceId,
         title: `settings-composer-height-b-${Date.now()}`,
@@ -178,6 +190,8 @@ test.describe("Settings toggle tab regression", () => {
       await openWorkspaceWithAgents(page, [firstAgent, secondAgent]);
       await waitForTabBar(page);
 
+      await openComposerTab(page, firstAgent.id);
+      await openComposerTab(page, secondAgent.id);
       const input = page.getByRole("textbox", { name: "Message agent..." });
       await input.fill("Keep this short draft in the composer");
       const root = page.getByTestId("message-input-root").filter({ visible: true }).first();
@@ -194,6 +208,7 @@ test.describe("Settings toggle tab regression", () => {
 
       const frames = await stopComposerFrameCapture(page);
       const visibleFrames = frames.filter((frame) => frame.visible);
+      expect(visibleFrames.length, "Capture must observe the visible composer").toBeGreaterThan(0);
       const tallestIndex = visibleFrames.reduce(
         (index, frame, candidateIndex) =>
           frame.rootHeight > visibleFrames[index].rootHeight ? candidateIndex : index,
@@ -225,12 +240,12 @@ test.describe("Settings toggle tab regression", () => {
     const workspace = await seedWorkspace({ repoPrefix: "agent-route-refresh-" });
 
     try {
-      const firstAgent = await createIdleAgent(workspace.client, {
+      const firstAgent = await createMockIdleAgent(workspace.client, {
         cwd: workspace.repoPath,
         workspaceId: workspace.workspaceId,
         title: `agent-route-refresh-a-${Date.now()}`,
       });
-      const secondAgent = await createIdleAgent(workspace.client, {
+      const secondAgent = await createMockIdleAgent(workspace.client, {
         cwd: workspace.repoPath,
         workspaceId: workspace.workspaceId,
         title: `agent-route-refresh-b-${Date.now()}`,

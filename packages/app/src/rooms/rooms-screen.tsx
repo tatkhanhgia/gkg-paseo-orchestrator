@@ -21,7 +21,8 @@ import { ScreenTitle } from "@/components/headers/screen-title";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { useIsCompactFormFactor } from "@/constants/layout";
+import { DEFAULT_CONTENT_MAX_WIDTH } from "@/styles/theme";
 import {
   MessageInput,
   type AttachmentMenuItem,
@@ -667,7 +668,7 @@ function RoomComposer({
     [eligibleAgents],
   );
   const textReplacement = useMemo(
-    () => ({ key: String(state.inputRevision), text: state.text }),
+    () => ({ kind: "replace" as const, key: String(state.inputRevision), text: state.text }),
     [state.inputRevision, state.text],
   );
 
@@ -980,7 +981,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   messageList: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: DEFAULT_CONTENT_MAX_WIDTH,
     alignSelf: "center",
     paddingHorizontal: theme.spacing[4],
     paddingVertical: theme.spacing[4],
@@ -1047,7 +1048,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   composer: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: DEFAULT_CONTENT_MAX_WIDTH,
     alignSelf: "center",
     paddingHorizontal: theme.spacing[4],
     paddingVertical: theme.spacing[3],

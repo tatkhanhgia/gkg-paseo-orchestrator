@@ -2,16 +2,43 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ja: TranslationResources = {
+  paneFind: {
+    connectionFailure:
+      "このチャットを検索できませんでした。ホストへの接続を確認して再試行してください。",
+    historyChangedFailure: "検索中にチャットが変更されました。もう一度検索してください。",
+    revealFailure: "この一致を表示できませんでした。再試行してください。",
+    searching: "検索中…",
+    loading: "読み込み中…",
+    failed: "失敗",
+    retry: "再試行",
+
+    title: "検索",
+    placeholder: "ペイン内を検索",
+    close: "検索を閉じる",
+    matches: "検索結果",
+    previous: "前の一致",
+    next: "次の一致",
+    toggleReplace: "置換を切り替え",
+    replaceWith: "置換後の文字列",
+    replace: "置換",
+    replaceAll: "すべて置換",
+    noMatches: "一致なし",
+    position: "{{current}} / {{total}}",
+    total: "{{total}} 件の一致",
+  },
   common: {
+    bottomSheetBackdrop: "ボトムシートの背景",
     back: "戻る",
     loading: "読み込み中...",
     actions: {
+      save: "保存",
       back: "戻る",
       cancel: "キャンセル",
       close: "閉じる",
       copy: "コピー",
       copyLine: "行をコピー",
       dismiss: "閉じる",
+      reload: "再読み込み",
       retry: "再試行",
       search: "検索",
       select: "選択",
@@ -98,6 +125,8 @@ export const ja: TranslationResources = {
     input: {
       accessibilityLabel: "エージェントにメッセージ...",
       terminalAccessibilityLabel: "Terminal prompt",
+      fullscreen: "全画面表示",
+      exitFullscreen: "全画面表示を終了",
       focusHint: "{{shortcut}}でフォーカス",
       addAttachment: "添付ファイルを追加",
       interruptAgent: "エージェントを中断",
@@ -153,7 +182,8 @@ export const ja: TranslationResources = {
       initialPromptRequired: "初期プロンプトが必要です",
       alreadyLoading: "すでに読み込み中です",
       uploadFailed: "ファイルのアップロードに失敗しました",
-      noClipboardImage: "クリップボードに画像がありません",
+      noClipboardImage:
+        "現在のクリップボードに画像がありません。キーボードから貼り付けてみてください。",
       pasteImageFailed: "画像を貼り付けられませんでした",
       fileTooLarge: "{{fileName}}が大きすぎます（最大{{size}}）",
     },
@@ -215,6 +245,10 @@ export const ja: TranslationResources = {
     historyLoadFailed: "エージェントの履歴を読み込めませんでした",
     messageCapped: "このメッセージは上限で切り詰められました（{{bytes}}バイト）。",
     permission: {
+      rejectedPlan: "却下されたプラン",
+      approvedPlan: "承認されたプラン",
+      canceledPlan: "キャンセルされたプラン",
+
       plan: "プラン",
       required: "権限が必要です",
       deny: "拒否",
@@ -228,7 +262,8 @@ export const ja: TranslationResources = {
     states: {
       notFound: "エージェントが見つかりません",
       failedToLoad: "エージェントの読み込みに失敗しました",
-      reconnecting: "再接続中",
+      reconnecting: "ホストに再接続中",
+      updating: "メッセージを更新中",
       timelineSyncFailed: "エージェントの履歴を更新できませんでした。",
       timelineSyncRetrying: "再試行しています…",
       archivingTitle: "エージェントをアーカイブ中...",
@@ -381,6 +416,7 @@ export const ja: TranslationResources = {
       details: "詳細",
     },
     dictation: {
+      paused: "マイクが中断されました。再開を待っています…",
       start: "音声入力を開始",
       cancel: "音声入力をキャンセル",
       retry: "音声入力を再試行",
@@ -390,6 +426,7 @@ export const ja: TranslationResources = {
       failedRetry: "音声入力に失敗しました。再試行をタップしてください。",
     },
     question: {
+      responseFailed: "回答を送信できませんでした。もう一度お試しください。",
       submit: "送信",
       next: "次へ",
       answerPlaceholder: "回答を入力...",
@@ -405,6 +442,9 @@ export const ja: TranslationResources = {
         started: "開始",
         completed: "完了",
       },
+    },
+    turnFooter: {
+      workedFor: "作業時間 {{duration}}",
     },
     compaction: {
       loading: "コンテキストを圧縮中...",
@@ -464,7 +504,9 @@ export const ja: TranslationResources = {
       recovery: {
         archivedTitle: "ワークスペースはアーカイブ済みです",
         restoreDescription:
-          "{{workspaceName}} はアーカイブされ、worktree が削除されました。ブランチ {{branch}} を復元して再度開きます。",
+          "{{workspaceName}} を復元してエージェントに戻ります。worktree ではブランチ {{branch}} を使用します。",
+        restoreWithoutBranchDescription:
+          "{{workspaceName}} を復元してエージェントに戻ります。保存されたベース、またはリポジトリのデフォルトブランチから新しいブランチを作成します。",
         unarchiveDescription:
           "{{workspaceName}} はアーカイブされています。再度開くにはアーカイブを解除してください。",
         restoreAction: "復元",
@@ -553,6 +595,7 @@ export const ja: TranslationResources = {
       },
     },
     setup: {
+      updateHost: "ワークスペースのセットアップ詳細を表示するにはホストを更新してください",
       descriptor: {
         label: "セットアップ",
         completed: "セットアップ完了",
@@ -629,6 +672,12 @@ export const ja: TranslationResources = {
       hostDisconnected: "ホストが接続されていません",
       updateHost: "ネイティブターミナルを使用するにはホストを更新してください。",
       unableToSubscribe: "ターミナルに接続できません",
+      fileUploaded: "ファイルをアップロードしました",
+      pasteFileFailed: "ファイルを貼り付けられませんでした: {{reason}}",
+      uploadingFile: "ファイルをアップロード中…",
+    },
+    sheet: {
+      openAsTab: "タブで開く",
     },
     tabs: {
       loading: "読み込み中...",
@@ -645,7 +694,7 @@ export const ja: TranslationResources = {
       },
       switcher: {
         trigger: "タブを切り替え（{{count}}件開いています）",
-        title: "タブを切り替え",
+        title: "ワークスペースのタブ",
         searchPlaceholder: "タブを検索",
       },
       menu: {
@@ -741,6 +790,7 @@ export const ja: TranslationResources = {
     header: {
       actions: {
         workspaceActions: "ワークスペースアクション",
+        workspaceActionsUnhealthy: "ワークスペースアクション、異常なサービスがあります",
         newAgent: "新しいエージェント",
         newTerminal: "新しいターミナル",
         newBrowser: "新しいブラウザタブ",
@@ -788,6 +838,8 @@ export const ja: TranslationResources = {
         exitCode: "終了コード: {{code}}",
         startFailed: "{{scriptName}}の起動に失敗しました",
         stopFailed: "{{scriptName}}の停止に失敗しました",
+        running: "実行中",
+        runningCount: "{{count}} 件実行中",
       },
     },
     tree: {
@@ -941,6 +993,9 @@ export const ja: TranslationResources = {
         openChangesTab: "変更タブを開く",
         openDiffTab: "差分タブを開く",
         closeChangesTab: "変更タブを閉じる",
+        jumpToFile: {
+          title: "ファイルへ移動",
+        },
         binaryFile: "バイナリファイル",
         tooLarge: "差分が大きすぎて表示できません",
         previewTooLargeTitle: "この差分は大きすぎるためプレビューできません",
@@ -968,6 +1023,7 @@ export const ja: TranslationResources = {
         checkingRepository: "リポジトリを確認中...",
         notRepository: "gitリポジトリではありません",
         diffMode: "差分モード",
+        all: "すべての変更",
         uncommitted: "未コミット",
         committed: "コミット済み",
         branchUnknown: "不明",
@@ -997,6 +1053,47 @@ export const ja: TranslationResources = {
         actions: {
           viewPullRequest: "表示",
           openOn: "{{brand}}で開く",
+          addToChat: "チャットに追加",
+          addAllToChat: "すべてチャットに追加",
+          addingToChat: "追加中...",
+        },
+        checksOverview: {
+          headline: {
+            actionRequired: "対応が必要なチェックがあります",
+            failure: "失敗したチェックがあります",
+            pending: "完了していないチェックがあります",
+            success: "すべてのチェックに合格しました",
+            none: "チェックなし",
+          },
+          count: {
+            actionRequired: "{{count}} 件要対応",
+            warning: "{{count}} 件警告",
+            failure: "{{count}} 件失敗",
+            pending: "{{count}} 件実行中",
+            manual: "{{count}} 件手動",
+            success: "{{count}} 件成功",
+            ignored: "{{count}} 件スキップ",
+          },
+          detailOne: "チェック: {{parts}}",
+          detailMany: "チェック: {{parts}}",
+          groupOne: {
+            actionRequired: "要対応のチェック {{count}} 件",
+            warning: "警告のチェック {{count}} 件",
+            failure: "失敗したチェック {{count}} 件",
+            pending: "実行中のチェック {{count}} 件",
+            manual: "手動のチェック {{count}} 件",
+            success: "成功したチェック {{count}} 件",
+            ignored: "スキップされたチェック {{count}} 件",
+          },
+          groupMany: {
+            actionRequired: "要対応のチェック {{count}} 件",
+            warning: "警告のチェック {{count}} 件",
+            failure: "失敗したチェック {{count}} 件",
+            pending: "実行中のチェック {{count}} 件",
+            manual: "手動のチェック {{count}} 件",
+            success: "成功したチェック {{count}} 件",
+            ignored: "スキップされたチェック {{count}} 件",
+          },
         },
         checksSummary: {
           passedLabel: "成功",
@@ -1010,17 +1107,21 @@ export const ja: TranslationResources = {
           checks: "チェック",
           pipeline: "パイプライン",
           reviews: "レビュー",
+          activity: "アクティビティ",
         },
         empty: {
           noJobs: "ジョブなし",
           loadingPipeline: "パイプラインを読み込み中...",
           pipelineJobsLoadFailed: "パイプラインのジョブを読み込めませんでした",
           allowedToFail: "失敗を許可",
+          noActivity: "まだアクティビティはありません",
         },
         approvals: "{{given}} / {{required}} 承認",
         accessibility: {
           pullRequest: "プルリクエスト#{{number}}",
           pullRequest_mr: "マージリクエスト !{{number}}",
+          commentActions: "コメントの操作",
+          threadActions: "スレッドの操作",
           checkStatus: {
             passed: "成功",
             failed: "失敗",
@@ -1049,6 +1150,8 @@ export const ja: TranslationResources = {
         },
         thread: {
           discussion: "ディスカッションスレッド",
+          resolved: "解決済み",
+          outdated: "古い",
         },
         errors: {
           statusLoadFailed: "プルリクエストのステータスを読み込めません",
@@ -1115,9 +1218,25 @@ export const ja: TranslationResources = {
     },
   },
   sidebar: {
+    statusGroupAccessibility: "{{label}} グループ",
+    statusBucket: {
+      needsInput: "入力待ち",
+      failed: "失敗",
+      readyToReview: "レビュー待ち",
+      working: "実行中",
+      done: "完了",
+    },
     display: {
+      showBackground: "バックグラウンドを表示",
       trigger: "表示設定",
       heading: "表示",
+      sort: {
+        label: "並び順",
+        created: "作成日時",
+        manual: "手動",
+        lastPrompt: "最後のプロンプト",
+        updateHost: "ワークスペースを並べ替えるにはホストを更新してください",
+      },
       grouping: {
         label: "グループ化",
         project: "プロジェクト",
@@ -1175,6 +1294,9 @@ export const ja: TranslationResources = {
       hosts: "ホスト",
       settings: "設定",
       closeSidebar: "サイドバーを閉じる",
+    },
+    footer: {
+      usage: "使用状況",
     },
     help: {
       trigger: "ヘルプとサポート",
@@ -1294,8 +1416,9 @@ export const ja: TranslationResources = {
     },
     fields: {
       project: "プロジェクト",
-      base: "ベース",
+      branch: "ブランチ",
       baseNotApplicable: "該当なし",
+      host: "ホスト",
     },
     titlePlaceholder: "タイトル（任意）",
     errors: {
@@ -1341,6 +1464,7 @@ export const ja: TranslationResources = {
       detail: "ローカルデーモンを停止中。",
     },
     daemon: {
+      lifecycle: en.desktop.daemon.lifecycle,
       title: "デーモン",
       status: {
         title: "ステータス",
@@ -1560,6 +1684,8 @@ export const ja: TranslationResources = {
     noFiles: "ファイルまたはディレクトリが見つかりません",
     noCommands: "コマンドが見つかりません",
     failedToLoad: "読み込みに失敗しました",
+    chooseProjectForCommands: "コマンドを表示するにはプロジェクトを選択してください",
+    chooseModelForCommands: "コマンドを表示するにはモデルを選択してください",
   },
   loadOlderHistory: {
     failed: "古い履歴を読み込めませんでした",
@@ -1628,13 +1754,18 @@ export const ja: TranslationResources = {
     title: "プロバイダーを追加",
     search: "プロバイダーを検索",
     noProviders: "プロバイダーが見つかりません",
+    clearSearch: "検索をクリア",
     actions: {
       add: "追加",
+      addProvider: "{{provider}} を追加",
       adding: "追加中",
       installed: "インストール済み",
       cancel: "キャンセル",
       installInstructions: "インストール手順",
       installInstructionsFor: "{{provider}}のインストール手順",
+    },
+    types: {
+      acp: "ACP",
     },
     errors: {
       unableToInstall: "プロバイダーをインストールできません",
@@ -1657,6 +1788,21 @@ export const ja: TranslationResources = {
     },
   },
   pairing: {
+    hostPassword: {
+      title: "{{host}} のパスワード",
+      label: "ホストのパスワード",
+    },
+    hostConfirmation: {
+      title: "このホストに接続しますか？",
+      description:
+        "このホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      descriptionChanged:
+        "このリンクはこのホストへの接続方法を変更します。ホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      hostLabel: "ホスト",
+      fingerprintLabel: "鍵のフィンガープリント",
+      relayLabel: "リレー",
+      connect: "接続",
+    },
     connectionMethods: {
       title: "接続を追加",
       direct: {
@@ -1723,6 +1869,12 @@ export const ja: TranslationResources = {
       helper: "リモートホストで動作する Paseo デーモンに接続します。",
       fields: {
         target: "SSH ホスト",
+        password: "デーモンのパスワード",
+        optional: "任意",
+      },
+      passwordVisibility: {
+        show: "パスワードを表示",
+        hide: "パスワードを非表示",
       },
       actions: {
         cancel: "キャンセル",
@@ -1858,14 +2010,35 @@ export const ja: TranslationResources = {
       creatingAgent: "エージェントを作成中",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: ".{{extension}} ファイルを開くアプリ",
+        pickerTitleFilename: "{{filename}} を開くアプリ",
+        dontAskAgain: "今後は確認しない",
+        use: "使用",
+        openWith: "このアプリで開く…",
+        alwaysUseExtension: ".{{extension}} に常に使用",
+        alwaysUseFilename: "{{filename}} に常に使用",
+        option: "{{title}} — {{owner}}",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "画像",
+          source: "ソース",
+        },
+      },
       directoryMissing: "ワークスペースディレクトリが見つかりません。",
       loading: "ファイルを読み込み中...",
       noPreview: "プレビューが利用できません",
       binaryPreviewUnavailable: "バイナリプレビューが利用できません",
       tooLargeToDisplay: "このファイルは大きすぎて表示できません",
+      documentUnsupported: "{{type}} ファイルはこのデバイスでは表示できません",
       failedToLoad: "ファイルの読み込みに失敗しました",
+      notFound: "ファイルが見つかりません",
       failedToLoadPreview: "ファイルプレビューの読み込みに失敗しました",
       editor: {
+        preview: "プレビュー",
+        source: "ソース",
         fileSize: "ファイルサイズ {{size}}",
         lines: "{{count}} 行",
         editorStatus: "エディターの状態 {{status}}",
@@ -1875,10 +2048,7 @@ export const ja: TranslationResources = {
         changedOnDisk: "ディスク上で変更されました",
         vimMode: "Vim モード {{mode}}",
         cursor: "{{line}} 行、{{column}} 列",
-        preview: "プレビュー",
-        source: "ソース",
         deletedTitle: "ファイルはディスク上から削除されました",
-        checkFailedTitle: "ディスク上のファイルを確認できませんでした",
         preservedDescription: "開いているコピーは保持されています。",
         conflictDescription: "ローカルの内容は保持されています。残すバージョンを選択してください。",
         overwrite: "上書き",
@@ -1965,6 +2135,8 @@ export const ja: TranslationResources = {
     dismiss: "閉じる",
   },
   contextWindow: {
+    noData: "コンテキストデータがありません",
+    accessibilityNoData: "コンテキストウィンドウ：コンテキストデータがありません",
     title: "コンテキストウィンドウ",
     used: "{{percentage}}%使用",
     tokens: "{{used}} / {{max}}トークン",
@@ -1972,6 +2144,18 @@ export const ja: TranslationResources = {
     accessibility: "コンテキストウィンドウ{{percentage}}%使用",
   },
   review: {
+    feedback: {
+      send: "フィードバックを送信 ({{count}})",
+      sending: "フィードバックを送信中 ({{count}})",
+      chooseAgent: "エージェントを選択",
+      sent: "{{recipient}} にフィードバックを送信しました",
+      "no-agents":
+        "フィードバックを送信するには、このワークスペースでエージェントタブを開いてください。",
+      disconnected: "フィードバックを送信するにはホストに接続してください。",
+      "no-context": "保存したコメントはこの差分と一致しなくなりました。",
+      failed: "フィードバックを送信できませんでした。もう一度お試しください。",
+      prompt: "このコードレビューに対応してください。",
+    },
     comment: {
       add: "レビューコメントを追加",
       edit: "レビューコメントを編集",
@@ -1982,6 +2166,70 @@ export const ja: TranslationResources = {
       cancelAccessibility: "レビューコメントをキャンセル",
       save: "コメント",
       saveAccessibility: "レビューコメントを保存",
+    },
+  },
+  providerUsage: {
+    options: "設定",
+    refreshFailed: "使用状況を更新できません",
+    noHosts: "接続中のホストがありません",
+    agentError: "使用状況を読み込めません: {{reason}}",
+    pin: "ピン留め",
+    unpin: "ピン留めを解除",
+    displayAs: "割合",
+    displayUsed: "使用済み",
+    displayRemaining: "残り",
+    showInSidebar: "サイドバーに概要を表示",
+    showInSidebarHint: "ピン留めした期間をサイドバーの下部に表示します",
+    runToRefresh: "{{command}} を実行して更新してください。",
+    signInAgain: "再度サインインしてください。",
+    loginRejected: "ログインが拒否されました (HTTP {{status}})。{{remedy}}",
+    loginExpired: "ログインは{{relativeTime}}に期限切れになりました。{{remedy}}",
+    title: "プラン使用量",
+    refresh: "更新",
+    refreshAll: "すべて更新",
+    refreshing: "更新中...",
+    loading: "使用状況を読み込み中...",
+    empty: "使用状況データがありません",
+    errorTitle: "使用状況を読み込めません",
+    hostUnavailable: "{{host}} に接続してプロバイダーの使用状況を確認してください",
+    hostUpgradeRequired: "{{host}} を更新してプロバイダーの使用状況を確認してください",
+    clientUnavailable: "ホスト接続の準備ができていません",
+    retry: "再試行",
+    tooltipLoading: "プラン使用状況を読み込み中...",
+    status: {
+      error: "エラー",
+      unavailable: "利用不可",
+    },
+    values: {
+      used: "{{percentage}} 使用済み",
+      remaining: "残り {{amount}}",
+    },
+    labels: {
+      session: "セッション",
+      weekly: "週間",
+      monthly: "月間",
+      codeReview: "コードレビュー",
+      credits: "クレジット",
+      monthlyCredits: "月間クレジット",
+    },
+    duration: {
+      days: "{{value}}日",
+      hours: "{{value}}時間",
+      minutes: "{{value}}分",
+    },
+    timing: {
+      lastUpdated: "最終更新: {{relativeTime}}",
+      noSuccessfulUpdate: "正常な更新はまだありません",
+      resetTimePassed: "リセット時刻を過ぎています",
+      resettingNow: "まもなくリセット",
+      resetsIn: "{{duration}}後にリセット",
+      runsOutNow: "まもなく上限に到達",
+      runsOutIn: "{{duration}}後に上限に到達",
+      justNow: "たった今",
+      daysAgo: "{{value}}日前",
+      hoursAgo: "{{value}}時間前",
+      minutesAgo: "{{value}}分前",
+      updated: "更新: {{relativeTime}}",
     },
   },
   settings: {
@@ -2006,9 +2254,13 @@ export const ja: TranslationResources = {
     groupInfo: "{{title}}について",
     sections: {
       general: "一般",
+      chat: "チャット",
       appearance: "外観",
-      layout: en.settings.sections.layout,
+      sidebar: "サイドバー",
+      terminal: "ターミナル",
+      browser: "ブラウザ",
       editor: "エディター",
+      files: "ファイル",
       shortcuts: "ショートカット",
       integrations: "連携",
       notifications: "通知",
@@ -2021,6 +2273,14 @@ export const ja: TranslationResources = {
       title: "エディター",
       vimKeybindings: "Vim キーバインド",
       vimHint: "Web とデスクトップのソースファイルに適用されます。",
+    },
+    files: {
+      title: "ファイル",
+      askEveryTime: "毎回確認する",
+      askAgain: "もう一度確認する",
+      askAgainFor: "{{label}} をもう一度確認する",
+      unavailable: "接続中のホストにありません",
+      empty: "プラグインがファイルパネルを追加すると、ここに表示されます",
     },
     notifications: {
       title: "通知",
@@ -2060,12 +2320,13 @@ export const ja: TranslationResources = {
       automaticHint: "Paseo が利用可能な高速モデルを選択します",
       preferredHint: "Paseo が使用するモデルを選択します",
       model: "モデル",
-      fallbackHint: "利用できない場合、Paseo は別の利用可能なモデルを使用します",
+      modelHint: "このモデルのみを使用します。失敗しても、Paseo は別のモデルを試しません",
       docs: "ドキュメント",
       saveError: "メタデータ生成を更新できません",
     },
     general: {
       title: "一般",
+      sending: "送信",
       browserData: {
         title: "ブラウザーデータ",
         siteData: "Cookie とサイトデータ",
@@ -2092,8 +2353,6 @@ export const ja: TranslationResources = {
         },
       },
       serviceUrls: {
-        label: "サービスURL",
-        description: "実行中のスクリプトからURLを開く場所",
         options: {
           ask: "確認する",
           inApp: "Paseoで",
@@ -2112,7 +2371,6 @@ export const ja: TranslationResources = {
       toolCallDetail: {
         label: "ツール呼び出しの表示",
         description: "タイムラインでのツール呼び出しの表示方法",
-        accessibilityLabel: "ツール呼び出しの表示を選択（{{value}}）",
         options: {
           overview: "要約",
           detailed: "すべての詳細",
@@ -2137,11 +2395,6 @@ export const ja: TranslationResources = {
     },
     diagnostics: {
       title: "診断",
-      legacyTerminalRenderer: {
-        label: "以前のターミナルレンダラーを使用",
-        description: "ターミナルを開き直した後、以前の WebView ターミナルを使用します",
-        accessibilityLabel: "以前のターミナルレンダラーを使用",
-      },
       testAudio: "音声をテスト",
       playTest: "テスト再生",
       playing: "再生中...",
@@ -2215,8 +2468,15 @@ export const ja: TranslationResources = {
         description: "プロンプト間を移動するためのアウトラインを表示します",
       },
       sidebar: {
-        title: "サイドバー",
-        description: "サイドバー上部に表示する項目とその順序を選択します",
+        header: {
+          title: "ヘッダー",
+          description: "サイドバー上部に表示する項目とその順序を選択します",
+        },
+        footer: {
+          title: "フッター",
+          description:
+            "サイドバー下部に表示する行とその順序を選択します。プロジェクトを追加とアイコンの行は常に表示されます",
+        },
         moveUp: "上に移動",
         moveDown: "下に移動",
       },
@@ -2241,6 +2501,14 @@ export const ja: TranslationResources = {
         codeSizeHint: "コード、差分、ターミナル出力に使用されます",
         codeSizeAccessibility: "コードフォントサイズ",
       },
+      layout: {
+        title: "レイアウト",
+        contentWidth: "コンテンツ幅",
+        contentWidthHint: "ワイド画面でのチャットと Markdown ファイルの最大幅",
+        contentWidthAccessibility: "コンテンツ幅 (ピクセル)",
+        reset: "リセット",
+        resetAccessibility: "コンテンツ幅をデフォルトに戻す",
+      },
       syntax: {
         title: "構文ハイライト",
         highlightTheme: "ハイライトテーマ",
@@ -2256,6 +2524,7 @@ export const ja: TranslationResources = {
       searchPlaceholder: "ショートカットを検索",
       unavailableOnMobile: "キーボードショートカットはデスクトップでのみ利用できます",
       capturePrompt: "ショートカットを押してください...",
+      captureIndexPrompt: "最後に1〜9の数字を入力してください。",
       unassigned: "未設定",
       actions: {
         menu: "{{name}} のアクション",
@@ -2352,6 +2621,10 @@ export const ja: TranslationResources = {
       },
     },
     host: {
+      password: {
+        guidance:
+          "このホストを削除し、このデーモンが求めるパスワードを入力して追加し直してください。",
+      },
       appearance: {
         title: "外観",
         name: {

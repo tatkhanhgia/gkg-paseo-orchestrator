@@ -24,7 +24,11 @@ test("downstream hard gate rejects catalog and command pin mismatch", (t) => {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const fixturePath = path.join(directory, "acp-provider-catalog.ts");
   const source = readFileSync(catalogPath, "utf8");
-  const mismatched = source.replace("@qwen-code/qwen-code@0.21.13", "@qwen-code/qwen-code@0.21.12");
+  // Bump only the command selector's patch so it no longer matches the entry's version field.
+  const mismatched = source.replace(
+    /@qwen-code\/qwen-code@(\d+\.\d+\.)(\d+)/,
+    (_match, prefix, patch) => `@qwen-code/qwen-code@${prefix}${Number(patch) + 1}`,
+  );
   assert.notEqual(mismatched, source);
   writeFileSync(fixturePath, mismatched);
 

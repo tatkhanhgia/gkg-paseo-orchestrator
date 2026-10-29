@@ -4,7 +4,7 @@ import { Pressable, ScrollView, Text, View, type PressableStateCallbackType } fr
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { BeadsIssue } from "@getpaseo/protocol/beads/rpc-schemas";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import type { PanelRegistration } from "@/panels/panel-registry";
+import { definePanel } from "@/panels/panel-registry";
 import {
   formatTopologyAssignment,
   TOPOLOGY_EDGE_LABELS,
@@ -234,13 +234,10 @@ function TopologyPanel() {
   );
 }
 
-export const topologyPanelRegistration: PanelRegistration<"topology"> = {
-  kind: "topology",
-  supportedHosts: ["main"],
-  resourceKey: () => "topology",
+export const topologyPanelRegistration = definePanel("topology", {
   component: TopologyPanel,
   useDescriptor: useTopologyPanelDescriptor,
-};
+});
 
 const styles = StyleSheet.create((theme) => ({
   container: { flex: 1, backgroundColor: theme.colors.surface0 },

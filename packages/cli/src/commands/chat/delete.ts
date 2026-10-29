@@ -8,7 +8,7 @@ export async function runDeleteCommand(
   options: ChatCommandOptions,
   _command: Command,
 ): Promise<SingleResult<ChatRoomRow>> {
-  const { client } = await connectChatClient(options.host);
+  const { client } = await connectChatClient(options.daemonTarget);
   try {
     const payload = await client.deleteChatRoom({ room });
     return {

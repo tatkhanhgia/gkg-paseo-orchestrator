@@ -62,6 +62,8 @@ npm run format:check                 # Check formatting without writing
 
 Repo dev commands use checkout-local state by default. In this checkout, `PASEO_HOME` resolves to `.dev/paseo-home`, and `npm run cli -- ...` targets that same dev home automatically. The packaged desktop app and production-style daemon keep using `~/.paseo` on port `6767`.
 
+When Mo requests an APK, use `npm run build:apk:arm64` for an ARM64 build: writes `artifacts/paseo-dogfood-arm64.apk` with diagnostics without starting a device; `npm run build:apk` builds all four Android architectures.
+
 See [docs/development.md](docs/development.md) for full setup, build sync requirements, and debugging.
 `local-stack.sh --apply` needs a pinned release toolchain (Node, uv, Python, bd); see
 [Local release build](docs/release.md#local-release-build).
@@ -88,6 +90,7 @@ and updating `next`, integrating it after a release, and releasing a hotfix from
   - Never re-run a test suite that another agent already ran and reported green — trust the result.
   - For full suite verification, push to CI and check GitHub Actions instead.
 - **NEVER kill processes by pattern (`pkill`, `killall`, `pgrep … | xargs kill`).** macOS pkill stops parsing options at the first pattern, so `pkill -f vitest -n` also treats `-n` as a pattern and SIGTERMs every process whose argv contains `-n` — every role-bound Claude agent (`--plugin-dir-no-mcp`) plus unrelated apps. That killed five agents at once. Kill only a PID you started yourself (`cmd & pid=$!; …; kill "$pid"`), and bound hung tests with `--testTimeout` instead.
+- Add tests to existing suites and reuse their npm scripts and CI jobs instead of creating feature-specific ones.
 - **Always run typecheck and lint after every change.**
 - **Build workspace packages before diagnosing cross-package type errors.** This repo consumes generated declarations across workspaces. If typecheck fails in a package that depends on another workspace, rebuild the owning stack first so `dist` declarations are current:
   - `npm run build:client` — rebuild protocol and client declarations.

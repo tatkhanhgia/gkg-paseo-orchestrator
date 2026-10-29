@@ -17,6 +17,7 @@ from the code or external sources.
 | [floating-panels.md](floating-panels.md) | Anchored popovers — Portal/Modal escape for Android, lifecycle gates, keyboard-shared-value, status-bar offset, the flash |
 | [menus.md](menus.md) | The menu engine — popover vs sheet, submenu pages, hover intent, when a decision earns a submenu |
 | [expo-router.md](expo-router.md) | Expo Router route ownership, startup restore, and native blank-screen gotchas |
+| [notifications.md](notifications.md) | Notification tap ownership, native replay and acknowledgement, startup handoff, and payload QA |
 | [file-icons.md](file-icons.md) | Material icon theme integration for the file explorer |
 | [providers.md](providers.md) | Adding a new agent provider end-to-end |
 | [forge-providers.md](forge-providers.md) | Adding a git forge: registry/manifest, drop-in checklist, self-host/GHES, the two facts tiers |
@@ -37,12 +38,17 @@ from the code or external sources.
 | [skill-system.md](skill-system.md) | Paseo workflow skills, Foundation role bundles, admission, triggers, and provider projection |
 | [dev-pilot.md](dev-pilot.md) | Controlled macOS dev-pilot install, qualification, stop conditions, rollback, and known limits |
 | [plugins.md](plugins.md) | Local plugin manifest, directory source config, RPCs, native surfaces, and attachment sources |
+| [website-i18n.md](website-i18n.md) | Website languages: locale URLs, translated Markdown pairs, `{#id}` anchors, Chinese style |
 | [service-proxy.md](service-proxy.md) | Service proxy: exposing workspace scripts at public URLs, DNS setup, reverse proxy config |
+| [relay-endpoint-security.md](relay-endpoint-security.md) | Relay E2EE modes: Noise NK mapping, record framing, negotiation, the `requireProtectedSecurity` flag, close codes |
 | [development.md](development.md) | Dev server, build sync gotchas, CLI reference, agent state, Playwright MCP |
 | [rpc-namespacing.md](rpc-namespacing.md) | WebSocket RPC naming convention — dotted namespaces and `.request`/`.response` pairs |
 | [protocol-compatibility.md](protocol-compatibility.md) | Why app/daemon versions drift, protocol vs feature contract, capability gating, COMPAT tagging |
 | [protocol-validation.md](protocol-validation.md) | zod-aot generated inbound WebSocket validation, patched compiler regressions, schema-purity rules |
+| [connected-hosts.md](connected-hosts.md) | Daemon-owned host registrations, routed SDK scopes, identity and authority boundaries |
 | [terminal-performance.md](terminal-performance.md) | Terminal latency pipeline, coalescing/backpressure invariants, benchmark + perf spec usage |
+| [markdown-renderer.md](markdown-renderer.md) | Shared Markdown engine, native selection, links, images and library constraints |
+| [native-text-selection.md](native-text-selection.md) | Native diagram grouping, selection boundaries and leading inline image limitations |
 | [file-observation.md](file-observation.md) | Recursive watcher ownership, Linux constraints, teardown invariants, and Parcel comparison |
 | [testing.md](testing.md) | TDD workflow, determinism, real dependencies over mocks, test organization |
 | [qa.md](qa.md) | QA evidence bar for pull requests — platform matrix, version drift, performance, UI proof |

@@ -13,6 +13,7 @@ import { hubStatusResult } from "./status-output.js";
 
 interface HubPermissionsOptions {
   host?: string;
+  daemonTarget: import("../../utils/daemon-target.js").DaemonTarget;
   json?: boolean;
 }
 
@@ -39,7 +40,7 @@ export function runHubPermissionsList(
   options: HubPermissionsOptions,
   dependencies: HubPermissionsDependencies,
 ): Promise<ListResult<PermissionRow>> {
-  return withHubDaemon(dependencies.daemon, options.host, async (client) => {
+  return withHubDaemon(dependencies.daemon, options.daemonTarget, async (client) => {
     const status = (await client.getHubStatus()).status;
     requireConnectedHub(status);
     return {
@@ -60,7 +61,7 @@ export async function runHubPermissionChange(
   dependencies: HubPermissionsDependencies,
 ) {
   assertHubPermissionChangeHumanContext(dependencies.env);
-  return await withHubDaemon(dependencies.daemon, options.host, async (client) => {
+  return await withHubDaemon(dependencies.daemon, options.daemonTarget, async (client) => {
     const current = (await client.getHubStatus()).status;
     requireConnectedHub(current);
     const response = await client.updateHubPermissions(

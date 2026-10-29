@@ -115,10 +115,10 @@ export async function runSignalCommand(
   _command: Command,
 ): Promise<SingleResult<AgentSignalResult>> {
   const options = commandOptions as AgentSignalOptions;
-  const host = getDaemonHost({ host: options.host });
+  const host = getDaemonHost({ target: options.daemonTarget });
   let client: DaemonClient;
   try {
-    client = await connectToDaemon({ host: options.host });
+    client = await connectToDaemon({ target: options.daemonTarget });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw {

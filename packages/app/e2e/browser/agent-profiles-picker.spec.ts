@@ -6,7 +6,9 @@ import {
   expectAgentProfilesEmptyPrompt,
   expectProfileEditTooltip,
   expectComposerMode,
+  expectCreateProfileFromModelRow,
   expectComposerModel,
+  expectModelRowProfileActionBesideRow,
   expectModelRowSelected,
   expectAgentProfile,
   expectProfileEditIsPencilOnly,
@@ -16,6 +18,7 @@ import {
   openAgentProfilesFromEmptyPrompt,
   profilePickerRow,
   seedAgentProfiles,
+  selectModelRow,
 } from "../support/helpers/agent-profiles";
 import { expectWorkspaceAgentConfiguration } from "../support/helpers/command-center-agent-controls";
 import { expectComposerVisible } from "../support/helpers/composer";
@@ -150,6 +153,36 @@ test.describe("Agent profiles in the model picker", () => {
         tags: ["Peer Engineer", MOCK_PROVIDER_LABEL, "One minute stream", "Approval test"],
         notes: PEER_ROUTING_PROFILE.notes,
       });
+    } finally {
+      await workspace.cleanup();
+      await seed.restore();
+    }
+  });
+
+  test("a model row and its create-profile action are separate buttons", async ({ page }) => {
+    const seed = await seedAgentProfiles([]);
+    const workspace = await seedMockAgentWorkspace({
+      repoPrefix: "agent-profiles-row-action-",
+      title: "Agent profiles row action",
+      model: "ten-second-stream",
+      modeId: "load-test",
+    });
+
+    try {
+      const oneMinute = {
+        provider: "mock",
+        modelId: "one-minute-stream",
+        modelLabel: "One minute stream",
+      };
+      await openAgentRoute(page, workspace);
+      await expectComposerVisible(page);
+      await openModelPicker(page);
+      await expectModelRowProfileActionBesideRow(page, oneMinute);
+      await expectCreateProfileFromModelRow(page, oneMinute);
+      await expectComposerModel(page, "Ten second stream");
+      await openModelPicker(page);
+      await selectModelRow(page, oneMinute);
+      await expectComposerModel(page, oneMinute.modelLabel);
     } finally {
       await workspace.cleanup();
       await seed.restore();

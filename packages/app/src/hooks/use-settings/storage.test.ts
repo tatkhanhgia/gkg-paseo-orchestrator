@@ -14,6 +14,8 @@ import {
   loadSettingsFromStorage,
   parseClampedFontSize,
   parseTerminalScrollbackLines,
+  resolveContentMaxWidth,
+  sanitizeFontFamily,
   saveAppSettings,
   type SettingsDeps,
 } from "./storage";
@@ -22,7 +24,7 @@ import {
   DEFAULT_SIDEBAR_ROW_ITEMS,
   SIDEBAR_ROW_ITEMS,
 } from "@/components/sidebar/display-preferences/row-items";
-import { THEME_OPTIONS } from "@/styles/theme";
+import { DEFAULT_CONTENT_MAX_WIDTH, THEME_OPTIONS } from "@/styles/theme";
 
 const LEGACY_SETTINGS_KEY = "@paseo:settings";
 
@@ -42,6 +44,33 @@ function makeDeps(
 }
 
 describe("loadAppSettingsFromStorage", () => {
+  it("persists file panel associations, including panels absent from this host", async () => {
+    const deps = makeDeps();
+    const queryClient = new QueryClient();
+    const filePanelAssociations = {
+      "ext:md": "builtin:markdown",
+      "name:Dockerfile": "plugin:absent/container",
+    };
+    await saveAppSettings({ queryClient, deps, updates: { filePanelAssociations } });
+    expect((await loadAppSettingsFromStorage(deps)).filePanelAssociations).toEqual(
+      filePanelAssociations,
+    );
+  });
+
+  it.each([undefined, null, [], "invalid", { "ext:md": 42 }])(
+    "defaults malformed file panel associations without discarding other settings: %j",
+    async (filePanelAssociations) => {
+      const deps = makeDeps({
+        storage: createInMemoryKeyValueStorage({
+          [APP_SETTINGS_KEY]: JSON.stringify({ filePanelAssociations, vimKeybindings: true }),
+        }),
+      });
+      const settings = await loadAppSettingsFromStorage(deps);
+      expect(settings.filePanelAssociations).toEqual({});
+      expect(settings.vimKeybindings).toBe(true);
+    },
+  );
+
   it("preserves a persisted steer send behavior", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
@@ -237,6 +266,98 @@ describe("loadAppSettingsFromStorage", () => {
     expect(result.sidebarNavItems).toEqual([]);
   });
 
+  it("loads stored sidebar footer items in order and defaults them to empty", async () => {
+    expect((await loadAppSettingsFromStorage(makeDeps())).sidebarFooterItems).toEqual([]);
+
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          sidebarFooterItems: [
+            // A footer button that was configurable once; the sidebar model skips it.
+            { key: "help", visible: false },
+            { key: "plugin:sync:status", visible: true },
+            { key: "usage", visible: false },
+          ],
+        }),
+      }),
+    });
+
+    const result = await loadAppSettingsFromStorage(deps);
+
+    expect(result.sidebarFooterItems).toEqual([
+      { key: "help", visible: false },
+      { key: "plugin:sync:status", visible: true },
+      { key: "usage", visible: false },
+    ]);
+  });
+
+  it("loads legacy usage pins in order and defaults a fresh device to source defaults", async () => {
+    expect((await loadAppSettingsFromStorage(makeDeps())).usage).toEqual({
+      displayAs: "used",
+      pins: null,
+      serverId: null,
+    });
+
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          usage: {
+            displayAs: "remaining",
+            pinned: [
+              { sourceId: "codex", windowId: "weekly" },
+              { sourceId: "claude", windowId: "five-hour" },
+            ],
+            serverId: "server",
+          },
+        }),
+      }),
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).usage).toEqual({
+      displayAs: "remaining",
+      pins: [
+        { sourceId: "codex", windowId: "weekly" },
+        { sourceId: "claude", windowId: "five-hour" },
+      ],
+      serverId: "server",
+    });
+  });
+
+  it("loads an explicitly empty usage selection without restoring defaults", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          usage: { displayAs: "remaining", pins: [], serverId: "server" },
+        }),
+      }),
+    });
+    expect((await loadAppSettingsFromStorage(deps)).usage).toEqual({
+      displayAs: "remaining",
+      pins: [],
+      serverId: "server",
+    });
+  });
+
+  it("keeps valid usage preferences when one field is malformed", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          usage: {
+            displayAs: "percent",
+            pinned: [{ sourceId: "claude", windowId: "weekly" }],
+            serverId: 42,
+          },
+        }),
+      }),
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).usage).toEqual({
+      displayAs: "used",
+      pins: [{ sourceId: "claude", windowId: "weekly" }],
+      serverId: null,
+    });
+  });
+
   it("collapses legacy diff destinations into the former Explorer choice", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
@@ -266,26 +387,6 @@ describe("loadAppSettingsFromStorage", () => {
     expect(defaults.pullRequestOpenLocation).toBe("explorer");
     expect(legacySide.pullRequestOpenLocation).toBe("side");
     expect(legacySide.openInSidePane).not.toHaveProperty("pullRequests");
-  });
-
-  it("uses the native terminal renderer by default", async () => {
-    const deps = makeDeps();
-
-    const result = await loadAppSettingsFromStorage(deps);
-
-    expect(result.useLegacyTerminalRenderer).toBe(false);
-  });
-
-  it("loads the per-device legacy terminal renderer preference", async () => {
-    const deps = makeDeps({
-      storage: createInMemoryKeyValueStorage({
-        [APP_SETTINGS_KEY]: JSON.stringify({ useLegacyTerminalRenderer: true }),
-      }),
-    });
-
-    const result = await loadAppSettingsFromStorage(deps);
-
-    expect(result.useLegacyTerminalRenderer).toBe(true);
   });
 
   it("loads configured terminal scrollback lines from app settings", async () => {
@@ -954,4 +1055,81 @@ describe("parseClampedFontSize", () => {
     expect(parseClampedFontSize("15", { min: 11, max: 24 })).toBe(15);
     expect(parseClampedFontSize("abc", { min: 11, max: 24 })).toBeNull();
   });
+});
+
+describe("content max width", () => {
+  it("follows the current default until the user picks a width", async () => {
+    const deps = makeDeps();
+    const queryClient = new QueryClient();
+
+    await saveAppSettings({ queryClient, updates: { codeFontSize: 14 }, deps });
+
+    const stored = JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "null");
+    expect(stored.contentMaxWidth).toBeNull();
+    expect(resolveContentMaxWidth(await loadAppSettingsFromStorage(deps))).toBe(
+      DEFAULT_CONTENT_MAX_WIDTH,
+    );
+  });
+
+  it("keeps a picked width and returns to the default when reset", async () => {
+    const deps = makeDeps();
+    const queryClient = new QueryClient();
+
+    await saveAppSettings({ queryClient, updates: { contentMaxWidth: 1600 }, deps });
+    expect(resolveContentMaxWidth(await loadAppSettingsFromStorage(deps))).toBe(1600);
+
+    await saveAppSettings({ queryClient, updates: { contentMaxWidth: null }, deps });
+    expect(JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "null").contentMaxWidth).toBe(
+      null,
+    );
+    expect(resolveContentMaxWidth(await loadAppSettingsFromStorage(deps))).toBe(
+      DEFAULT_CONTENT_MAX_WIDTH,
+    );
+  });
+
+  it("clamps stored widths and drops malformed ones to the default", async () => {
+    const load = (contentMaxWidth: unknown) =>
+      loadAppSettingsFromStorage(
+        makeDeps({
+          storage: createInMemoryKeyValueStorage({
+            [APP_SETTINGS_KEY]: JSON.stringify({ contentMaxWidth }),
+          }),
+        }),
+      );
+
+    expect((await load(100_000)).contentMaxWidth).toBe(4000);
+    expect((await load(10)).contentMaxWidth).toBe(600);
+    expect((await load("wide")).contentMaxWidth).toBeNull();
+  });
+});
+
+describe("font family CSS safety", () => {
+  it.each(["'foo", '"foo', "Menlo, 'foo", "foo\\", "foo/*", "foo(", "foo["])(
+    "rejects unfinished CSS syntax: %s",
+    (value) => expect(sanitizeFontFamily(value)).toBeNull(),
+  );
+
+  it.each([
+    "Menlo",
+    "'Fira Code', monospace",
+    '"Fira Code", monospace',
+    "'Font\\'s name'",
+    "Font\\ Name",
+    "'Font (Mono)'",
+    "'Font [Mono]'",
+  ])("preserves complete font families: %s", (value) =>
+    expect(sanitizeFontFamily(value)).toBe(value),
+  );
+
+  it.each(["uiFontFamily", "monoFontFamily"])(
+    "recovers a persisted unmatched quote in %s",
+    async (field) => {
+      const deps = makeDeps({
+        storage: createInMemoryKeyValueStorage({
+          [APP_SETTINGS_KEY]: JSON.stringify({ [field]: "'foo" }),
+        }),
+      });
+      expect(await loadAppSettingsFromStorage(deps)).toMatchObject({ [field]: "" });
+    },
+  );
 });

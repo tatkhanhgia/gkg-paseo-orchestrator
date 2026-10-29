@@ -42,7 +42,7 @@ describe("Project Harness public transport", () => {
 
     try {
       await client.connect();
-      await client.fetchAgents({ subscribe: { subscriptionId: "project-harness-transport" } });
+      await client.fetchAgents({ subscribe: {} });
 
       const projectResponse = await client.addProject(projectRoot, "transport-project");
       expect(projectResponse.error).toBeNull();

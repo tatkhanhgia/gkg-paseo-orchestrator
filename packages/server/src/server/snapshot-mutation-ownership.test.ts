@@ -1,4 +1,9 @@
-import { createAgentRequestsStub } from "./test-utils/session-stubs.js";
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
+import { createAgentMessageDeliveryStub } from "./test-utils/session-stubs.js";
+import {
+  createMessageReceiptsStub,
+  createTestCreationService,
+} from "./test-utils/session-stubs.js";
 import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -100,7 +105,10 @@ describe("snapshot mutation ownership boundary", () => {
 
     const session = asInternals<SessionInternals>(
       new Session({
-        agentRequests: createAgentRequestsStub(),
+        workspaceRuntimeStore: createWorkspaceRuntimeStore(),
+        messageReceipts: createMessageReceiptsStub(),
+        agentMessages: createAgentMessageDeliveryStub(),
+        creationService: createTestCreationService(),
         clientId: "test-client",
         permissions: OWNER_PERMISSIONS,
         onMessage,

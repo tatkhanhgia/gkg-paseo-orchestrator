@@ -14,7 +14,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  StatusBar,
   View,
   type StyleProp,
   type ViewStyle,
@@ -38,7 +37,7 @@ import {
   type Placement,
   type Rect,
   type Size,
-} from "./menu-anchor";
+} from "../anchor";
 
 const SCROLL_CONTENT_STYLE = { flexGrow: 1 } as const;
 const CONTENT_ENTERING_DURATION_MS = 150;
@@ -162,16 +161,13 @@ export function useAnchoredPosition({
       return undefined;
     }
 
-    // Capture status bar height synchronously before async measurement, so it cannot change
-    // or read back null between the measure call and its resolution.
-    const statusBarHeight = Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) : 0;
     let cancelled = false;
 
+    // The app draws edge-to-edge, so measureInWindow and the full-screen Modal share one
+    // coordinate space that starts at the screen top; no status bar offset applies.
     void measureElement(anchorRef.current).then((rect) => {
       if (cancelled) return undefined;
-      // On Android with statusBarTranslucent, measureInWindow returns coordinates relative to
-      // below the status bar while Modal content starts at the screen top.
-      setTriggerRect({ ...rect, y: rect.y + statusBarHeight });
+      setTriggerRect(rect);
       return undefined;
     });
 
@@ -292,8 +288,16 @@ export function AnchoredSurface({
     revision,
   });
 
+  // The surface is placed once both measurements land. Until then it sits off-screen so it can
+  // be measured, and it must not animate: Reanimated's web entering path snapshots the element's
+  // rect when the animation ends and writes that rect back as inline top/left when it cleans the
+  // keyframe up 750ms later. If the animation ends before placement, the snapshot is the
+  // off-screen rect and the menu jumps back off-screen. Remounting on placement starts the
+  // animation from the final position.
+  const placed = position !== null;
+
   useEffect(() => {
-    if (!isWeb || !open || !contentSize || typeof document === "undefined") return undefined;
+    if (!isWeb || !open || !placed || typeof document === "undefined") return undefined;
     const frame = requestAnimationFrame(() => {
       document
         .getElementById(surfaceNativeID)
@@ -301,7 +305,7 @@ export function AnchoredSurface({
         ?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [contentSize, open, surfaceNativeID]);
+  }, [open, placed, surfaceNativeID]);
 
   const frameStyle = useMemo<StyleProp<ViewStyle>>(() => {
     const { width: screenWidth } = Dimensions.get("window");
@@ -371,6 +375,7 @@ export function AnchoredSurface({
         />
       ) : null}
       <FloatingSurface
+        key={placed ? "placed" : "measuring"}
         collapsable={false}
         tabIndex={-1}
         nativeID={surfaceNativeID}
@@ -378,9 +383,9 @@ export function AnchoredSurface({
         dataSet={surfaceDataSet}
         style={styles.content}
         frameStyle={frameStyle}
-        entering={contentEntering}
+        entering={placed ? contentEntering : undefined}
         exiting={
-          isWeb || !onExited
+          !placed || isWeb || !onExited
             ? undefined
             : contentExiting.withCallback((finished) => {
                 "worklet";
@@ -518,7 +523,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
   },
   overlayWeb: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     pointerEvents: "auto" as const,
   },
   backdrop: {

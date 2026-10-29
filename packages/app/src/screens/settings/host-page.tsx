@@ -33,16 +33,10 @@ import {
   ProfileDraft,
   TerminalProfileEditModal,
 } from "@/screens/settings/terminal-profile-edit-modal";
-import { getIsElectron } from "@/constants/platform";
-import {
-  getDesktopDaemonStatus,
-  restartDesktopDaemon,
-  startDesktopDaemon,
-  stopDesktopDaemon,
-} from "@/desktop/daemon/desktop-daemon";
+import { startDesktopDaemon, stopDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { LocalDaemonSection } from "@/desktop/components/desktop-updates-section";
 import { useDaemonStatus } from "@/desktop/hooks/use-daemon-status";
-import { loadDesktopSettings, useDesktopSettings } from "@/desktop/settings/desktop-settings";
+import { useDesktopSettings } from "@/desktop/settings/desktop-settings";
 import { PairDeviceModal } from "@/desktop/components/pair-device-modal";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
@@ -56,8 +50,7 @@ import {
   useHosts,
 } from "@/runtime/host-runtime";
 import { ProvidersSection } from "@/screens/settings/providers-section";
-import { ProviderUsageSettingsSection } from "@/provider-usage/settings-section";
-import { useProviderUsage } from "@/provider-usage/use-provider-usage";
+import { HostUsageSection } from "@/usage";
 import { HostAppearanceSection } from "@/screens/settings/host-appearance-section";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { useSessionStore } from "@/stores/session-store";
@@ -70,13 +63,21 @@ import { formatConnectionStatus, getConnectionStatusTone } from "@/utils/daemons
 import { formatLatency } from "@/utils/latency";
 import { ICON_SIZE } from "@/styles/theme";
 import type { Theme } from "@/styles/theme";
-import { getProviderIcon } from "@/components/provider-icons";
+import { useProviderIcon } from "@/components/provider-icons";
 import { BrowserToolsOptInCard } from "./browser-tools-card";
-import { hasDaemonReconnectedAfter, type DaemonConnectionMarker } from "./daemon-reconnect";
-import { restartDaemonFromSettings } from "./daemon-restart";
+import { restartDaemonFromSettings, updateDaemonFromSettings } from "./daemon-lifecycle";
 import { ExternalEffectsCard } from "./external-effects-card";
 import { RoleProfilesCard } from "./role-profiles-card";
 import { PeerDelegationProfilesCard } from "./peer-delegation-models-card";
+
+const ThemedRestart = withUnistyles(RotateCw);
+const ThemedUpdate = withUnistyles(ArrowUpToLine);
+const lifecycleIconProps = (theme: Theme) => ({
+  size: theme.iconSize.sm,
+  color: theme.colors.foreground,
+});
+const restartIcon = <ThemedRestart uniProps={lifecycleIconProps} />;
+const updateIcon = <ThemedUpdate uniProps={lifecycleIconProps} />;
 
 const ThemedArrowUp = withUnistyles(ArrowUp);
 const ThemedArrowDown = withUnistyles(ArrowDown);
@@ -92,7 +93,7 @@ interface DynamicProviderIconProps {
 }
 
 function DynamicProviderIcon({ iconKey, size, color = "" }: DynamicProviderIconProps) {
-  const Icon = getProviderIcon(iconKey);
+  const Icon = useProviderIcon(iconKey);
   return <Icon size={size} color={color} />;
 }
 
@@ -112,6 +113,7 @@ const removeProfileIcon = <ThemedTrash2 size={ICON_SIZE.sm} uniProps={destructiv
 const addProfileIcon = <ThemedPlus size={ICON_SIZE.sm} uniProps={mutedColorMapping} />;
 
 function formatHostConnectionLabel(connection: HostConnection, t: TFunction): string {
+  if (connection.type === "routed") return `Via ${connection.originServerId}`;
   if (connection.type === "relay") {
     return `${t("settings.host.badges.relay")} (${connection.relayEndpoint})`;
   }
@@ -231,12 +233,23 @@ function HostStatusBadges({ serverId }: { serverId: string }) {
 }
 
 function HostConnectionError({ serverId }: { serverId: string }) {
+  const { t } = useTranslation();
   const snapshot = useHostRuntimeSnapshot(serverId);
   const lastError = snapshot?.lastError ?? null;
   const connectionError =
     typeof lastError === "string" && lastError.trim().length > 0 ? lastError.trim() : null;
   if (!connectionError) return null;
-  return <Text style={styles.errorText}>{connectionError}</Text>;
+  return (
+    <View style={styles.connectionError}>
+      <InlineAlert
+        size="sm"
+        variant="error"
+        title={connectionError}
+        description={snapshot?.authFailureReason ? t("settings.host.password.guidance") : undefined}
+        testID="host-connection-error"
+      />
+    </View>
+  );
 }
 
 export function HostConnectionsPage({ serverId }: { serverId: string }) {
@@ -340,10 +353,6 @@ export function HostProvidersPage({ serverId }: { serverId: string }) {
 
 export function HostUsagePage({ serverId }: { serverId: string }) {
   const host = useHostProfile(serverId);
-  const { view: providerUsageView, refresh: refreshProviderUsage } = useProviderUsage(serverId);
-  const handleRefresh = useCallback(() => {
-    void refreshProviderUsage();
-  }, [refreshProviderUsage]);
 
   if (!host) {
     return <HostNotFound />;
@@ -351,7 +360,7 @@ export function HostUsagePage({ serverId }: { serverId: string }) {
 
   return (
     <View>
-      <ProviderUsageSettingsSection view={providerUsageView} onRefresh={handleRefresh} />
+      <HostUsageSection serverId={serverId} />
     </View>
   );
 }
@@ -372,13 +381,8 @@ export function HostSettingsPage({
 
   return (
     <View>
-      <View style={styles.daemonHeader}>
-        <Text style={styles.daemonHeaderLabel} numberOfLines={1}>
-          {host.label}
-        </Text>
-      </View>
-
       <HostStatusBadges serverId={serverId} />
+      <HostConnectionError serverId={serverId} />
 
       <HostAppearanceSection host={host} />
 
@@ -563,14 +567,8 @@ function ConnectionRow({
   );
 }
 
-const delay = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
 function RestartDaemonCard({ host }: { host: HostProfile }) {
   const { t } = useTranslation();
-  const { theme } = useUnistyles();
   const daemonClient = useHostRuntimeClient(host.serverId);
   const isConnected = useHostRuntimeIsConnected(host.serverId);
   const runtime = getHostRuntimeStore();
@@ -588,70 +586,20 @@ function RestartDaemonCard({ host }: { host: HostProfile }) {
     [host.serverId, runtime],
   );
 
-  const waitForCondition = useCallback(
-    async (predicate: () => boolean, timeoutMs: number, intervalMs = 250) => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (!isMountedRef.current) return false;
-        if (predicate()) return true;
-        await delay(intervalMs);
-      }
-      return predicate();
-    },
-    [],
-  );
-
   const waitForDaemonRestart = useCallback(
-    async (restartRequest: Promise<void>) => {
-      const disconnectTimeoutMs = 30000;
-      const reconnectTimeoutMs = 30000;
-      const requestFailureDisconnectGraceMs = 2000;
-      const disconnectedPromise = isHostConnected()
-        ? waitForCondition(() => !isHostConnected(), disconnectTimeoutMs)
-        : Promise.resolve(true);
-      const restartResult = await restartRequest.then(
-        () => ({ status: "accepted" as const }),
-        async (error) => ({
-          status: "rejected" as const,
-          error,
-          disconnectedAfterFailure: await waitForCondition(
-            () => !isHostConnected(),
-            requestFailureDisconnectGraceMs,
-            100,
-          ),
-        }),
-      );
-      if (!isMountedRef.current) return;
-
-      if (restartResult.status === "rejected" && !restartResult.disconnectedAfterFailure) {
-        console.error(`[HostPage] Failed to restart daemon ${host.label}`, restartResult.error);
-        setIsRestarting(false);
+    async (request: Promise<void>) => {
+      try {
+        await request;
+      } catch (error) {
         Alert.alert(
           t("settings.host.daemon.restart.requestFailedTitle"),
-          t("settings.host.daemon.restart.requestFailedMessage"),
+          error instanceof Error ? error.message : String(error),
         );
-        return;
-      }
-
-      const disconnected =
-        restartResult.status === "rejected"
-          ? restartResult.disconnectedAfterFailure
-          : await disconnectedPromise;
-      const reconnected =
-        disconnected && (await waitForCondition(() => isHostConnected(), reconnectTimeoutMs));
-      if (isMountedRef.current) {
-        setIsRestarting(false);
-        if (!reconnected) {
-          Alert.alert(
-            t("settings.host.daemon.restart.unableToReconnectTitle"),
-            t("settings.host.daemon.restart.unableToReconnectMessage", {
-              name: host.label,
-            }),
-          );
-        }
+      } finally {
+        if (isMountedRef.current) setIsRestarting(false);
       }
     },
-    [host.label, isHostConnected, t, waitForCondition],
+    [t],
   );
 
   const handleRestart = useCallback(() => {
@@ -686,11 +634,12 @@ function RestartDaemonCard({ host }: { host: HostProfile }) {
           host.serverId,
           `settings_daemon_restart_${host.serverId}`,
           {
-            getIsElectron,
-            getDesktopDaemonStatus,
-            getDesktopSettings: loadDesktopSettings,
-            restartDesktopDaemon,
             restartServer: (reason) => daemonClient.restartServer(reason),
+            getStatus: async () => ({
+              ...(await daemonClient.getDaemonStatus()),
+              serverId: daemonClient.getLastServerInfoMessage()?.serverId ?? "",
+              version: daemonClient.getLastServerInfoMessage()?.version ?? null,
+            }),
           },
         );
         void waitForDaemonRestart(restartRequest);
@@ -704,11 +653,6 @@ function RestartDaemonCard({ host }: { host: HostProfile }) {
         );
       });
   }, [daemonClient, host.label, host.serverId, isHostConnected, t, waitForDaemonRestart]);
-
-  const restartIcon = useMemo(
-    () => <RotateCw size={theme.iconSize.sm} color={theme.colors.foreground} />,
-    [theme.iconSize.sm, theme.colors.foreground],
-  );
 
   return (
     <View style={settingsStyles.card} testID="host-page-restart-card">
@@ -736,12 +680,12 @@ function RestartDaemonCard({ host }: { host: HostProfile }) {
 
 type DaemonUpdateState =
   | { status: "idle" }
+  | { status: "complete"; workerVersion: string }
   | { status: "updating"; phase: string }
   | { status: "failed"; title: string; message: string };
 
 function UpdateDaemonCard({ host }: { host: HostProfile }) {
   const { t } = useTranslation();
-  const { theme } = useUnistyles();
   const daemonClient = useHostRuntimeClient(host.serverId);
   const isConnected = useHostRuntimeIsConnected(host.serverId);
   const runtime = getHostRuntimeStore();
@@ -775,55 +719,6 @@ function UpdateDaemonCard({ host }: { host: HostProfile }) {
     () => isHostRuntimeConnected(runtime.getSnapshot(host.serverId)),
     [host.serverId, runtime],
   );
-  const hasReconnectedAfter = useCallback(
-    (startMarker: DaemonConnectionMarker | null) =>
-      hasDaemonReconnectedAfter(runtime.getSnapshot(host.serverId), startMarker),
-    [host.serverId, runtime],
-  );
-
-  const waitForCondition = useCallback(
-    async (predicate: () => boolean, timeoutMs: number, intervalMs = 250) => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (!isMountedRef.current) return false;
-        if (predicate()) return true;
-        await delay(intervalMs);
-      }
-      return predicate();
-    },
-    [],
-  );
-
-  const waitForDaemonRestart = useCallback(
-    async (startMarker: DaemonConnectionMarker | null) => {
-      const disconnectTimeoutMs = 15000;
-      const reconnectTimeoutMs = 120000; // 2 minutes — npm update + restart can take a while
-      if (!hasReconnectedAfter(startMarker) && isHostConnected()) {
-        await waitForCondition(
-          () => !isHostConnected() || hasReconnectedAfter(startMarker),
-          disconnectTimeoutMs,
-        );
-      }
-      const reconnected =
-        hasReconnectedAfter(startMarker) ||
-        (await waitForCondition(() => hasReconnectedAfter(startMarker), reconnectTimeoutMs));
-      if (isMountedRef.current) {
-        if (!reconnected) {
-          setUpdateState({
-            status: "failed",
-            title: t("settings.host.daemon.update.unableToReconnectTitle"),
-            message: t("settings.host.daemon.update.unableToReconnectMessage", {
-              name: host.label,
-            }),
-          });
-          return;
-        }
-        setUpdateState({ status: "idle" });
-      }
-    },
-    [hasReconnectedAfter, host.label, isHostConnected, t, waitForCondition],
-  );
-
   const handleUpdate = useCallback(() => {
     if (!daemonClient) {
       setUpdateState({
@@ -853,13 +748,6 @@ function UpdateDaemonCard({ host }: { host: HostProfile }) {
     })
       .then((confirmed) => {
         if (!confirmed || !isMountedRef.current) return;
-        const startSnapshot = runtime.getSnapshot(host.serverId);
-        const startMarker = startSnapshot
-          ? {
-              clientGeneration: startSnapshot.clientGeneration,
-              lastOnlineAt: startSnapshot.lastOnlineAt,
-            }
-          : null;
         setUpdateState({
           status: "updating",
           phase: t("settings.host.daemon.update.phaseStarting"),
@@ -893,24 +781,26 @@ function UpdateDaemonCard({ host }: { host: HostProfile }) {
         });
         unsubscribeRef.current = unsubscribe;
 
-        void daemonClient
-          .applyDistributionUpdate({ requestId })
-          .then((response) => {
+        void updateDaemonFromSettings(host.serverId, {
+          // GKG installs through the downstream distribution channel, not npm self-update.
+          updateDaemon: async () => {
+            const response = await daemonClient.applyDistributionUpdate({ requestId });
+            return {
+              success: response.accepted,
+              error: response.error,
+              newVersion: response.version,
+            };
+          },
+          getStatus: async () => ({
+            ...(await daemonClient.getDaemonStatus()),
+            serverId: daemonClient.getLastServerInfoMessage()?.serverId ?? "",
+            version: daemonClient.getLastServerInfoMessage()?.version ?? null,
+          }),
+        })
+          .then(({ workerVersion }) => {
             unsubscribeRef.current = null;
             unsubscribe();
-            if (!response.accepted) {
-              if (!isMountedRef.current) return undefined;
-              setUpdateState({
-                status: "failed",
-                title: t("settings.host.daemon.update.requestFailedTitle"),
-                message: t("settings.host.daemon.update.requestFailedMessage", {
-                  error: response.error ?? "Unknown error",
-                }),
-              });
-              return undefined;
-            }
-            // Update succeeded — wait for daemon to restart and reconnect
-            void waitForDaemonRestart(startMarker);
+            if (isMountedRef.current) setUpdateState({ status: "complete", workerVersion });
             return undefined;
           })
           .catch((error) => {
@@ -937,15 +827,10 @@ function UpdateDaemonCard({ host }: { host: HostProfile }) {
           message: t("settings.host.daemon.update.dialogFailedMessage"),
         });
       });
-  }, [daemonClient, host.label, host.serverId, isHostConnected, runtime, t, waitForDaemonRestart]);
-
-  const updateIcon = useMemo(
-    () => <ArrowUpToLine size={theme.iconSize.sm} color={theme.colors.foreground} />,
-    [theme.iconSize.sm, theme.colors.foreground],
-  );
+  }, [daemonClient, host.label, host.serverId, isHostConnected, t]);
 
   const shouldShowUpdate = hasVersionMismatch && supportsDistributionUpdate;
-  if (!shouldShowUpdate) {
+  if (!shouldShowUpdate && updateState.status !== "complete") {
     return null;
   }
 
@@ -974,9 +859,20 @@ function UpdateDaemonCard({ host }: { host: HostProfile }) {
           {buttonLabel}
         </Button>
       </View>
+      {updateState.status === "complete" ? (
+        <InlineAlert
+          size="sm"
+          variant="success"
+          title={t("desktop.daemon.lifecycle.workerUpdated", {
+            version: updateState.workerVersion,
+          })}
+          description={t("desktop.daemon.lifecycle.supervisorRefresh")}
+        />
+      ) : null}
       {updateState.status === "failed" ? (
         <View style={styles.updateFailure}>
           <InlineAlert
+            size="sm"
             variant="error"
             title={updateState.title}
             description={updateState.message}
@@ -1271,13 +1167,14 @@ function RemoveHostSection({
   const [isConfirming, setIsConfirming] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const daemonStatus = daemonStatusData?.status ?? null;
+  const stopsOwnedDaemon = isLocalDaemon && daemonStatus?.ownedByDesktop === true;
   const removeHostHeader = useMemo<SheetHeader>(
     () => ({
-      title: isLocalDaemon
+      title: stopsOwnedDaemon
         ? t("settings.host.daemon.remove.localConfirmTitle")
         : t("settings.host.daemon.remove.title"),
     }),
-    [isLocalDaemon, t],
+    [stopsOwnedDaemon, t],
   );
 
   const destructiveTextStyle = useMemo(
@@ -1310,7 +1207,7 @@ function RemoveHostSection({
         try {
           await updateSettings({ daemon: { manageBuiltInDaemon: false } });
           didDisableDaemonManagement = true;
-          if (daemonStatus?.status === "running" && daemonStatus.desktopManaged) {
+          if (daemonStatus?.status === "running" && daemonStatus.ownedByDesktop) {
             setStatus(await stopDesktopDaemon("host_remove"));
             didStopDaemon = true;
           }
@@ -1378,7 +1275,7 @@ function RemoveHostSection({
                 : t("settings.host.daemon.remove.title")}
             </Text>
             <Text style={settingsStyles.rowHint}>
-              {isLocalDaemon
+              {stopsOwnedDaemon
                 ? t("settings.host.daemon.remove.localHint")
                 : t("settings.host.daemon.remove.hint")}
             </Text>
@@ -1404,7 +1301,7 @@ function RemoveHostSection({
           testID="remove-host-confirm-modal"
         >
           <Text style={styles.confirmText}>
-            {isLocalDaemon
+            {stopsOwnedDaemon
               ? t("settings.host.daemon.remove.localConfirmMessage")
               : t("settings.host.daemon.remove.confirmMessage", {
                   name: host.label,
@@ -1834,18 +1731,6 @@ const styles = StyleSheet.create((theme) => ({
     marginHorizontal: theme.spacing[4],
     marginBottom: theme.spacing[4],
   },
-  daemonHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
-    marginBottom: theme.spacing[4],
-  },
-  daemonHeaderLabel: {
-    flexShrink: 1,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
-    color: theme.colors.foreground,
-  },
   identityBadges: {
     flexDirection: "row",
     alignItems: "center",
@@ -1876,10 +1761,8 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     flexShrink: 1,
   },
-  errorText: {
-    color: theme.colors.palette.red[300],
-    fontSize: theme.fontSize.sm,
-    marginBottom: theme.spacing[2],
+  connectionError: {
+    marginBottom: theme.spacing[6],
   },
   connectionLatency: {
     fontSize: theme.fontSize.base,

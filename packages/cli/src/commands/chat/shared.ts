@@ -1,4 +1,5 @@
 import { connectToDaemon, getDaemonHost } from "../../utils/client.js";
+import type { DaemonTarget } from "../../utils/daemon-target.js";
 import { parseDuration } from "../../utils/duration.js";
 import type { CommandError, CommandOptions } from "../../output/index.js";
 import type { ChatMessageRow } from "./schema.js";
@@ -7,10 +8,10 @@ export interface ChatCommandOptions extends CommandOptions {
   host?: string;
 }
 
-export async function connectChatClient(host?: string) {
-  const daemonHost = getDaemonHost({ host });
+export async function connectChatClient(target: DaemonTarget) {
+  const daemonHost = getDaemonHost({ target });
   try {
-    const client = await connectToDaemon({ host });
+    const client = await connectToDaemon({ target });
     return { client, daemonHost };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

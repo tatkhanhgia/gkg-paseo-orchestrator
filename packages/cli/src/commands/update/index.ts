@@ -4,6 +4,7 @@ import type { CommandOptions, OutputSchema, SingleResult } from "../../output/in
 import { withOutput } from "../../output/index.js";
 import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
+import type { DaemonTarget } from "../../utils/daemon-target.js";
 
 interface UpdateOptions extends CommandOptions {
   host?: string;
@@ -56,10 +57,10 @@ const updateSchema: OutputSchema<UpdateCommandResult> = {
 };
 
 async function withClient<T>(
-  host: string | undefined,
+  target: DaemonTarget,
   operation: (client: DaemonClient) => Promise<T>,
 ) {
-  const client = await connectToDaemon({ host });
+  const client = await connectToDaemon({ target });
   try {
     return await operation(client);
   } finally {
@@ -70,7 +71,7 @@ async function withClient<T>(
 export async function runUpdateCheckCommand(
   options: UpdateOptions,
 ): Promise<SingleResult<UpdateCommandResult>> {
-  const payload = await withClient(options.host, (client) =>
+  const payload = await withClient(options.daemonTarget, (client) =>
     client.checkDistributionUpdate({ intent: "manual" }),
   );
   return {
@@ -93,7 +94,7 @@ export async function runUpdateCheckCommand(
 export async function runUpdatePrepareCommand(
   options: UpdateOptions,
 ): Promise<SingleResult<UpdateCommandResult>> {
-  const payload = await withClient(options.host, (client) =>
+  const payload = await withClient(options.daemonTarget, (client) =>
     client.prepareDistributionUpdate({ tag: options.tag }),
   );
   return {
@@ -111,7 +112,7 @@ export async function runUpdatePrepareCommand(
 export async function runUpdateApplyCommand(
   options: UpdateOptions,
 ): Promise<SingleResult<UpdateCommandResult>> {
-  const payload = await withClient(options.host, (client) =>
+  const payload = await withClient(options.daemonTarget, (client) =>
     client.applyDistributionUpdate({ tag: options.tag }),
   );
   return {
@@ -129,7 +130,9 @@ export async function runUpdateApplyCommand(
 export async function runUpdateStatusCommand(
   options: UpdateOptions,
 ): Promise<SingleResult<UpdateCommandResult>> {
-  const payload = await withClient(options.host, (client) => client.getDistributionUpdateStatus());
+  const payload = await withClient(options.daemonTarget, (client) =>
+    client.getDistributionUpdateStatus(),
+  );
   return {
     type: "single",
     data: {
@@ -147,7 +150,9 @@ export async function runUpdateStatusCommand(
 export async function runUpdateRollbackCommand(
   options: UpdateOptions,
 ): Promise<SingleResult<UpdateCommandResult>> {
-  const payload = await withClient(options.host, (client) => client.rollbackDistributionUpdate());
+  const payload = await withClient(options.daemonTarget, (client) =>
+    client.rollbackDistributionUpdate(),
+  );
   return {
     type: "single",
     data: {

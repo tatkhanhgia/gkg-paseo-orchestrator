@@ -11,7 +11,6 @@ interface GrokACPAgentClientOptions {
   env?: Record<string, string>;
   providerId?: string;
   label?: string;
-  providerParams?: unknown;
 }
 
 export const GROK_ROLE_SUBAGENTS_ENV = {
@@ -54,7 +53,6 @@ export class GrokACPAgentClient extends GenericACPAgentClient {
       env: options.env,
       providerId: options.providerId,
       label: options.label,
-      providerParams: options.providerParams,
     });
     this.roleCommand = options.command;
   }

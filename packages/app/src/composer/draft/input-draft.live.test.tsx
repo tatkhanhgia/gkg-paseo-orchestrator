@@ -505,15 +505,20 @@ describe("useAgentInputDraft live contract", () => {
         }),
       ]),
     );
-    expect(getLatest().composerState?.commandDraftConfig).toEqual({
-      provider: "codex",
-      cwd: "/repo",
-      modeId: "auto",
-      model: "gpt-5.4",
-      thinkingOptionId: "high",
+    expect(getLatest().composerState?.commandDraft).toEqual({
+      status: "ready",
+      config: {
+        provider: "codex",
+        cwd: "/repo",
+        modeId: "auto",
+        model: "gpt-5.4",
+        thinkingOptionId: "high",
+      },
     });
 
     const hydratedTextReplacement = getLatest().textReplacement;
+    // The editor applies a retained caret to the hydrated text, so hydration announces itself.
+    expect(hydratedTextReplacement.kind).toBe("hydrated");
 
     await act(async () => {
       getLatest().editText("hello world");
@@ -527,6 +532,7 @@ describe("useAgentInputDraft live contract", () => {
     });
 
     expect(getLatest().textReplacement).not.toBe(hydratedTextReplacement);
+    expect(getLatest().textReplacement.kind).toBe("replace");
     expect(getLatest().textReplacement.text).toBe("replacement text");
 
     await act(async () => {
@@ -546,7 +552,7 @@ describe("useAgentInputDraft live contract", () => {
       );
     });
 
-    expect(getLatest().text).toBe("hello world");
+    expect(getLatest().textSource.getSnapshot()).toBe("hello world");
     expect(getLatest().attachments).toEqual([{ kind: "image", metadata: image }]);
   });
 
@@ -641,7 +647,7 @@ describe("useAgentInputDraft live contract", () => {
       );
     });
 
-    expect(getLatest().text).toBe("legacy text");
+    expect(getLatest().textSource.getSnapshot()).toBe("legacy text");
     expect(getLatest().attachments).toEqual([{ kind: "image", metadata: image }]);
     expect(useDraftStore.getState().drafts["draft:legacy"]?.input).toEqual({
       text: "legacy text",
@@ -707,7 +713,7 @@ describe("useAgentInputDraft live contract", () => {
       );
     });
 
-    expect(getLatest().text).toBe("new text");
+    expect(getLatest().textSource.getSnapshot()).toBe("new text");
     expect(getLatest().attachments).toEqual([githubIssue]);
 
     await act(async () => {
@@ -738,7 +744,9 @@ describe("useAgentInputDraft live contract", () => {
       return latest;
     }
 
+    let renders = 0;
     function Probe() {
+      renders += 1;
       latest = useAgentInputDraft({ draftKey: "draft:attachments" });
       return null;
     }
@@ -772,6 +780,22 @@ describe("useAgentInputDraft live contract", () => {
         attachments: [{ kind: "image", metadata: image }],
       });
     });
+    const settledRenders = renders;
+    const attached = getLatest().attachments;
+    const source = getLatest().textSource;
+    let textNotifications = 0;
+    const unsubscribe = source.subscribe(() => {
+      textNotifications += 1;
+    });
+    await act(async () => {
+      getLatest().editText("with attachment\n");
+      await expect.poll(source.getSnapshot).toBe("with attachment\n");
+    });
+    expect(renders).toBe(settledRenders);
+    expect(getLatest().attachments).toBe(attached);
+    expect(getLatest().textSource).toBe(source);
+    expect(textNotifications).toBe(1);
+    unsubscribe();
     await act(async () => {
       root.unmount();
     });
@@ -856,7 +880,7 @@ describe("useAgentInputDraft live contract", () => {
       getLatest().clear("sent");
     });
 
-    expect(getLatest().text).toBe("");
+    expect(getLatest().textSource.getSnapshot()).toBe("");
     expect(getLatest().attachments).toEqual([]);
     expect(useDraftStore.getState().drafts["draft:clear"]?.input).toEqual({
       text: "",
@@ -910,7 +934,7 @@ describe("useAgentInputDraft live contract", () => {
       getLatest().clear("sent");
     });
 
-    expect(getLatest().text).toBe("");
+    expect(getLatest().textSource.getSnapshot()).toBe("");
     expect(getLatest().attachments).toEqual([]);
     expect(useDraftStore.getState().drafts["draft:lifecycle"]).toMatchObject({
       lifecycle: "sent",

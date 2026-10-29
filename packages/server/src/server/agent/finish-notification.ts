@@ -17,7 +17,8 @@ import {
   type PendingDeliveryDispatchResult,
   type UpdateRecordFn,
 } from "./coordinated-delivery.js";
-import { formatSystemNotificationPrompt, sendPromptToAgent } from "./agent-prompt.js";
+import { formatSystemNotificationPrompt } from "./agent-messages/index.js";
+import { sendPreparedPromptToAgent } from "./agent-prompt.js";
 import { hasReleasedAgentWriteLease } from "./lead-handoffs.js";
 import { ASSIGNMENT_CONTRACT_EXPIRED_ERROR } from "./role-binding.js";
 import {
@@ -43,7 +44,7 @@ import {
  */
 
 export interface FinishNotificationDependencies {
-  // Full types, not a Pick: delivery dispatches through `sendPromptToAgent`,
+  // Full types, not a Pick: delivery dispatches through `sendPreparedPromptToAgent`,
   // which needs the whole surface (mode changes, run start, unarchive).
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -204,8 +205,10 @@ async function sendNotificationWatchedByParent(
   // Never replace or steer an active caller run: the surrounding delivery
   // channel only calls this once the caller has no in-flight run, and
   // `replaceRunning: false` keeps that guarantee even if the caller starts a
-  // run in the small window between that check and this call.
-  await sendPromptToAgent({
+  // run in the small window between that check and this call. The prepared
+  // path keeps the daemon's <paseo-system> envelope intact instead of quoting
+  // it as human input.
+  await sendPreparedPromptToAgent({
     agentManager: dependencies.agentManager,
     agentStorage: dependencies.agentStorage,
     agentId: params.callerAgentId,
@@ -226,7 +229,7 @@ async function deliverPendingFinishNotifications(
   // `archivedAt`/`internal` catch a detached or removed caller; a released
   // write lease is a distinct condition (see lead-handoffs.ts) — the
   // caller's identity is still live, but a successor now holds write
-  // ownership for its scope. `sendPromptToAgent` below would already throw
+  // ownership for its scope. `sendPreparedPromptToAgent` below would already throw
   // on this via `assertAgentPromptLease`, but that throw lands AFTER every
   // body in this batch has been built and triggers bounded in-process
   // retries against a condition that will never resolve itself. Checking it

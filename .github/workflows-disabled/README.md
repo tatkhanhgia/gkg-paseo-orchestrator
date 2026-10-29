@@ -10,6 +10,7 @@ infrastructure this fork does not configure yet:
 | `deploy-website.yml`           | Cloudflare                               |
 | `desktop-release.yml`          | Apple signing, GitHub release publishing |
 | `desktop-rollout.yml`          | GitHub/npm release rollout               |
+| `desktop-packages.yml`         | Electron packaging smoke runners         |
 | `android-apk-release.yml`      | Expo (`EXPO_TOKEN`)                      |
 | `downstream-macos-release.yml` | macOS release artifact publishing        |
 | `docker.yml`                   | GHCR image publish on `main`             |
