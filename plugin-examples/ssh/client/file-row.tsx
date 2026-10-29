@@ -5,6 +5,9 @@ import { Pressable, Text, View } from "react-native";
 import type { FileEntry } from "../shared/contracts";
 import { formatModified, formatSize } from "./format";
 
+/** Smallest comfortable touch target on a phone, in points. */
+export const MIN_TOUCH_TARGET = 44;
+
 interface FileRowProps {
   entry: FileEntry;
   theme: PluginWorkspacePanelProps["theme"];
@@ -37,13 +40,15 @@ export function FileRow({
         flexDirection: "row" as const,
         alignItems: "center" as const,
         gap: 10,
-        paddingVertical: 8,
+        minHeight: MIN_TOUCH_TARGET,
+        paddingVertical: 4,
         borderBottomWidth: 1,
         borderColor: theme.colors.border,
       },
       main: {
         flex: 1,
         minWidth: 0,
+        minHeight: MIN_TOUCH_TARGET,
         flexDirection: "row" as const,
         alignItems: "center" as const,
         gap: 10,
@@ -51,7 +56,14 @@ export function FileRow({
       text: { flex: 1, minWidth: 0 },
       name: { color: theme.colors.foreground },
       meta: { color: theme.colors.foregroundMuted, fontSize: 12 },
-      action: { padding: 8, borderRadius: 8, backgroundColor: theme.colors.accent },
+      action: {
+        width: MIN_TOUCH_TARGET,
+        height: MIN_TOUCH_TARGET,
+        alignItems: "center" as const,
+        justifyContent: "center" as const,
+        borderRadius: 8,
+        backgroundColor: theme.colors.accent,
+      },
     }),
     [theme],
   );

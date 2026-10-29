@@ -159,7 +159,14 @@ export class SftpClient {
     const response = await this.request(PacketType.Read, (w) =>
       w.string(handle).u64(offset).u32(length),
     );
-    if (response.type === PacketType.Data) return response.reader.bytes();
+    if (response.type === PacketType.Data) {
+      const data = response.reader.bytes();
+      // End of file is a STATUS reply, so empty DATA would make a copy loop spin forever, and
+      // more than was asked for would write past the chunk's slot in the destination.
+      if (data.length === 0) throw new SftpProtocolError("The server sent an empty DATA reply");
+      if (data.length > length) throw new SftpProtocolError("The server sent more data than asked");
+      return data;
+    }
     if (response.type === PacketType.Status) {
       const status = this.statusOf(response);
       if (status.code === StatusCode.Eof) return null;

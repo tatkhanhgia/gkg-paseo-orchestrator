@@ -1,19 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type PluginWorkspacePanelProps, useRpc } from "@getpaseo/plugin/client";
 import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
-  downloadFileRpc,
+  cancelTransferRpc,
   listRemoteFilesRpc,
   listWorkspaceFilesRpc,
-  uploadFileRpc,
+  startDownloadRpc,
+  startUploadRpc,
+  transferStatusRpc,
   type FileEntry,
   type FileFailure,
+  type Transfer,
 } from "../shared/contracts";
 import type { SshHostEntry } from "../shared/hosts";
-import { remoteJoin } from "../shared/remote-path";
-import { FileRow } from "./file-row";
+import { remoteJoin, remoteParent } from "../shared/remote-path";
+import { FileRow, MIN_TOUCH_TARGET } from "./file-row";
+import { formatProgress } from "./format";
 
 type Theme = PluginWorkspacePanelProps["theme"];
 
@@ -32,7 +36,8 @@ function ToolbarButton({ theme, icon, label, disabled, onPress }: ToolbarButtonP
         flexDirection: "row" as const,
         alignItems: "center" as const,
         gap: 6,
-        padding: 8,
+        minHeight: MIN_TOUCH_TARGET,
+        paddingHorizontal: 12,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -138,6 +143,15 @@ function joinRelative(directory: string, name: string): string {
   return directory ? `${directory}/${name}` : name;
 }
 
+function relativeParent(directory: string): string | null {
+  const segments = directory.split("/").filter(Boolean);
+  return segments.length === 0 ? null : segments.slice(0, -1).join("/");
+}
+
+function parentOfPath(path: string | undefined): string | null {
+  return path === undefined ? null : remoteParent(path);
+}
+
 function useRemoteListing(entry: SshHostEntry) {
   const listRemote = useRpc(listRemoteFilesRpc);
   const [path, setPath] = useState<string | undefined>(undefined);
@@ -149,6 +163,8 @@ function useRemoteListing(entry: SshHostEntry) {
     refetchOnWindowFocus: false,
   });
   const listing = query.data?.ok ? query.data : null;
+  // After a failed listing there is no listing to ask for a parent, so work it out from the path.
+  const parent = listing ? listing.parent : parentOfPath(path);
   const open = useCallback(
     (item: FileEntry) => {
       if (listing) setPath(remoteJoin(listing.path, item.name));
@@ -156,11 +172,11 @@ function useRemoteListing(entry: SshHostEntry) {
     [listing],
   );
   const up = useCallback(() => {
-    if (listing?.parent) setPath(listing.parent);
-  }, [listing]);
+    if (parent) setPath(parent);
+  }, [parent]);
   const home = useCallback(() => setPath(undefined), []);
   const refresh = useCallback(() => void query.refetch(), [query]);
-  return { key, query, listing, open, up, home, refresh };
+  return { key, query, listing, parent, open, up, home, refresh };
 }
 
 function useWorkspaceListing(workspaceId: string, enabled: boolean) {
@@ -174,6 +190,7 @@ function useWorkspaceListing(workspaceId: string, enabled: boolean) {
     retry: false,
   });
   const listing = query.data?.ok ? query.data : null;
+  const parent = listing ? listing.parent : relativeParent(directory);
   const open = useCallback(
     (item: FileEntry) => {
       if (listing) setDirectory(joinRelative(listing.directory, item.name));
@@ -181,10 +198,97 @@ function useWorkspaceListing(workspaceId: string, enabled: boolean) {
     [listing],
   );
   const up = useCallback(() => {
-    if (typeof listing?.parent === "string") setDirectory(listing.parent);
-  }, [listing]);
+    if (parent !== null) setDirectory(parent);
+  }, [parent]);
   const root = useCallback(() => setDirectory(""), []);
-  return { key, query, listing, directory, open, up, root };
+  return { key, query, listing, parent, directory, open, up, root };
+}
+
+const POLL_INTERVAL_MS = 1000;
+
+/** Poll until the first reply, and then only while the transfer runs; an unknown id ends it. */
+function shouldPoll(data: { ok: true; transfer: Transfer } | FileFailure | undefined): boolean {
+  if (!data) return true;
+  return data.ok && data.transfer.state === "running";
+}
+
+function describeTransfer(transfer: Transfer | null): string {
+  if (!transfer) return "Checking…";
+  if (transfer.state === "running") return formatProgress(transfer.bytesDone, transfer.total);
+  if (transfer.state === "done") return "Done";
+  return transfer.state === "failed" ? "Failed" : "Cancelled";
+}
+
+interface TransferRowProps {
+  theme: Theme;
+  transferId: string;
+  onFinished(transfer: Transfer): void;
+  onDismiss(transferId: string): void;
+}
+
+/** Polls one transfer until it ends. Polling stops when the row unmounts or the transfer ends. */
+function TransferRow({ theme, transferId, onFinished, onDismiss }: TransferRowProps) {
+  const toast = useToast();
+  const status = useRpc(transferStatusRpc);
+  const cancel = useRpc(cancelTransferRpc);
+  const query = useQuery({
+    queryKey: ["ssh", "files", "transfer", transferId],
+    queryFn: () => status({ transferId }),
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: (current) => (shouldPoll(current.state.data) ? POLL_INTERVAL_MS : false),
+  });
+  const transfer = query.data?.ok ? query.data.transfer : null;
+  const ended = transfer && transfer.state !== "running" ? transfer : null;
+  const reported = useRef(false);
+  useEffect(() => {
+    if (ended && !reported.current) {
+      reported.current = true;
+      onFinished(ended);
+    }
+  }, [ended, onFinished]);
+
+  const handleCancel = useCallback(() => {
+    cancel({ transferId }).catch((error: unknown) =>
+      toast.error(error instanceof Error ? error.message : String(error)),
+    );
+  }, [cancel, transferId, toast]);
+  const handleDismiss = useCallback(() => onDismiss(transferId), [onDismiss, transferId]);
+
+  const styles = useMemo(
+    () => ({
+      row: { gap: 6, paddingVertical: 6, borderBottomWidth: 1, borderColor: theme.colors.border },
+      name: { color: theme.colors.foreground },
+      detail: { color: theme.colors.foregroundMuted },
+      error: { color: theme.colors.statusDanger },
+      actions: { flexDirection: "row" as const, gap: 8 },
+    }),
+    [theme],
+  );
+  const problem =
+    failureText(query.data, query.error) ??
+    (transfer?.state === "failed" ? (transfer.error?.message ?? "The transfer failed.") : null);
+  const verb = transfer?.kind === "upload" ? "Uploading" : "Downloading";
+  const detail = describeTransfer(transfer);
+  return (
+    <View style={styles.row}>
+      <Text style={styles.name} numberOfLines={1}>
+        {transfer ? `${verb} ${transfer.fileName}` : "Transfer"}
+      </Text>
+      {problem ? (
+        <Text style={styles.error}>{problem}</Text>
+      ) : (
+        <Text style={styles.detail}>{detail}</Text>
+      )}
+      <View style={styles.actions}>
+        {transfer?.state === "running" ? (
+          <ToolbarButton theme={theme} icon="X" label="Cancel" onPress={handleCancel} />
+        ) : (
+          <ToolbarButton theme={theme} icon="X" label="Dismiss" onPress={handleDismiss} />
+        )}
+      </View>
+    </View>
+  );
 }
 
 function useTransfers(
@@ -195,40 +299,57 @@ function useTransfers(
 ) {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const download = useRpc(downloadFileRpc);
-  const upload = useRpc(uploadFileRpc);
-  const downloadMutation = useMutation({
-    mutationFn: (remotePath: string) => download({ target: entry.target, workspaceId, remotePath }),
-    onSuccess(result) {
-      if (!result.ok) {
-        toast.error(result.message);
-        return;
-      }
-      toast.show(
-        `Saved "${result.fileName}" in the workspace directory. Open the file explorer to get it onto your phone or browser.`,
-        { variant: "success" },
-      );
-      void queryClient.invalidateQueries({ queryKey: [...workspaceKey] });
+  const startDownload = useRpc(startDownloadRpc);
+  const startUpload = useRpc(startUploadRpc);
+  const [ids, setIds] = useState<string[]>([]);
+  const onStarted = useCallback(
+    (result: { ok: true; transferId: string } | FileFailure) => {
+      if (result.ok) setIds((current) => [...current, result.transferId]);
+      else toast.error(result.message);
     },
+    [toast],
+  );
+  const downloadMutation = useMutation({
+    mutationFn: (remotePath: string) =>
+      startDownload({ target: entry.target, workspaceId, remotePath }),
+    onSuccess: onStarted,
     onError: (error) => toast.error(error.message),
   });
   const uploadMutation = useMutation({
     mutationFn: (variables: { localPath: string; remoteDirectory: string }) =>
-      upload({ target: entry.target, workspaceId, ...variables }),
-    onSuccess(result) {
-      if (!result.ok) {
-        toast.error(result.message);
-        return;
-      }
-      toast.show(`Uploaded to ${result.remotePath}`, { variant: "success" });
-      void queryClient.invalidateQueries({ queryKey: [...remoteKey] });
-    },
+      startUpload({ target: entry.target, workspaceId, ...variables }),
+    onSuccess: onStarted,
     onError: (error) => toast.error(error.message),
   });
+  const finished = useCallback(
+    (transfer: Transfer) => {
+      if (transfer.state === "done") {
+        toast.show(
+          transfer.kind === "download"
+            ? `Saved "${transfer.fileName}" in the workspace directory. Open the file explorer to get it onto your phone or browser.`
+            : `Uploaded to ${transfer.remotePath ?? "the remote host"}`,
+          { variant: "success" },
+        );
+      } else if (transfer.state === "failed") {
+        toast.error(transfer.error?.message ?? "The transfer failed.");
+      }
+      void queryClient.invalidateQueries({
+        queryKey: [...(transfer.kind === "download" ? workspaceKey : remoteKey)],
+      });
+    },
+    [toast, queryClient, workspaceKey, remoteKey],
+  );
+  const dismiss = useCallback(
+    (transferId: string) => setIds((current) => current.filter((id) => id !== transferId)),
+    [],
+  );
   return {
-    busy: downloadMutation.isPending || uploadMutation.isPending,
+    ids,
+    starting: downloadMutation.isPending || uploadMutation.isPending,
     download: downloadMutation.mutate,
     upload: uploadMutation.mutate,
+    finished,
+    dismiss,
   };
 }
 
@@ -252,7 +373,7 @@ function UploadPane({ theme, workspace, remotePath, busy, onUpload }: UploadPane
         theme={theme}
         icon="ArrowUp"
         label="Up"
-        disabled={typeof listing?.parent !== "string"}
+        disabled={workspace.parent === null}
         onPress={workspace.up}
       />
       <ToolbarButton theme={theme} icon="Home" label="Workspace" onPress={workspace.root} />
@@ -294,7 +415,7 @@ function RemotePane({ theme, remote, picking, busy, onTogglePicker, onDownload }
         theme={theme}
         icon="ArrowUp"
         label="Up"
-        disabled={!listing?.parent}
+        disabled={!remote.parent}
         onPress={remote.up}
       />
       <ToolbarButton theme={theme} icon="Home" label="Home" onPress={remote.home} />
@@ -368,7 +489,6 @@ export function FilesBrowser({ entry, theme, layout, workspaceId, onClose }: Fil
       header: { flexDirection: "row" as const, alignItems: "center" as const, gap: 12 },
       title: { flex: 1, minWidth: 0, color: theme.colors.foreground, fontSize: 18 },
       note: { color: theme.colors.foregroundMuted },
-      status: { color: theme.colors.foreground },
       panes: {
         flexDirection: layout.compact || !picking ? ("column" as const) : ("row" as const),
         gap: 16,
@@ -388,17 +508,25 @@ export function FilesBrowser({ entry, theme, layout, workspaceId, onClose }: Fil
       <Text style={styles.note}>
         Downloads are saved in the directory of this workspace on the daemon host. Open the Paseo
         file explorer to get them onto your phone or browser. Existing files are never overwritten.
-        Browsing needs a key or ssh-agent; the terminal still works for password logins.
+        Transfers keep running on the daemon if you close this panel, but progress and cancel are
+        only shown while it is open. Browsing needs a key or ssh-agent; the terminal still works for
+        password logins.
       </Text>
-      {transfers.busy ? (
-        <Text style={styles.status}>Transferring… keep this panel open.</Text>
-      ) : null}
+      {transfers.ids.map((id) => (
+        <TransferRow
+          key={id}
+          theme={theme}
+          transferId={id}
+          onFinished={transfers.finished}
+          onDismiss={transfers.dismiss}
+        />
+      ))}
       <View style={styles.panes}>
         <RemotePane
           theme={theme}
           remote={remote}
           picking={picking}
-          busy={transfers.busy}
+          busy={transfers.starting}
           onTogglePicker={handleTogglePicker}
           onDownload={handleDownload}
         />
@@ -407,7 +535,7 @@ export function FilesBrowser({ entry, theme, layout, workspaceId, onClose }: Fil
             theme={theme}
             workspace={workspace}
             remotePath={remoteListing?.path ?? null}
-            busy={transfers.busy}
+            busy={transfers.starting}
             onUpload={handleUpload}
           />
         ) : null}

@@ -19,6 +19,12 @@ with `paseo plugin reload ssh`.
   browser. **Upload…** lists the workspace directory (also server-side) and copies the chosen file
   to the remote folder you are viewing. Folders are not downloaded or uploaded, only single files,
   up to 2 GiB each.
+- **Transfers run on the daemon.** A plugin RPC times out on the client after 60 seconds, so a copy
+  is never run inside one: starting a transfer returns an id at once and the panel polls its status
+  (bytes done, total, state) every second. **Cancel** stops it and removes its partial file. A
+  transfer keeps running if you close the panel, but its progress and **Cancel** are only shown
+  while the panel is open. At most four transfers run at once, and the daemon remembers at most 20
+  finished ones (for up to an hour) in memory.
 - **Add or remove.** User-added hosts store a label, host, optional user, port, and identity file
   _path_ in the plugin settings (shared by every client of the host). Config hosts are read-only.
 
@@ -46,6 +52,14 @@ with `paseo plugin reload ssh`.
   upload fails when the remote folder already has it. Rename or delete the old file and retry.
 - Each file operation starts its own `ssh` with a time limit, stops only that process, and at most
   four run at once.
+- `ssh` still reads the user's config, so `ProxyCommand`, `ProxyJump`, and `IdentityFile` entries for
+  a host apply to file browsing too (an alias that needs a password or a prompting proxy fails
+  under `BatchMode`). The plugin overrides forwarding, TTY, `RemoteCommand`, local commands, control
+  sockets, host-key updates, and password prompts. A host value that passes the validation above is
+  still handed to `ssh`, so a `%h` in a `ProxyCommand` of yours deserves the usual care.
+- Filesystem errors are reported in plain words (disk full, name too long, permission denied, file
+  exists, no longer exists). If a failed upload cannot remove its partial file, the message gives the
+  remote path to delete by hand.
 
 ## Limits
 
@@ -59,3 +73,14 @@ with `paseo plugin reload ssh`.
 - Per-host Command Center items are not included. Every file operation opens a new `ssh` connection
   (no `ControlMaster`), so each listing takes a moment. Remote names that are not valid UTF-8 and
   names with control characters or backslashes cannot be downloaded.
+
+### Known limits (accepted)
+
+- A directory listing shows at most 2000 entries and says so when it cuts the list off. The list is
+  not virtualized, so a very large folder renders slowly on a phone.
+- Cleaning up a failed or cancelled download removes the partial file by its path. A process
+  running as the same user could swap that path in the moment between the failure and the cleanup.
+- A download is created directly in the workspace directory, so a remote file named `.envrc`,
+  `.npmrc`, or similar creates a new dotfile there (an existing file is never overwritten). Review
+  new files in a repository before trusting them.
+- Names with backslashes are refused, because they would be a path separator on Windows.

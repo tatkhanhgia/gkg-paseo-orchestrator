@@ -1,13 +1,22 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { downloadFile, listRemoteFiles, listWorkspaceFiles, uploadFile } from "./server/files";
+import {
+  cancelTransfer,
+  listRemoteFiles,
+  listWorkspaceFiles,
+  startDownload,
+  startUpload,
+  transferStatus,
+} from "./server/files";
 import { listConfigHosts } from "./server/hosts";
 import {
-  downloadFileRpc,
+  cancelTransferRpc,
   hostsSettings,
   listConfigHostsRpc,
   listRemoteFilesRpc,
   listWorkspaceFilesRpc,
-  uploadFileRpc,
+  startDownloadRpc,
+  startUploadRpc,
+  transferStatusRpc,
 } from "./shared/contracts";
 
 export default function contribute(server: PluginServerContext) {
@@ -15,7 +24,9 @@ export default function contribute(server: PluginServerContext) {
   server.handle(listConfigHostsRpc, listConfigHosts);
   server.handle(listRemoteFilesRpc, listRemoteFiles);
   server.handle(listWorkspaceFilesRpc, listWorkspaceFiles);
-  server.handle(downloadFileRpc, downloadFile);
-  server.handle(uploadFileRpc, uploadFile);
+  server.handle(startDownloadRpc, startDownload);
+  server.handle(startUploadRpc, startUpload);
+  server.handle(transferStatusRpc, transferStatus);
+  server.handle(cancelTransferRpc, cancelTransfer);
   return () => {};
 }

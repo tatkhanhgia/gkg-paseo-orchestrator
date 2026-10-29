@@ -1,0 +1,96 @@
+import { randomUUID } from "node:crypto";
+import type { FileErrorCode, Transfer, TransferState } from "../shared/contracts";
+
+export const MAX_RUNNING_TRANSFERS = 4;
+/** Finished records are kept so a poll can still read the result; this bounds that memory. */
+export const MAX_FINISHED_TRANSFERS = 20;
+const FINISHED_TTL_MS = 60 * 60_000;
+
+export interface TransferRecord {
+  id: string;
+  kind: Transfer["kind"];
+  fileName: string;
+  state: TransferState;
+  bytesDone: number;
+  total: number | null;
+  error?: { code: FileErrorCode; message: string };
+  remotePath?: string;
+  finishedAt?: number;
+  /** Aborted by `cancel`; the transfer stops, removes its partial file, and ends `cancelled`. */
+  abort: AbortController;
+}
+
+/**
+ * Tracks transfers the daemon is running for the panel. At most `MAX_RUNNING_TRANSFERS` run at
+ * once, and at most `MAX_FINISHED_TRANSFERS` finished records (none older than an hour) are kept,
+ * so a long-lived daemon does not grow without bound.
+ */
+export class TransferRegistry {
+  private readonly records = new Map<string, TransferRecord>();
+
+  /** Registers a running transfer, or returns `null` when the running limit is reached. */
+  begin(kind: Transfer["kind"], fileName: string): TransferRecord | null {
+    this.prune();
+    let running = 0;
+    for (const record of this.records.values()) if (record.state === "running") running += 1;
+    if (running >= MAX_RUNNING_TRANSFERS) return null;
+    const record: TransferRecord = {
+      id: randomUUID(),
+      kind,
+      fileName,
+      state: "running",
+      bytesDone: 0,
+      total: null,
+      abort: new AbortController(),
+    };
+    this.records.set(record.id, record);
+    return record;
+  }
+
+  get(id: string): TransferRecord | undefined {
+    this.prune();
+    return this.records.get(id);
+  }
+
+  /** Forgets a transfer that failed before it started, so the caller reports the error itself. */
+  discard(record: TransferRecord): void {
+    this.records.delete(record.id);
+  }
+
+  finish(
+    record: TransferRecord,
+    outcome: { state: Exclude<TransferState, "running">; error?: TransferRecord["error"] },
+  ): void {
+    record.state = outcome.state;
+    record.error = outcome.error;
+    record.finishedAt = Date.now();
+    this.prune();
+  }
+
+  private prune(): void {
+    const now = Date.now();
+    const finished: TransferRecord[] = [];
+    for (const record of this.records.values()) {
+      if (record.finishedAt === undefined) continue;
+      if (now - record.finishedAt > FINISHED_TTL_MS) this.records.delete(record.id);
+      else finished.push(record);
+    }
+    finished.sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0));
+    for (const stale of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED_TRANSFERS))) {
+      this.records.delete(stale.id);
+    }
+  }
+}
+
+export function toTransfer(record: TransferRecord): Transfer {
+  return {
+    id: record.id,
+    kind: record.kind,
+    fileName: record.fileName,
+    state: record.state,
+    bytesDone: record.bytesDone,
+    total: record.total,
+    ...(record.error ? { error: record.error } : {}),
+    ...(record.remotePath ? { remotePath: record.remotePath } : {}),
+  };
+}

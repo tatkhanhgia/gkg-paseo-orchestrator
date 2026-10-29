@@ -22,3 +22,10 @@ export function formatModified(seconds: number | null): string {
     minute: "2-digit",
   });
 }
+
+/** "1.2 MB of 3.4 MB (35%)"; just the bytes done while the total is unknown. */
+export function formatProgress(done: number, total: number | null): string {
+  if (total === null || total <= 0) return formatSize(done);
+  const percent = Math.min(100, Math.floor((done / total) * 100));
+  return `${formatSize(done)} of ${formatSize(total)} (${percent}%)`;
+}

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createDownloadTarget,
+  describeErrno,
   listWorkspaceDirectory,
   openUploadSource,
   resolveInside,
@@ -94,7 +95,36 @@ describe("listWorkspaceDirectory", () => {
   });
 });
 
+describe("describeErrno", () => {
+  it.each([
+    ["ENOSPC", "failed", "disk is full"],
+    ["EDQUOT", "failed", "disk is full"],
+    ["ENAMETOOLONG", "invalid", "too long"],
+    ["EACCES", "permission", "Permission denied"],
+    ["EPERM", "permission", "Permission denied"],
+    ["EROFS", "permission", "read-only"],
+    ["EEXIST", "exists", "already exists"],
+    ["ENOENT", "not-found", "no longer exists"],
+  ])("explains %s in plain words", (errno, code, phrase) => {
+    expect(describeErrno(errno)).toMatchObject({ code, message: expect.stringContaining(phrase) });
+  });
+
+  it("leaves other errors to the caller", () => {
+    expect(describeErrno("EIO")).toBeNull();
+    expect(describeErrno(undefined)).toBeNull();
+  });
+});
+
 describe("openUploadSource", () => {
+  it("opens a file reached through a link that stays inside the root", async () => {
+    const source = await openUploadSource(root, "link-in/b.txt");
+    try {
+      expect(source).toMatchObject({ name: "b.txt", size: 6 });
+    } finally {
+      await source.handle.close();
+    }
+  });
+
   it("opens a regular file and reports its size", async () => {
     const source = await openUploadSource(root, "sub/b.txt");
     try {

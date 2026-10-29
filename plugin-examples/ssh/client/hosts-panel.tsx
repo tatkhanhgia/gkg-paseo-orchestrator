@@ -12,6 +12,7 @@ import { hostsSettings, listConfigHostsRpc, type SshUserHost } from "../shared/c
 import { toHostEntries, type SshHostEntry } from "../shared/hosts";
 import { AddHostForm } from "./add-host-form";
 import { openSshTerminal } from "./connect";
+import { MIN_TOUCH_TARGET } from "./file-row";
 import { FilesBrowser } from "./files-browser";
 
 const NO_HOSTS: SshUserHost[] = [];
@@ -39,16 +40,29 @@ function HostRow({ entry, theme, busy, onConnect, onBrowse, onRemove }: HostRowP
       text: { flex: 1, minWidth: 0 },
       label: { color: theme.colors.foreground },
       detail: { color: theme.colors.foregroundMuted },
-      connect: { padding: 8, borderRadius: 8, backgroundColor: theme.colors.accent },
+      connect: {
+        minHeight: MIN_TOUCH_TARGET,
+        justifyContent: "center" as const,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+        backgroundColor: theme.colors.accent,
+      },
       connectText: { color: theme.colors.accentForeground },
       files: {
-        padding: 8,
+        minHeight: MIN_TOUCH_TARGET,
+        justifyContent: "center" as const,
+        paddingHorizontal: 12,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.border,
       },
       filesText: { color: theme.colors.foreground },
-      remove: { padding: 8 },
+      remove: {
+        minWidth: MIN_TOUCH_TARGET,
+        minHeight: MIN_TOUCH_TARGET,
+        alignItems: "center" as const,
+        justifyContent: "center" as const,
+      },
     }),
     [theme],
   );

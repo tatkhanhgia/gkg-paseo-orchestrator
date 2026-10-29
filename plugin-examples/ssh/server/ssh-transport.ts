@@ -36,6 +36,10 @@ export const SFTP_SSH_OPTIONS = [
   "ControlPath=none",
   "ClearAllForwardings=yes",
   "PermitLocalCommand=no",
+  "ForwardAgent=no",
+  "ForwardX11=no",
+  "RequestTTY=no",
+  "RemoteCommand=none",
   "ConnectTimeout=10",
   "ServerAliveInterval=15",
   "ServerAliveCountMax=2",
@@ -48,6 +52,8 @@ const KILL_GRACE_MS = 2000;
 const WATCHDOG_INTERVAL_MS = 5000;
 /** A session with no bytes from the server for this long is considered stalled. */
 const IDLE_TIMEOUT_MS = 60_000;
+/** After a cancel, how long the transfer gets to remove its partial file before ssh is killed. */
+const CANCEL_GRACE_MS = 10_000;
 
 function summarize(stderr: string): string {
   const text = [...stderr]
@@ -106,6 +112,8 @@ function terminate(child: ChildProcess): void {
 export interface SftpRunOptions {
   /** Hard limit for connecting plus `run`. */
   timeoutMs: number;
+  /** When aborted, `run` should stop and clean up; ssh is killed if it has not after a grace period. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -171,10 +179,22 @@ export async function withSftp<T>(
     }
   }, WATCHDOG_INTERVAL_MS);
 
+  let graceTimer: NodeJS.Timeout | undefined;
+  const onAbort = () => {
+    graceTimer = setTimeout(() => {
+      client.fail(new FileOpError("cancelled", "The transfer was cancelled."));
+      terminate(child);
+    }, CANCEL_GRACE_MS);
+  };
+  if (options.signal?.aborted) onAbort();
+  else options.signal?.addEventListener("abort", onAbort, { once: true });
+
   try {
     await client.init();
     return await run(client);
   } finally {
+    options.signal?.removeEventListener("abort", onAbort);
+    clearTimeout(graceTimer);
     clearInterval(watchdog);
     terminate(child);
   }

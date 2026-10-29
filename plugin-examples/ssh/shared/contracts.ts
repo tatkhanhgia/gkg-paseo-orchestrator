@@ -66,6 +66,7 @@ export const fileErrorCodeSchema = z.enum([
   "too-large",
   "busy",
   "timeout",
+  "cancelled",
   "failed",
 ]);
 export type FileErrorCode = z.infer<typeof fileErrorCodeSchema>;
@@ -132,26 +133,45 @@ export const listWorkspaceFilesRpc = defineRpc({
   ]),
 });
 
-export const downloadFileRpc = defineRpc({
-  name: "ssh.files.download",
+export const transferStateSchema = z.enum(["running", "done", "failed", "cancelled"]);
+export type TransferState = z.infer<typeof transferStateSchema>;
+
+/** What the panel polls for. A transfer keeps running on the daemon whether or not it is polled. */
+export const transferSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["download", "upload"]),
+  /** The file's name in the workspace directory (download) or on the remote host (upload). */
+  fileName: z.string(),
+  state: transferStateSchema,
+  bytesDone: z.number(),
+  /** Total bytes, or `null` until the size is known. */
+  total: z.number().nullable(),
+  /** Set when `state` is `failed` or `cancelled`. */
+  error: z.object({ code: fileErrorCodeSchema, message: z.string() }).optional(),
+  /** Set when an upload is `done`. */
+  remotePath: z.string().optional(),
+});
+export type Transfer = z.infer<typeof transferSchema>;
+
+const transferStartedSchema = z.union([
+  z.object({ ok: z.literal(true), transferId: z.string() }),
+  fileFailureSchema,
+]);
+
+// Plugin RPCs time out on the client after 60 s, so a copy never runs inside one: these start it
+// and return at once, and `transferStatusRpc` reports on it.
+export const startDownloadRpc = defineRpc({
+  name: "ssh.files.start-download",
   input: z.object({
     target: connectionTargetSchema,
     workspaceId: z.string().min(1),
     remotePath: remotePathSchema,
   }),
-  output: z.union([
-    z.object({
-      ok: z.literal(true),
-      /** The file's name inside the workspace directory. */
-      fileName: z.string(),
-      size: z.number(),
-    }),
-    fileFailureSchema,
-  ]),
+  output: transferStartedSchema,
 });
 
-export const uploadFileRpc = defineRpc({
-  name: "ssh.files.upload",
+export const startUploadRpc = defineRpc({
+  name: "ssh.files.start-upload",
   input: z.object({
     target: connectionTargetSchema,
     workspaceId: z.string().min(1),
@@ -160,12 +180,17 @@ export const uploadFileRpc = defineRpc({
     /** Remote directory that receives the file. */
     remoteDirectory: remotePathSchema,
   }),
-  output: z.union([
-    z.object({
-      ok: z.literal(true),
-      remotePath: z.string(),
-      size: z.number(),
-    }),
-    fileFailureSchema,
-  ]),
+  output: transferStartedSchema,
+});
+
+export const transferStatusRpc = defineRpc({
+  name: "ssh.files.transfer-status",
+  input: z.object({ transferId: z.string().min(1) }),
+  output: z.union([z.object({ ok: z.literal(true), transfer: transferSchema }), fileFailureSchema]),
+});
+
+export const cancelTransferRpc = defineRpc({
+  name: "ssh.files.cancel-transfer",
+  input: z.object({ transferId: z.string().min(1) }),
+  output: z.union([z.object({ ok: z.literal(true) }), fileFailureSchema]),
 });

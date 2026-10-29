@@ -1,7 +1,7 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, open, readdir, realpath, stat, type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { FileEntry } from "../shared/contracts";
+import type { FileEntry, FileErrorCode } from "../shared/contracts";
 import { describeUnsafeFileName } from "../shared/remote-path";
 import { FileOpError } from "./ssh-transport";
 
@@ -130,6 +130,47 @@ export async function listWorkspaceDirectory(
   };
 }
 
+/** Plain-language outcome for the filesystem errors a person can act on, or `null` for others. */
+export function describeErrno(code: string | undefined): FileOpErrorInfo | null {
+  switch (code) {
+    case "ENOSPC":
+    case "EDQUOT":
+      return {
+        code: "failed",
+        message: "The disk is full or over its quota. Free some space and try again.",
+      };
+    case "ENAMETOOLONG":
+      return { code: "invalid", message: "The file name or path is too long for this system." };
+    case "EACCES":
+    case "EPERM":
+      return {
+        code: "permission",
+        message: "Permission denied. Check the folder's permissions on the daemon host.",
+      };
+    case "EROFS":
+      return { code: "permission", message: "That location is read-only." };
+    case "EEXIST":
+      return { code: "exists", message: "A file with that name already exists." };
+    case "ENOENT":
+      return { code: "not-found", message: "That file or folder no longer exists." };
+    default:
+      return null;
+  }
+}
+
+export interface FileOpErrorInfo {
+  code: FileErrorCode;
+  message: string;
+}
+
+function fsError(error: unknown, fallback: string): FileOpError {
+  const code = (error as NodeJS.ErrnoException).code;
+  const known = describeErrno(code);
+  return known
+    ? new FileOpError(known.code, known.message)
+    : new FileOpError("failed", `${fallback}${code ? ` (${code})` : ""}`);
+}
+
 export interface UploadSource {
   handle: FileHandle;
   /** The name the file gets on the remote side: the last segment of the requested path. */
@@ -140,7 +181,9 @@ export interface UploadSource {
 
 /**
  * Opens a regular file under `root` for reading. The path is resolved and confined first, then
- * opened without following a final symlink, so a link swapped in after the check is refused.
+ * opened without following a final symlink. A parent directory could still be swapped for a
+ * link between those two steps, so the open file is then compared with a fresh resolution of the
+ * path: it must still be inside `root` and be the same file (device and inode).
  */
 export async function openUploadSource(root: string, relative: string): Promise<UploadSource> {
   const segments = relativeSegments(relative);
@@ -150,16 +193,18 @@ export async function openUploadSource(root: string, relative: string): Promise<
   if (nameProblem) throw new FileOpError("invalid", `The file name ${nameProblem}.`);
   const resolved = await resolveInside(root, relative);
   const handle = await open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(
-    (error: NodeJS.ErrnoException) => {
-      throw new FileOpError(
-        error.code === "EACCES" ? "permission" : "invalid",
-        `Could not open the file: ${error.code ?? error.message}`,
-      );
+    (error: unknown) => {
+      throw fsError(error, "Could not open the file");
     },
   );
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw new FileOpError("not-a-file", "Only regular files can be uploaded.");
+    const fresh = await resolveInside(root, relative);
+    const freshInfo = await stat(fresh);
+    if (freshInfo.dev !== info.dev || freshInfo.ino !== info.ino) {
+      throw new FileOpError("invalid", "The file changed while it was being opened. Try again.");
+    }
     return { handle, name, size: info.size, mode: info.mode & 0o777 };
   } catch (error) {
     await handle.close();
@@ -182,16 +227,12 @@ export async function createDownloadTarget(
   try {
     return { handle: await open(filePath, "wx", 0o600), filePath };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       throw new FileOpError(
         "exists",
         `"${name}" already exists in the workspace directory. Rename or delete it in the file explorer, then retry.`,
       );
     }
-    throw new FileOpError(
-      code === "EACCES" ? "permission" : "failed",
-      `Could not create "${name}" in the workspace directory: ${code ?? "unknown error"}`,
-    );
+    throw fsError(error, `Could not create "${name}" in the workspace directory`);
   }
 }
