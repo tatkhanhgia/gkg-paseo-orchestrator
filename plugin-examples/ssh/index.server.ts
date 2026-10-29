@@ -17,6 +17,7 @@ import {
   listWorkspaceFilesRpc,
   startDownloadRpc,
   startUploadRpc,
+  targetWorkspaceSettings,
   transferStatusRpc,
 } from "./shared/contracts";
 
@@ -24,6 +25,7 @@ const TEARDOWN_WAIT_MS = 15_000;
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostsSettings);
+  server.registerSettings(targetWorkspaceSettings);
   server.handle(listConfigHostsRpc, listConfigHosts);
   server.handle(listRemoteFilesRpc, listRemoteFiles);
   server.handle(listWorkspaceFilesRpc, listWorkspaceFiles);

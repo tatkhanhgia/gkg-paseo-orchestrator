@@ -1,16 +1,16 @@
-import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useCallback, useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { FileEntry } from "../shared/contracts";
 import { formatModified, formatSize } from "./format";
+import type { Theme } from "./types";
 
 /** Smallest comfortable touch target on a phone, in points. */
 export const MIN_TOUCH_TARGET = 44;
 
 interface FileRowProps {
   entry: FileEntry;
-  theme: PluginWorkspacePanelProps["theme"];
+  theme: Theme;
   /** Label of the button shown on files, e.g. "Download". */
   actionLabel: string;
   actionIcon: string;

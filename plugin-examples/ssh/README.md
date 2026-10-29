@@ -1,30 +1,48 @@
 # SSH session manager
 
-A minimal MobaXterm-style host list. **Connect** opens `ssh` in a Paseo workspace terminal, and
+A minimal MobaXterm-style screen. **Connect** opens `ssh` in a Paseo workspace terminal, and
 **Files** browses the host's file tree with download and upload.
 
 Install with `paseo plugin install /absolute/path/to/plugin-examples/ssh`, then reload after edits
 with `paseo plugin reload ssh`.
 
+## Where to find it
+
+- **Sidebar → SSH.** The main screen. It is global, so it has a **Target workspace** picker
+  (below).
+- **Command Center (⌘K) → SSH.** Opens the same screen from anywhere.
+- **Workspace panel.** Command Center → **SSH: Open hosts** in a workspace opens the panel as a
+  tab. The workspace it sits in is the target, so it has no picker.
+- **`/ssh <host>`** in a workspace composer connects without opening a screen.
+
 ## Use it
 
-- **Panel.** Command Center → **SSH: Open hosts**. The panel lists user-added hosts and the hosts in the daemon user's `~/.ssh/config`.
-  **Connect** opens a terminal tab named `ssh <label>` in the current workspace.
+- **Screen layout.** Hosts on the left and the remote file browser on the right on wide layouts;
+  on compact layouts (phones) the host list is replaced by the browser while a host is open, and
+  **Hosts** goes back. The panel and the sidebar screen are the same component.
+- **Target workspace.** The sidebar screen lists the workspaces of the selected host by project and
+  name. **Connect**, **Download**, and **Upload** need one: the terminal opens in it, downloads
+  land in its directory, and uploads read from it. The choice is saved in the plugin settings (per
+  host) and restored next time. If the saved workspace no longer exists you are asked to choose
+  again; if only one workspace exists it is used. After **Connect** the screen opens that workspace
+  when the client supports it (`navigation.openWorkspace`); older clients only show the toast.
+- **Hosts.** Both screens list user-added hosts and the hosts in the daemon user's `~/.ssh/config`.
+  **Connect** opens a terminal tab named `ssh <label>` in the target workspace.
 - **Slash command.** `/ssh <host>` in a workspace composer connects to the host whose label (user
   hosts, ignoring case) or alias (config hosts, exact) matches.
 - **Files.** **Files** on a host opens a remote file tree that starts at the remote home, with
   **Up**, **Home**, and **Refresh**, and shows each entry's name, type, size, and modified time.
   Tap a folder to enter it. **Download** (the arrow icon on a file) copies a remote file into the current
-  workspace's directory on the daemon host. Open Paseo's file explorer to get it onto a phone or
+  target workspace's directory on the daemon host. Open Paseo's file explorer to get it onto a phone or
   browser. **Upload…** lists the workspace directory (also server-side) and copies the chosen file
   to the remote folder you are viewing. Folders are not downloaded or uploaded, only single files,
   up to 2 GiB each.
 - **Transfers run on the daemon.** A plugin RPC times out on the client after 60 seconds, so a copy
-  is never run inside one: starting a transfer returns an id at once and the panel polls its status
+  is never run inside one: starting a transfer returns an id at once and the screen polls its status
   (bytes done, total, state) every second. **Cancel** stops it and tries to remove its partial file; if
-  that fails, the panel says where the leftover file is. A
-  transfer keeps running if you close the panel, but its progress and **Cancel** are only shown
-  while the panel is open. At most four transfers run at once, and the daemon remembers at most 20
+  that fails, the screen says where the leftover file is. A
+  transfer keeps running if you close the screen, but its progress and **Cancel** are only shown
+  while the screen is open. At most four transfers run at once, and the daemon remembers at most 20
   finished ones (for up to an hour) in memory.
 - **Add or remove.** User-added hosts store a label, host, optional user, port, and identity file
   _path_ in the plugin settings (shared by every client of the host). Config hosts are read-only.
@@ -46,7 +64,7 @@ with `paseo plugin reload ssh`.
   shell command or an `sftp -b` batch line, so quotes, newlines, `$()`, a leading `-` or `!` are
   just characters in a name.
 - **Local paths are confined.** The daemon resolves the workspace directory from the workspace id.
-  Every local path from the panel is relative to it, is resolved with `realpath`, and must still be
+  Every local path from the screen is relative to it, is resolved with `realpath`, and must still be
   inside it: `..`, absolute paths, and symlinks that leave the directory are refused. Uploads open
   the file without following a final symlink. Downloads create the file with `O_EXCL`.
 - **Nothing is overwritten.** A download fails when the workspace already has that name, and an
@@ -56,7 +74,7 @@ with `paseo plugin reload ssh`.
 - A transfer can be read or cancelled only with the workspace id that started it; any other workspace
   gets "not found". When the plugin is reloaded, disabled, removed, or the daemon shuts down, it
   cancels every running transfer and waits up to 15 seconds for each to remove its partial file.
-- If the panel loses contact with the daemon three status polls in a row, it stops polling and offers
+- If the screen loses contact with the daemon three status polls in a row, it stops polling and offers
   **Retry** and **Dismiss**; the transfer may still be running.
 - `ssh` still reads the user's config, so `ProxyCommand`, `ProxyJump`, and `IdentityFile` entries for
   a host apply to file browsing too (an alias that needs a password or a prompting proxy fails
@@ -70,12 +88,16 @@ with `paseo plugin reload ssh`.
 ## Limits
 
 - Paseo plugins cannot focus a terminal tab (the client navigation API only opens agents and
-  workspaces), so the panel shows a toast pointing at the new tab and `/ssh` shows nothing on success.
+  workspaces). **Connect** opens the workspace but not the new tab, so a toast names the tab
+  (`ssh <label>`) and the workspace and you select the tab yourself. `/ssh` shows nothing on
+  success.
+- The workspace picker lists at most 1000 workspaces (five pages of 200) and hides ones being
+  archived.
 - `Host` patterns containing `*`, `?`, or `!` are skipped. `Include` is followed with `*`/`?` only in the
   last path segment, up to five levels, and is treated as unconditional; a file's own hosts are listed
   before the hosts it includes. `Match` blocks are ignored.
-- The panel is workspace-scoped rather than a global sidebar surface because a surface has no
-  workspace to open the terminal in.
+- A global surface has no workspace of its own, which is why the sidebar screen asks for a target
+  workspace. Transfers started for one workspace are visible only through that workspace's id.
 - Per-host Command Center items are not included. Every file operation opens a new `ssh` connection
   (no `ControlMaster`), so each listing takes a moment. Remote names that are not valid UTF-8 and
   names with control characters or backslashes cannot be downloaded.

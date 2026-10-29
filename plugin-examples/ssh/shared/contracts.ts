@@ -30,6 +30,14 @@ export const hostsSettings = defineSettings({
   schema: z.object({ hosts: z.array(userHostSchema).max(200).default([]) }),
 });
 
+/** The workspace the surface opens terminals in and transfers files to; remembered across sessions. */
+export const targetWorkspaceSettings = defineSettings({
+  id: "target-workspace",
+  scope: "host",
+  version: 1,
+  schema: z.object({ workspaceId: z.string().min(1).max(256).optional() }),
+});
+
 export const listConfigHostsRpc = defineRpc({
   name: "ssh.config-hosts",
   input: z.object({}),
