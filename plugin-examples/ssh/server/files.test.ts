@@ -22,6 +22,7 @@ import {
   listWorkspaceFiles,
   startDownload,
   startUpload,
+  stopTransfers,
   transferStatus,
 } from "./files";
 import type { Transfer } from "../shared/contracts";
@@ -92,7 +93,7 @@ async function waitFor(
   done: (transfer: Transfer) => boolean,
 ): Promise<Transfer> {
   for (let attempt = 0; attempt < 600; attempt += 1) {
-    const status = transferStatus({ transferId });
+    const status = transferStatus({ transferId, workspaceId: "w1" });
     if (status.ok && done(status.transfer)) return status.transfer;
     if (!status.ok) throw new Error(`transfer vanished: ${status.message}`);
     await sleep(25);
@@ -538,7 +539,7 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
       const started = await download("big.bin");
       expect(started.ok).toBe(true);
       if (!started.ok) return;
-      const running = transferStatus({ transferId: started.transferId });
+      const running = transferStatus({ transferId: started.transferId, workspaceId: "w1" });
       expect(running).toMatchObject({ ok: true, transfer: { state: "running", kind: "download" } });
       const midway = await waitFor(started.transferId, progressOrEnded);
       expect(midway.total).toBe(big.length);
@@ -551,9 +552,14 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
       const started = await download("big.bin");
       if (!started.ok) throw new Error(started.message);
       await waitFor(started.transferId, hasProgress);
-      expect(cancelTransfer({ transferId: started.transferId })).toEqual({ ok: true });
+      expect(cancelTransfer({ transferId: started.transferId, workspaceId: "w1" })).toEqual({
+        ok: true,
+      });
       const ended = await waitFor(started.transferId, isEnded);
-      expect(ended).toMatchObject({ state: "cancelled", error: { code: "cancelled" } });
+      expect(ended).toMatchObject({
+        state: "cancelled",
+        error: { code: "cancelled", message: "The transfer was cancelled." },
+      });
       expect(ended.bytesDone).toBeLessThan(big.length);
       expect(existsSync(path.join(workspace, "big.bin"))).toBe(false);
     });
@@ -566,18 +572,63 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
       );
       if (!started.ok) throw new Error(started.message);
       await waitFor(started.transferId, hasProgress);
-      cancelTransfer({ transferId: started.transferId });
+      cancelTransfer({ transferId: started.transferId, workspaceId: "w1" });
       const ended = await waitFor(started.transferId, isEnded);
       expect(ended.state).toBe("cancelled");
       expect(existsSync(path.join(remoteHome, "big-up.bin"))).toBe(false);
     });
 
-    it("answers unknown transfer ids with not-found", () => {
-      expect(transferStatus({ transferId: "nope" })).toMatchObject({
+    it("shows and cancels a transfer only for the workspace that started it", async () => {
+      process.env.FAKE_SSH_THROTTLE_MS = "60";
+      const started = await download("big.bin");
+      if (!started.ok) throw new Error(started.message);
+      const { transferId } = started;
+      expect(transferStatus({ transferId, workspaceId: "w2" })).toMatchObject({
         ok: false,
         code: "not-found",
       });
-      expect(cancelTransfer({ transferId: "nope" })).toMatchObject({
+      expect(cancelTransfer({ transferId, workspaceId: "w2" })).toMatchObject({
+        ok: false,
+        code: "not-found",
+      });
+      // The refused cancel from another workspace did not stop it: it still finishes.
+      const finished = await waitFor(transferId, isEnded);
+      expect(finished).toMatchObject({ state: "done", bytesDone: big.length });
+    });
+
+    it("stops every running transfer on teardown and removes their partial files", async () => {
+      process.env.FAKE_SSH_THROTTLE_MS = "100";
+      const downloading = await download("big.bin");
+      const uploading = await startUpload(
+        { target: TARGET, workspaceId: "w1", localPath: "big-up.bin", remoteDirectory: remoteHome },
+        context(),
+      );
+      if (!downloading.ok || !uploading.ok) throw new Error("transfers did not start");
+      await waitFor(downloading.transferId, hasProgress);
+      await waitFor(uploading.transferId, hasProgress);
+
+      await stopTransfers(15_000);
+
+      for (const { transferId } of [downloading, uploading]) {
+        const status = transferStatus({ transferId, workspaceId: "w1" });
+        expect(status).toMatchObject({ ok: true, transfer: { state: "cancelled" } });
+      }
+      expect(existsSync(path.join(workspace, "big.bin"))).toBe(false);
+      expect(existsSync(path.join(remoteHome, "big-up.bin"))).toBe(false);
+    });
+
+    it("returns at once from teardown when nothing is running", async () => {
+      const startedAt = Date.now();
+      await stopTransfers(15_000);
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+    });
+
+    it("answers unknown transfer ids with not-found", () => {
+      expect(transferStatus({ transferId: "nope", workspaceId: "w1" })).toMatchObject({
+        ok: false,
+        code: "not-found",
+      });
+      expect(cancelTransfer({ transferId: "nope", workspaceId: "w1" })).toMatchObject({
         ok: false,
         code: "not-found",
       });
@@ -645,11 +696,13 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
         ids.push(started.transferId);
         await waitFor(started.transferId, isEnded);
       }
-      expect(transferStatus({ transferId: ids[0] })).toMatchObject({
+      expect(transferStatus({ transferId: ids[0], workspaceId: "w1" })).toMatchObject({
         ok: false,
         code: "not-found",
       });
-      expect(transferStatus({ transferId: ids.at(-1)! })).toMatchObject({ ok: true });
+      expect(transferStatus({ transferId: ids.at(-1)!, workspaceId: "w1" })).toMatchObject({
+        ok: true,
+      });
     });
   });
 });

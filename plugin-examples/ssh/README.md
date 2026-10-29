@@ -21,7 +21,8 @@ with `paseo plugin reload ssh`.
   up to 2 GiB each.
 - **Transfers run on the daemon.** A plugin RPC times out on the client after 60 seconds, so a copy
   is never run inside one: starting a transfer returns an id at once and the panel polls its status
-  (bytes done, total, state) every second. **Cancel** stops it and removes its partial file. A
+  (bytes done, total, state) every second. **Cancel** stops it and tries to remove its partial file; if
+  that fails, the panel says where the leftover file is. A
   transfer keeps running if you close the panel, but its progress and **Cancel** are only shown
   while the panel is open. At most four transfers run at once, and the daemon remembers at most 20
   finished ones (for up to an hour) in memory.
@@ -50,8 +51,13 @@ with `paseo plugin reload ssh`.
   the file without following a final symlink. Downloads create the file with `O_EXCL`.
 - **Nothing is overwritten.** A download fails when the workspace already has that name, and an
   upload fails when the remote folder already has it. Rename or delete the old file and retry.
-- Each file operation starts its own `ssh` with a time limit, stops only that process, and at most
-  four run at once.
+- Each file operation starts its own `ssh` with a time limit and stops only that process. There are
+  two separate caps: at most four directory listings and at most four transfers run at once.
+- A transfer can be read or cancelled only with the workspace id that started it; any other workspace
+  gets "not found". When the plugin is reloaded, disabled, removed, or the daemon shuts down, it
+  cancels every running transfer and waits up to 15 seconds for each to remove its partial file.
+- If the panel loses contact with the daemon three status polls in a row, it stops polling and offers
+  **Retry** and **Dismiss**; the transfer may still be running.
 - `ssh` still reads the user's config, so `ProxyCommand`, `ProxyJump`, and `IdentityFile` entries for
   a host apply to file browsing too (an alias that needs a password or a prompting proxy fails
   under `BatchMode`). The plugin overrides forwarding, TTY, `RemoteCommand`, local commands, control
@@ -76,6 +82,10 @@ with `paseo plugin reload ssh`.
 
 ### Known limits (accepted)
 
+- A hard link inside the workspace directory to a file outside it can still be uploaded: it is a
+  regular file inside the directory by every check the plugin can make. Refusing files with more
+  than one link would also block legitimate files, and creating the link already needs the same
+  user's access to the daemon host.
 - A directory listing shows at most 2000 entries and says so when it cuts the list off. The list is
   not virtualized, so a very large folder renders slowly on a phone.
 - Cleaning up a failed or cancelled download removes the partial file by its path. A process

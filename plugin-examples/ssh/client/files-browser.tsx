@@ -16,6 +16,7 @@ import {
 } from "../shared/contracts";
 import type { SshHostEntry } from "../shared/hosts";
 import { remoteJoin, remoteParent } from "../shared/remote-path";
+import { CANCELLED_MESSAGE } from "../shared/transfer-messages";
 import { FileRow, MIN_TOUCH_TARGET } from "./file-row";
 import { formatProgress } from "./format";
 
@@ -76,6 +77,8 @@ interface PaneProps {
   location: string;
   toolbar: ReactNode;
   failure: string | null;
+  /** Explains why a toolbar button is disabled, when it is. */
+  hint?: string | null;
   loading: boolean;
   entries: readonly FileEntry[] | null;
   truncated: boolean;
@@ -92,6 +95,7 @@ function Pane({
   location,
   toolbar,
   failure,
+  hint,
   loading,
   entries,
   truncated,
@@ -119,6 +123,7 @@ function Pane({
         {location}
       </Text>
       <View style={styles.toolbar}>{toolbar}</View>
+      {hint ? <Text style={styles.muted}>{hint}</Text> : null}
       {failure ? <Text style={styles.error}>{failure}</Text> : null}
       {loading ? <Text style={styles.muted}>Loading…</Text> : null}
       {entries?.map((entry) => (
@@ -137,6 +142,13 @@ function Pane({
       {truncated ? <Text style={styles.muted}>Only the first entries are shown.</Text> : null}
     </View>
   );
+}
+
+/** Why Upload is disabled while the remote folder has no listing. */
+function uploadHint(loading: boolean): string {
+  return loading
+    ? "Upload is available once the remote folder has loaded."
+    : "Upload needs a remote folder that loaded. Press Refresh, or go Up.";
 }
 
 function joinRelative(directory: string, name: string): string {
@@ -205,6 +217,8 @@ function useWorkspaceListing(workspaceId: string, enabled: boolean) {
 }
 
 const POLL_INTERVAL_MS = 1000;
+/** After this many failed status calls in a row, polling stops and the row offers Retry. */
+const MAX_POLL_FAILURES = 3;
 
 /** Poll until the first reply, and then only while the transfer runs; an unknown id ends it. */
 function shouldPoll(data: { ok: true; transfer: Transfer } | FileFailure | undefined): boolean {
@@ -219,25 +233,64 @@ function describeTransfer(transfer: Transfer | null): string {
   return transfer.state === "failed" ? "Failed" : "Cancelled";
 }
 
+/** What went wrong with a transfer, or `null`. A clean cancel is not a problem; one that left a partial file is. */
+function transferProblem(
+  transfer: Transfer | null,
+  data: { ok: true; transfer: Transfer } | FileFailure | undefined,
+  lostContact: boolean,
+): string | null {
+  if (lostContact) {
+    return "Lost contact with the daemon. The transfer may still be running; retry to check.";
+  }
+  if (data && !data.ok) return data.message;
+  if (transfer?.state === "failed") return transfer.error?.message ?? "The transfer failed.";
+  if (transfer?.state === "cancelled" && transfer.error?.message !== CANCELLED_MESSAGE) {
+    return transfer.error?.message ?? null;
+  }
+  return null;
+}
+
+/** Polls a transfer's status; polling stops on a final state, an unknown id, or repeated failures. */
+function useTransferStatus(transferId: string, workspaceId: string) {
+  const status = useRpc(transferStatusRpc);
+  const [failures, setFailures] = useState(0);
+  const query = useQuery({
+    queryKey: ["ssh", "files", "transfer", transferId],
+    queryFn: async () => {
+      try {
+        const result = await status({ transferId, workspaceId });
+        setFailures(0);
+        return result;
+      } catch (error) {
+        setFailures((count) => count + 1);
+        throw error;
+      }
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: (current) =>
+      failures < MAX_POLL_FAILURES && shouldPoll(current.state.data) ? POLL_INTERVAL_MS : false,
+  });
+  const retry = useCallback(() => {
+    setFailures(0);
+    void query.refetch();
+  }, [query]);
+  return { query, lostContact: failures >= MAX_POLL_FAILURES, retry };
+}
+
 interface TransferRowProps {
   theme: Theme;
   transferId: string;
+  workspaceId: string;
   onFinished(transfer: Transfer): void;
   onDismiss(transferId: string): void;
 }
 
-/** Polls one transfer until it ends. Polling stops when the row unmounts or the transfer ends. */
-function TransferRow({ theme, transferId, onFinished, onDismiss }: TransferRowProps) {
+/** One transfer: progress, Cancel while it runs, Dismiss after. Polling ends if the row unmounts. */
+function TransferRow({ theme, transferId, workspaceId, onFinished, onDismiss }: TransferRowProps) {
   const toast = useToast();
-  const status = useRpc(transferStatusRpc);
   const cancel = useRpc(cancelTransferRpc);
-  const query = useQuery({
-    queryKey: ["ssh", "files", "transfer", transferId],
-    queryFn: () => status({ transferId }),
-    retry: false,
-    refetchOnWindowFocus: false,
-    refetchInterval: (current) => (shouldPoll(current.state.data) ? POLL_INTERVAL_MS : false),
-  });
+  const { query, lostContact, retry } = useTransferStatus(transferId, workspaceId);
   const transfer = query.data?.ok ? query.data.transfer : null;
   const ended = transfer && transfer.state !== "running" ? transfer : null;
   const reported = useRef(false);
@@ -249,10 +302,10 @@ function TransferRow({ theme, transferId, onFinished, onDismiss }: TransferRowPr
   }, [ended, onFinished]);
 
   const handleCancel = useCallback(() => {
-    cancel({ transferId }).catch((error: unknown) =>
+    cancel({ transferId, workspaceId }).catch((error: unknown) =>
       toast.error(error instanceof Error ? error.message : String(error)),
     );
-  }, [cancel, transferId, toast]);
+  }, [cancel, transferId, workspaceId, toast]);
   const handleDismiss = useCallback(() => onDismiss(transferId), [onDismiss, transferId]);
 
   const styles = useMemo(
@@ -265,11 +318,9 @@ function TransferRow({ theme, transferId, onFinished, onDismiss }: TransferRowPr
     }),
     [theme],
   );
-  const problem =
-    failureText(query.data, query.error) ??
-    (transfer?.state === "failed" ? (transfer.error?.message ?? "The transfer failed.") : null);
+  const problem = transferProblem(transfer, query.data, lostContact);
   const verb = transfer?.kind === "upload" ? "Uploading" : "Downloading";
-  const detail = describeTransfer(transfer);
+  const running = transfer?.state === "running" && !lostContact;
   return (
     <View style={styles.row}>
       <Text style={styles.name} numberOfLines={1}>
@@ -278,10 +329,13 @@ function TransferRow({ theme, transferId, onFinished, onDismiss }: TransferRowPr
       {problem ? (
         <Text style={styles.error}>{problem}</Text>
       ) : (
-        <Text style={styles.detail}>{detail}</Text>
+        <Text style={styles.detail}>{describeTransfer(transfer)}</Text>
       )}
       <View style={styles.actions}>
-        {transfer?.state === "running" ? (
+        {lostContact ? (
+          <ToolbarButton theme={theme} icon="RefreshCw" label="Retry" onPress={retry} />
+        ) : null}
+        {running ? (
           <ToolbarButton theme={theme} icon="X" label="Cancel" onPress={handleCancel} />
         ) : (
           <ToolbarButton theme={theme} icon="X" label="Dismiss" onPress={handleDismiss} />
@@ -332,6 +386,9 @@ function useTransfers(
         );
       } else if (transfer.state === "failed") {
         toast.error(transfer.error?.message ?? "The transfer failed.");
+      } else if (transfer.error && transfer.error.message !== CANCELLED_MESSAGE) {
+        // Cancelled, but the partial file could not be removed: the message says where it is.
+        toast.error(transfer.error.message);
       }
       void queryClient.invalidateQueries({
         queryKey: [...(transfer.kind === "download" ? workspaceKey : remoteKey)],
@@ -386,6 +443,11 @@ function UploadPane({ theme, workspace, remotePath, busy, onUpload }: UploadPane
       location={`${where} → ${remotePath ?? "remote"}`}
       toolbar={toolbar}
       failure={failureText(workspace.query.data, workspace.query.error)}
+      hint={
+        remotePath === null
+          ? "Waiting for the remote folder to load; files can be uploaded after that."
+          : null
+      }
       loading={workspace.query.isFetching && !workspace.query.data}
       entries={listing?.entries ?? null}
       truncated={listing?.truncated ?? false}
@@ -436,6 +498,7 @@ function RemotePane({ theme, remote, picking, busy, onTogglePicker, onDownload }
       location={listing?.path ?? "Remote home"}
       toolbar={toolbar}
       failure={failureText(remote.query.data, remote.query.error)}
+      hint={listing ? null : uploadHint(remote.query.isFetching)}
       loading={remote.query.isFetching && !remote.query.data}
       entries={listing?.entries ?? null}
       truncated={listing?.truncated ?? false}
@@ -517,6 +580,7 @@ export function FilesBrowser({ entry, theme, layout, workspaceId, onClose }: Fil
           key={id}
           theme={theme}
           transferId={id}
+          workspaceId={workspaceId}
           onFinished={transfers.finished}
           onDismiss={transfers.dismiss}
         />

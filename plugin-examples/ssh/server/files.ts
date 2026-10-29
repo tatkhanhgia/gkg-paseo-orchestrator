@@ -11,6 +11,7 @@ import type {
   startUploadRpc,
   transferStatusRpc,
 } from "../shared/contracts";
+import { CANCELLED_MESSAGE } from "../shared/transfer-messages";
 import {
   describeInvalidRemoteName,
   describeInvalidRemotePath,
@@ -107,7 +108,7 @@ async function limitedListing<T extends object>(
 function noop(): void {}
 
 function throwIfCancelled(signal: AbortSignal): void {
-  if (signal.aborted) throw new FileOpError("cancelled", "The transfer was cancelled.");
+  if (signal.aborted) throw new FileOpError("cancelled", CANCELLED_MESSAGE);
 }
 
 async function workspaceDirectory(paseo: Paseo, workspaceId: string): Promise<string> {
@@ -289,7 +290,7 @@ async function copyLocalToRemote(
 /** Records how a transfer ended. A cancel wins over whatever error the abort caused. */
 function finishWithError(record: TransferRecord, error: unknown, suffix: string): void {
   const cancelled = record.abort.signal.aborted;
-  const reason = cancelled ? failure("cancelled", "The transfer was cancelled.") : toFailure(error);
+  const reason = cancelled ? failure("cancelled", CANCELLED_MESSAGE) : toFailure(error);
   const { code, message } = reason;
   transfers.finish(record, {
     state: cancelled ? "cancelled" : "failed",
@@ -353,6 +354,7 @@ async function runUpload(
   const { signal } = record.abort;
   let partialRemotePath: string | null = null;
   try {
+    throwIfCancelled(signal);
     await withSftp(input.target, { timeoutMs: TRANSFER_TIMEOUT_MS, signal }, async (client) => {
       const directory = await requireRemoteDirectory(client, input.remoteDirectory);
       const remotePath = remoteJoin(directory, source.name);
@@ -410,7 +412,7 @@ export async function startDownload(input: Input<typeof startDownloadRpc>, ctx: 
     const name = remoteBasename(input.remotePath);
     const nameProblem = describeUnsafeFileName(name);
     if (nameProblem) throw new FileOpError("invalid", `The remote file name ${nameProblem}.`);
-    const record = transfers.begin("download", name);
+    const record = transfers.begin("download", name, input.workspaceId);
     if (!record) return BUSY;
     try {
       const root = await resolveRoot(await workspaceDirectory(ctx.paseo, input.workspaceId));
@@ -430,7 +432,11 @@ export async function startDownload(input: Input<typeof startDownloadRpc>, ctx: 
 export async function startUpload(input: Input<typeof startUploadRpc>, ctx: Context) {
   try {
     requireValidRemotePath(input.remoteDirectory, "remote directory");
-    const record = transfers.begin("upload", input.localPath.split("/").at(-1) ?? "");
+    const record = transfers.begin(
+      "upload",
+      input.localPath.split("/").at(-1) ?? "",
+      input.workspaceId,
+    );
     if (!record) return BUSY;
     try {
       const root = await resolveRoot(await workspaceDirectory(ctx.paseo, input.workspaceId));
@@ -453,7 +459,7 @@ export async function startUpload(input: Input<typeof startUploadRpc>, ctx: Cont
 }
 
 export function transferStatus(input: Input<typeof transferStatusRpc>) {
-  const record = transfers.get(input.transferId);
+  const record = transfers.get(input.transferId, input.workspaceId);
   if (!record) {
     return failure("not-found", "That transfer is no longer known to the daemon.");
   }
@@ -462,8 +468,13 @@ export function transferStatus(input: Input<typeof transferStatusRpc>) {
 
 /** Asks a running transfer to stop. It then removes its partial file and ends `cancelled`. */
 export function cancelTransfer(input: Input<typeof cancelTransferRpc>) {
-  const record = transfers.get(input.transferId);
+  const record = transfers.get(input.transferId, input.workspaceId);
   if (!record) return failure("not-found", "That transfer is no longer known to the daemon.");
   if (record.state === "running") record.abort.abort();
   return { ok: true as const };
+}
+
+/** Plugin teardown: stop every running transfer and remove its partial file, within a bound. */
+export function stopTransfers(waitMs: number): Promise<void> {
+  return transfers.shutdown(waitMs);
 }

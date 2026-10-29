@@ -185,12 +185,13 @@ export const startUploadRpc = defineRpc({
 
 export const transferStatusRpc = defineRpc({
   name: "ssh.files.transfer-status",
-  input: z.object({ transferId: z.string().min(1) }),
+  // A transfer is only visible to the workspace that started it.
+  input: z.object({ transferId: z.string().min(1), workspaceId: z.string().min(1) }),
   output: z.union([z.object({ ok: z.literal(true), transfer: transferSchema }), fileFailureSchema]),
 });
 
 export const cancelTransferRpc = defineRpc({
   name: "ssh.files.cancel-transfer",
-  input: z.object({ transferId: z.string().min(1) }),
+  input: z.object({ transferId: z.string().min(1), workspaceId: z.string().min(1) }),
   output: z.union([z.object({ ok: z.literal(true) }), fileFailureSchema]),
 });
