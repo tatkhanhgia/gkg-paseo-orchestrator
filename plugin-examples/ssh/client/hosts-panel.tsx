@@ -12,6 +12,7 @@ import { hostsSettings, listConfigHostsRpc, type SshUserHost } from "../shared/c
 import { toHostEntries, type SshHostEntry } from "../shared/hosts";
 import { AddHostForm } from "./add-host-form";
 import { openSshTerminal } from "./connect";
+import { FilesBrowser } from "./files-browser";
 
 const NO_HOSTS: SshUserHost[] = [];
 
@@ -20,10 +21,11 @@ interface HostRowProps {
   theme: PluginWorkspacePanelProps["theme"];
   busy: boolean;
   onConnect(entry: SshHostEntry): void;
+  onBrowse(entry: SshHostEntry): void;
   onRemove(entry: SshHostEntry): void;
 }
 
-function HostRow({ entry, theme, busy, onConnect, onRemove }: HostRowProps) {
+function HostRow({ entry, theme, busy, onConnect, onBrowse, onRemove }: HostRowProps) {
   const styles = useMemo(
     () => ({
       row: {
@@ -39,11 +41,19 @@ function HostRow({ entry, theme, busy, onConnect, onRemove }: HostRowProps) {
       detail: { color: theme.colors.foregroundMuted },
       connect: { padding: 8, borderRadius: 8, backgroundColor: theme.colors.accent },
       connectText: { color: theme.colors.accentForeground },
+      files: {
+        padding: 8,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+      },
+      filesText: { color: theme.colors.foreground },
       remove: { padding: 8 },
     }),
     [theme],
   );
   const handleConnect = useCallback(() => onConnect(entry), [entry, onConnect]);
+  const handleBrowse = useCallback(() => onBrowse(entry), [entry, onBrowse]);
   const handleRemove = useCallback(() => onRemove(entry), [entry, onRemove]);
   return (
     <View style={styles.row}>
@@ -62,6 +72,14 @@ function HostRow({ entry, theme, busy, onConnect, onRemove }: HostRowProps) {
         style={styles.connect}
       >
         <Text style={styles.connectText}>Connect</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Browse files on ${entry.label}`}
+        onPress={handleBrowse}
+        style={styles.files}
+      >
+        <Text style={styles.filesText}>Files</Text>
       </Pressable>
       {entry.source === "user" ? (
         <Pressable
@@ -88,6 +106,7 @@ export function HostsPanel({ theme, layout, workspaceId }: PluginWorkspacePanelP
     queryFn: () => listConfigHosts({}),
   });
   const [adding, setAdding] = useState(false);
+  const [browsing, setBrowsing] = useState<SshHostEntry | null>(null);
   const styles = useMemo(
     () => ({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
@@ -152,8 +171,24 @@ export function HostsPanel({ theme, layout, workspaceId }: PluginWorkspacePanelP
     },
     [settings],
   );
+  const handleBrowse = useCallback((entry: SshHostEntry) => setBrowsing(entry), []);
+  const closeBrowser = useCallback(() => setBrowsing(null), []);
   const showForm = useCallback(() => setAdding(true), []);
   const hideForm = useCallback(() => setAdding(false), []);
+
+  if (browsing) {
+    return (
+      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+        <FilesBrowser
+          entry={browsing}
+          theme={theme}
+          layout={layout}
+          workspaceId={workspaceId}
+          onClose={closeBrowser}
+        />
+      </ScrollView>
+    );
+  }
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -175,6 +210,7 @@ export function HostsPanel({ theme, layout, workspaceId }: PluginWorkspacePanelP
           theme={theme}
           busy={settings.saving}
           onConnect={handleConnectPress}
+          onBrowse={handleBrowse}
           onRemove={handleRemove}
         />
       ))}

@@ -48,10 +48,24 @@ function requireSafe(field: string, value: string): string {
   return value;
 }
 
-/** Builds the argv for `ssh`. The `--` stops option parsing before the destination. */
-export function buildSshInvocation(target: SshConnectionTarget): SshInvocation {
+export interface SshInvocationExtras {
+  /** Fixed `-o key=value` options placed first. These come from code, never from a user. */
+  options?: readonly string[];
+  /** Runs this subsystem (`ssh -s`) instead of a login shell. */
+  subsystem?: string;
+}
+
+/**
+ * Builds the argv for `ssh`. The `--` stops option parsing before the destination; a subsystem
+ * name follows the destination as the remote command.
+ */
+export function buildSshInvocation(
+  target: SshConnectionTarget,
+  extras: SshInvocationExtras = {},
+): SshInvocation {
   const host = requireSafe("host", target.host);
   const args: string[] = [];
+  for (const option of extras.options ?? []) args.push("-o", option);
   if (target.port !== undefined) {
     if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535) {
       throw new Error("Invalid SSH port: must be an integer from 1 to 65535");
@@ -64,6 +78,8 @@ export function buildSshInvocation(target: SshConnectionTarget): SshInvocation {
     args.push("-i", target.identityFile);
   }
   if (target.user) args.push("-l", requireSafe("user", target.user));
+  if (extras.subsystem) args.push("-s");
   args.push("--", host);
+  if (extras.subsystem) args.push(extras.subsystem);
   return { command: "ssh", args };
 }

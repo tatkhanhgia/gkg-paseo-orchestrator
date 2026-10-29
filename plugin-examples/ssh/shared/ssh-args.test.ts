@@ -1,6 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { buildSshInvocation } from "./ssh-args";
 
+describe("buildSshInvocation with extras", () => {
+  it("puts fixed options first, then -s before the destination and the subsystem after it", () => {
+    expect(
+      buildSshInvocation(
+        { host: "10.0.0.5", user: "deploy", port: 2222 },
+        { options: ["BatchMode=yes", "ControlPath=none"], subsystem: "sftp" },
+      ).args,
+    ).toEqual([
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ControlPath=none",
+      "-p",
+      "2222",
+      "-l",
+      "deploy",
+      "-s",
+      "--",
+      "10.0.0.5",
+      "sftp",
+    ]);
+  });
+
+  it.each(["-oProxyCommand=touch /tmp/x", "host name", "", "a\nb"])(
+    "still rejects the unsafe host %j when a subsystem is requested",
+    (host) => {
+      expect(() => buildSshInvocation({ host }, { subsystem: "sftp" })).toThrow(/Invalid SSH host/);
+    },
+  );
+});
+
 describe("buildSshInvocation", () => {
   it.each([
     ["a config alias", { host: "prod" }, ["--", "prod"]],
