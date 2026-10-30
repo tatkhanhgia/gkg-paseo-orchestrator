@@ -1095,6 +1095,13 @@ export class AgentManager {
       (agentId, error) => {
         this.logger.error({ err: error, agentId }, "Failed to persist queued timeline rows");
       },
+      {},
+      (agentId, seq) => {
+        this.logger.warn(
+          { agentId, seq },
+          "Dropped a queued timeline row that conflicts with committed history",
+        );
+      },
     );
   }
 
