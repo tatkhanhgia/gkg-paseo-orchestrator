@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -21,6 +22,13 @@ import {
   linuxInstallerScript,
   windowsInstallerScript,
 } from "./build-macos-web-cli-artifact.mjs";
+import {
+  LauncherError,
+  migrateLauncher,
+  planLaunchMigration,
+  seedConfig,
+  tokenizeCommandLine,
+} from "./installer-launcher.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const installer = path.join(scriptDir, "install-macos.sh");
@@ -108,6 +116,35 @@ function runFixture(fixture, args = [], extraEnv = {}, script = installer) {
   });
 }
 
+// Stands in for `paseo daemon config get|set` of the bundled CLI. Like the real CLI, `get --json`
+// reports `set` for a key present in <home>/config.json, and the first `set` against a home without
+// config.json materializes the defaults. Every invocation is appended to $FAKE_CLI_LOG.
+const FAKE_CONFIG_CLI = `import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+const argv = process.argv.slice(2);
+const [group, subgroup, action, key] = argv;
+const home = argv[argv.indexOf("--home") + 1];
+const file = path.join(home, "config.json");
+if (process.env.FAKE_CLI_LOG) appendFileSync(process.env.FAKE_CLI_LOG, argv.join(" ") + "\\n");
+if (group !== "daemon" || subgroup !== "config") process.exit(2);
+const read = () => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {});
+if (action === "get") {
+  const value = key.split(".").reduce((node, part) => (node && typeof node === "object" ? node[part] : undefined), read());
+  console.log(JSON.stringify({ source: "configured", path: key, set: value !== undefined, ...(value === undefined ? {} : { value }) }));
+} else if (action === "set") {
+  const config = existsSync(file) ? read() : { version: 1, daemon: { listen: "127.0.0.1:6767", relay: { enabled: false } } };
+  const parts = key.split(".");
+  let target = config;
+  for (const part of parts.slice(0, -1)) target = target[part] ??= {};
+  target[parts.at(-1)] = JSON.parse(argv[4]);
+  mkdirSync(home, { recursive: true });
+  writeFileSync(file, JSON.stringify(config, null, 2) + "\\n");
+  console.log(JSON.stringify({ action: "saved", applied: false }));
+} else {
+  process.exit(2);
+}
+`;
+
 function createArtifactFixture(existingPaseoSource) {
   const root = mkdtempSync(path.join(os.tmpdir(), "paseo-artifact-installer-test-"));
   const bundle = path.join(root, "bundle");
@@ -130,10 +167,19 @@ exit 0
     path.join(bundle, "bin", "paseo-foundation"),
     '#!/bin/sh\n[ "${1:-}" != inspect ] || echo \'{"status":"inactive"}\'\nexit 0\n',
   );
+  // Inline `-e` probes stay no-ops; script arguments (the launcher helper) run on real Node.
   writeExecutable(
     path.join(bundle, "runtime", "bin", "node"),
-    '#!/bin/sh\ncase "$*" in *process.stdout.write*) printf "127.0.0.1:6767" ;; esac\nexit 0\n',
+    `#!/bin/sh\ncase "$1" in -e) case "$*" in *process.stdout.write*) printf "127.0.0.1:6767" ;; esac; exit 0 ;; esac\nexec "${process.execPath}" "$@"\n`,
   );
+  copyFileSync(
+    path.join(scriptDir, "installer-launcher.mjs"),
+    path.join(bundle, "installer-launcher.mjs"),
+  );
+  const cliPackage = path.join(bundle, "app", "node_modules", "@getpaseo", "cli");
+  mkdirSync(path.join(cliPackage, "dist"), { recursive: true });
+  writeFileSync(path.join(cliPackage, "package.json"), '{"type":"module"}\n');
+  writeFileSync(path.join(cliPackage, "dist", "index.js"), FAKE_CONFIG_CLI);
   writeExecutable(path.join(oldBin, "paseo"), existingPaseoSource);
   return {
     root,
@@ -143,6 +189,8 @@ exit 0
     prefix: path.join(root, "install"),
     binDir: path.join(root, "installed-bin"),
     marker: path.join(root, "existing-paseo.log"),
+    cliLog: path.join(root, "config-cli.log"),
+    paseoHome: path.join(root, "home", ".paseo"),
   };
 }
 
@@ -153,6 +201,8 @@ function runArtifactFixture(fixture, args, extraEnv = {}) {
     env: {
       ...process.env,
       HOME: fixture.home,
+      PASEO_HOME: fixture.paseoHome,
+      FAKE_CLI_LOG: fixture.cliLog,
       PATH: `${fixture.oldBin}:/usr/bin:/bin`,
       EXISTING_PASEO_MARKER: fixture.marker,
       ...extraEnv,
@@ -587,7 +637,7 @@ function installOverLegacyPlist(fixture, legacyPlist) {
   return { result, plistPath };
 }
 
-test("artifact installer adds Beads Central sidecar env to a legacy plist and keeps relay and listen", () => {
+test("artifact installer adds Beads Central sidecar env to a legacy plist and moves relay and listen into config", () => {
   const fixture = createArtifactFixture("#!/bin/sh\nexit 99\n");
   const bundledNode = path.join(fixture.bundle, "runtime", "bin", "node");
   rmSync(bundledNode);
@@ -596,9 +646,11 @@ test("artifact installer adds Beads Central sidecar env to a legacy plist and ke
     const { result, plistPath } = installOverLegacyPlist(fixture, LEGACY_RELAY_PLIST);
     assert.equal(result.status, 0, result.stderr);
     const plist = readFileSync(plistPath, "utf8");
-    assert.match(plist, /<string>--relay<\/string>/);
-    assert.doesNotMatch(plist, /--no-relay/);
-    assert.match(plist, /<string>127\.0\.0\.1:7777<\/string>/);
+    assert.match(plist, /<string>run<\/string>/);
+    assert.doesNotMatch(plist, /--relay|--no-relay|--listen/);
+    const config = JSON.parse(readFileSync(path.join(fixture.paseoHome, "config.json"), "utf8"));
+    assert.equal(config.daemon.relay.enabled, true);
+    assert.equal(config.daemon.listen, "127.0.0.1:7777");
     assert.match(plist, /<string>\/legacy\/current\/app\/node_modules/);
     assert.match(plist, /<string>\/legacy\/bin:\/usr\/bin<\/string>/);
     const sidecarDir = `${fixture.prefix}/current/components/beads-central`;
@@ -648,7 +700,7 @@ test("artifact installer repoints stale sidecar env and creates a missing env di
     const rebuilt = readFileSync(second.plistPath, "utf8");
     assert.match(rebuilt, /PASEO_BEADS_CENTRAL_SIDECAR/);
     assert.match(rebuilt, /PASEO_BEADS_CENTRAL_BD_BIN/);
-    assert.match(rebuilt, /<string>--relay<\/string>/);
+    assert.match(rebuilt, /<string>run<\/string>/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -785,3 +837,167 @@ function readFileNames(root) {
   visit(root);
   return output.sort();
 }
+
+const LEGACY_ARGS = [
+  "daemon",
+  "start",
+  "--foreground",
+  "--listen",
+  "127.0.0.1:7777",
+  "--web-ui",
+  "--relay",
+];
+
+test("launcher plan moves removed launch flags to config keys and daemon run", () => {
+  const plan = planLaunchMigration(LEGACY_ARGS, { home: "/h/.paseo" });
+  assert.deepEqual(plan.args, ["daemon", "run", "--home", "/h/.paseo"]);
+  assert.deepEqual(plan.config, [
+    { key: "daemon.listen", value: "127.0.0.1:7777" },
+    { key: "features.webUi.enabled", value: true },
+    { key: "daemon.relay.enabled", value: true },
+  ]);
+
+  const noRelay = planLaunchMigration(
+    ["daemon", "start", "--foreground", "--port=7000", "--no-relay", "--home", "/other"],
+    { home: "/h/.paseo" },
+  );
+  assert.equal(noRelay.home, "/other");
+  assert.deepEqual(noRelay.config, [
+    { key: "daemon.listen", value: "127.0.0.1:7000" },
+    { key: "daemon.relay.enabled", value: false },
+  ]);
+});
+
+test("launcher plan leaves a current launcher alone and refuses what it cannot translate", () => {
+  assert.equal(planLaunchMigration(["daemon", "run", "--home", "/h"], { home: "/h" }), null);
+  assert.equal(planLaunchMigration(["daemon", "start", "--home", "/h"], { home: "/h" }), null);
+  assert.throws(
+    () => planLaunchMigration(["daemon", "start", "--mystery"], { home: "/h" }),
+    LauncherError,
+  );
+  assert.throws(
+    () =>
+      planLaunchMigration(["daemon", "start", "--listen", "a:1", "--port", "2"], { home: "/h" }),
+    /--listen and --port together/u,
+  );
+  assert.throws(
+    () => planLaunchMigration(["daemon", "start", "--listen"], { home: "/h" }),
+    /no value/u,
+  );
+});
+
+test("command-line tokenizer keeps quoted values whole with source offsets", () => {
+  const line = `ExecStart="/opt/my node" cli.js daemon start --home "/a b"`;
+  const tokens = tokenizeCommandLine(line.slice("ExecStart=".length), { escape: "\\" });
+  assert.deepEqual(
+    tokens.map((token) => token.value),
+    ["/opt/my node", "cli.js", "daemon", "start", "--home", "/a b"],
+  );
+  assert.equal(tokens[2].start, line.slice("ExecStart=".length).indexOf("daemon"));
+  assert.throws(() => tokenizeCommandLine('a "b', { escape: "\\" }), LauncherError);
+});
+
+function createLauncherFixture() {
+  const root = mkdtempSync(path.join(os.tmpdir(), "paseo-launcher-test-"));
+  const cli = path.join(root, "cli.mjs");
+  writeFileSync(cli, FAKE_CONFIG_CLI);
+  return { root, cli, home: path.join(root, ".paseo"), node: process.execPath };
+}
+
+test("seeding writes install defaults only where the operator has not set the key", () => {
+  const fixture = createLauncherFixture();
+  try {
+    mkdirSync(fixture.home, { recursive: true });
+    writeFileSync(
+      path.join(fixture.home, "config.json"),
+      `${JSON.stringify({ version: 1, daemon: { relay: { enabled: true } } })}\n`,
+    );
+    const seeded = seedConfig({ ...fixture, listen: "127.0.0.1:6767" });
+    assert.deepEqual(seeded.kept, ["daemon.relay.enabled"]);
+    assert.deepEqual(seeded.written, ["daemon.listen", "features.webUi.enabled"]);
+    const config = JSON.parse(readFileSync(path.join(fixture.home, "config.json"), "utf8"));
+    assert.equal(config.daemon.relay.enabled, true);
+    assert.equal(config.daemon.listen, "127.0.0.1:6767");
+    assert.equal(config.features.webUi.enabled, true);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("seeding a fresh home keeps every default despite the first write materializing config", () => {
+  const fixture = createLauncherFixture();
+  try {
+    const seeded = seedConfig({ ...fixture, listen: "127.0.0.1:7777" });
+    assert.deepEqual(seeded.kept, []);
+    assert.equal(seeded.written.length, 3);
+    const config = JSON.parse(readFileSync(path.join(fixture.home, "config.json"), "utf8"));
+    assert.equal(config.daemon.listen, "127.0.0.1:7777");
+    assert.equal(config.daemon.relay.enabled, false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("migrating a plist keeps the operator's configured keys and rewrites only the arguments", () => {
+  const fixture = createLauncherFixture();
+  try {
+    const plist = path.join(fixture.root, "launcher.plist");
+    writeFileSync(plist, LEGACY_RELAY_PLIST);
+    mkdirSync(fixture.home, { recursive: true });
+    writeFileSync(
+      path.join(fixture.home, "config.json"),
+      `${JSON.stringify({ version: 1, daemon: { listen: "127.0.0.1:9999" } })}\n`,
+    );
+    const migrated = migrateLauncher({ kind: "plist", file: plist, ...fixture });
+    assert.equal(migrated.status, "migrated");
+    assert.deepEqual(migrated.kept, ["daemon.listen"]);
+    const args = JSON.parse(
+      execFileSync("/usr/bin/plutil", ["-extract", "ProgramArguments", "json", "-o", "-", plist], {
+        encoding: "utf8",
+      }),
+    );
+    assert.deepEqual(args.slice(2), ["daemon", "run", "--home", fixture.home]);
+    const config = JSON.parse(readFileSync(path.join(fixture.home, "config.json"), "utf8"));
+    assert.equal(config.daemon.listen, "127.0.0.1:9999");
+    assert.equal(config.daemon.relay.enabled, true);
+    assert.equal(migrateLauncher({ kind: "plist", file: plist, ...fixture }).status, "current");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a failed config write leaves the launcher untouched", () => {
+  const fixture = createLauncherFixture();
+  try {
+    const plist = path.join(fixture.root, "launcher.plist");
+    writeFileSync(plist, LEGACY_RELAY_PLIST);
+    writeFileSync(fixture.cli, "process.exit(1);\n");
+    assert.throws(() => migrateLauncher({ kind: "plist", file: plist, ...fixture }), LauncherError);
+    assert.equal(readFileSync(plist, "utf8"), LEGACY_RELAY_PLIST);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("artifact installer migrates a legacy plist to daemon run and keeps a restorable backup", () => {
+  const fixture = createArtifactFixture("#!/bin/sh\nexit 99\n");
+  try {
+    const { result, plistPath } = installOverLegacyPlist(fixture, LEGACY_RELAY_PLIST);
+    assert.equal(result.status, 0, result.stderr);
+    const plist = readFileSync(plistPath, "utf8");
+    assert.doesNotMatch(plist, /--relay|--foreground|--listen/u);
+    assert.match(plist, /<string>run<\/string>/u);
+    assert.match(plist, new RegExp(`<string>${fixture.paseoHome}</string>`, "u"));
+    const config = JSON.parse(readFileSync(path.join(fixture.paseoHome, "config.json"), "utf8"));
+    assert.equal(config.daemon.listen, "127.0.0.1:7777");
+    assert.equal(config.daemon.relay.enabled, true);
+    const [version] = readdirSync(path.join(fixture.prefix, "launcher-backups"));
+    const backup = readFileSync(
+      path.join(fixture.prefix, "launcher-backups", version, "com.paseo.web-cli.plist"),
+      "utf8",
+    );
+    assert.equal(backup, LEGACY_RELAY_PLIST);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
