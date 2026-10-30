@@ -188,6 +188,7 @@ Test suites in this repo are heavy. Running them in bulk freezes the machine, es
 - For a broad sweep, redirect to a file and read it after: `npx vitest run <path> --bail=1 > /tmp/test-output.txt 2>&1`
 - Never re-run a suite another agent already reported green.
 - For full-suite confidence, push to CI and check GitHub Actions.
+- `scripts/install-macos.test.mjs` runs the generated installers, whose rollback and preflight call `launchctl`/`systemctl`. Its fixtures put fail-closed stubs first on `PATH` and set `PASEO_LAUNCHD_LABEL`/`PASEO_SYSTEMD_UNIT` to a throwaway name; never run an installer against the default `com.paseo.web-cli` label. Until that isolation is merged, do not run this file on a machine with a live Paseo; use CI.
 - Never run the full Playwright E2E suite locally — defer whole-suite verification to CI. Targeted Playwright specs are allowed when you changed or need to prove that specific flow.
 - App Playwright shares one warmed Metro server per run and gives every Playwright worker its own isolated daemon and `PASEO_HOME`. Spec files run concurrently without exposing one file's projects, agents, terminals, history, or provider configuration to another worker; tests within a file remain together so file-level setup is not repeated.
 - Playwright specs that exercise only the daemon import `daemonTest` from the shared fixtures so they do not create a browser context or page.

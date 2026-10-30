@@ -49,6 +49,9 @@ const env = {
   LOCALAPPDATA: path.join(home, "AppData", "Local"),
   APPDATA: path.join(home, "AppData", "Roaming"),
   PASEO_HOME: path.join(home, ".paseo"),
+  // The smoke runs the generated installer; it must never address the machine's live service.
+  PASEO_LAUNCHD_LABEL: `com.paseo.web-cli.smoke-${process.pid}`,
+  PASEO_SYSTEMD_UNIT: `paseo-web-cli-smoke-${process.pid}.service`,
   PASEO_LISTEN: listen,
   PASEO_RELAY_ENABLED: "false",
   PASEO_DICTATION_ENABLED: "0",

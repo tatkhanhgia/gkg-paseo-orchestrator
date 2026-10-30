@@ -297,7 +297,7 @@ DEFAULT_LABEL="com.paseo.web-cli"
 PREFIX="\${PASEO_INSTALL_PREFIX:-$HOME/.local/share/paseo-web-cli}"
 BIN_DIR="\${PASEO_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 LISTEN="127.0.0.1:6767"
-LABEL="$DEFAULT_LABEL"
+LABEL="\${PASEO_LAUNCHD_LABEL:-$DEFAULT_LABEL}"
 START=1
 INSTALL_FOUNDATION=1
 
@@ -311,7 +311,7 @@ Options:
   --prefix PATH          Release root (default: ~/.local/share/paseo-web-cli)
   --bin-dir PATH         CLI symlink directory (default: ~/.local/bin)
   --listen HOST:PORT     Daemon listen address (default: 127.0.0.1:6767)
-  --label LABEL          launchd label (default: com.paseo.web-cli)
+  --label LABEL          launchd label (default: $PASEO_LAUNCHD_LABEL, else com.paseo.web-cli)
   --no-start             Install files and plist without loading launchd
   --skip-foundation      Do not install/update the bundled Foundation distribution
   -h, --help             Show this help without changing the machine
@@ -710,7 +710,7 @@ VERSION=${shellQuote(VERSION)}
 PREFIX="\${PASEO_INSTALL_PREFIX:-\${XDG_DATA_HOME:-$HOME/.local/share}/paseo-web-cli}"
 BIN_DIR="\${PASEO_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 SERVICE_DIR="\${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-SERVICE_NAME="paseo-web-cli.service"
+SERVICE_NAME="\${PASEO_SYSTEMD_UNIT:-paseo-web-cli.service}"
 LISTEN="127.0.0.1:6767"
 START=1
 INSTALL_FOUNDATION=1
@@ -751,6 +751,11 @@ if [ "$PREFIX" = "/" ] || [ "$BIN_DIR" = "/" ]; then
   echo "Refusing to install into /" >&2
   exit 2
 fi
+case "$SERVICE_NAME" in
+  *[!A-Za-z0-9._@-]*|"") echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
+  *.service) ;;
+  *) echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
+esac
 if [ "$START" -eq 1 ] && ! systemctl --user show-environment >/dev/null 2>&1; then
   echo "A working user systemd session is required; use --no-start for a files-only install." >&2
   exit 1
@@ -1047,13 +1052,18 @@ set -eu
 PREFIX="\${PASEO_INSTALL_PREFIX:-\${XDG_DATA_HOME:-$HOME/.local/share}/paseo-web-cli}"
 BIN_DIR="\${PASEO_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 SERVICE_DIR="\${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-SERVICE_NAME="paseo-web-cli.service"
+SERVICE_NAME="\${PASEO_SYSTEMD_UNIT:-paseo-web-cli.service}"
 PURGE_FOUNDATION=0
 case "\${1:-}" in
   "") ;;
   --purge-foundation) PURGE_FOUNDATION=1 ;;
   -h|--help) echo 'Usage: uninstall.sh [--purge-foundation]'; exit 0 ;;
   *) echo "Unknown option: $1" >&2; exit 2 ;;
+esac
+case "$SERVICE_NAME" in
+  *[!A-Za-z0-9._@-]*|"") echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
+  *.service) ;;
+  *) echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
 esac
 systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
 rm -f "$SERVICE_DIR/$SERVICE_NAME"
