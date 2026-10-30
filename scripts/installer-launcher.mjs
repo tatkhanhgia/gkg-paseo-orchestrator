@@ -154,7 +154,7 @@ function rewriteSystemdUnit(text, home) {
   return { plan, text: text.replace(match[0], () => line) };
 }
 
-function rewritePowerShellScript(text, home) {
+function locatePowerShellLaunch(text) {
   for (const match of text.matchAll(/^[^\r\n]*$/gmu)) {
     const line = match[0];
     if (line.trimStart().startsWith("#")) continue;
@@ -165,16 +165,121 @@ function rewritePowerShellScript(text, home) {
       (token, index) => index > at && /^(\*|\d)?>/u.test(line.slice(token.start, token.end)),
     );
     if (end === -1) end = tokens.length;
-    const plan = planLaunchMigration(
-      tokens.slice(at, end).map((token) => token.value),
-      { home },
-    );
-    if (!plan) return { plan, text };
-    const suffix = end === tokens.length ? "" : ` ${line.slice(tokens[end].start)}`;
-    const next = `${line.slice(0, tokens[at].start)}${renderArgs(plan.args, quotePowerShell)}${suffix}`;
-    return { plan, text: text.replace(line, () => next) };
+    return { line, tokens, at, end };
   }
-  throw new LauncherError("The PowerShell launcher has no `daemon start|run` line.");
+  return null;
+}
+
+function rewritePowerShellScript(text, home) {
+  const launch = locatePowerShellLaunch(text);
+  if (!launch) throw new LauncherError("The PowerShell launcher has no `daemon start|run` line.");
+  const { line, tokens, at, end } = launch;
+  const plan = planLaunchMigration(
+    tokens.slice(at, end).map((token) => token.value),
+    { home },
+  );
+  if (!plan) return { plan, text };
+  const suffix = end === tokens.length ? "" : ` ${line.slice(tokens[end].start)}`;
+  const next = `${line.slice(0, tokens[at].start)}${renderArgs(plan.args, quotePowerShell)}${suffix}`;
+  return { plan, text: text.replace(line, () => next) };
+}
+
+function readPlistEnv(plutil, file, name) {
+  try {
+    const value = execFileSync(
+      plutil,
+      ["-extract", `EnvironmentVariables.${name}`, "raw", "-o", "-", file],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    return value === "" ? undefined : value;
+  } catch {
+    return undefined;
+  }
+}
+
+function readSystemdEnv(text, name) {
+  let found;
+  for (const [, assignments] of text.matchAll(/^Environment=(.*)$/gmu)) {
+    for (const token of tokenizeCommandLine(assignments, { escape: "\\" })) {
+      if (token.value.startsWith(`${name}=`)) {
+        found = token.value.slice(name.length + 1).replaceAll("%%", "%");
+      }
+    }
+  }
+  return found === "" ? undefined : found;
+}
+
+function readPowerShellEnv(text, name) {
+  let found;
+  for (const [, value] of text.matchAll(new RegExp(`^\\s*\\$env:${name}\\s*=\\s*(.+)$`, "gimu"))) {
+    found = tokenizeCommandLine(value, { escape: "`" })[0]?.value;
+  }
+  return found === "" ? undefined : found;
+}
+
+/**
+ * Read what a launcher passes to the daemon: the tokens from `daemon` onward and the PASEO_HOME it
+ * exports, if any.
+ */
+function readLauncher(kind, file, plutil) {
+  if (kind === "plist") {
+    const args = JSON.parse(
+      execFileSync(plutil, ["-extract", "ProgramArguments", "json", "-o", "-", file], {
+        encoding: "utf8",
+      }),
+    );
+    const at = args.indexOf("daemon", 1);
+    if (at === -1) throw new LauncherError(`Unrecognized ProgramArguments in ${file}.`);
+    return { tokens: args.slice(at), envHome: readPlistEnv(plutil, file, "PASEO_HOME") };
+  }
+  const text = readFileSync(file, "utf8");
+  if (kind === "systemd") {
+    const match = /^ExecStart=(.*)$/mu.exec(text);
+    if (!match) throw new LauncherError("The systemd unit has no ExecStart line.");
+    const tokens = tokenizeCommandLine(match[1], { escape: "\\" });
+    const at = locateDaemonToken(tokens);
+    if (at === -1) throw new LauncherError(`Unrecognized ExecStart: ${match[0]}`);
+    return {
+      tokens: tokens.slice(at).map((token) => token.value),
+      envHome: readSystemdEnv(text, "PASEO_HOME"),
+    };
+  }
+  const launch = locatePowerShellLaunch(text);
+  if (!launch) throw new LauncherError("The PowerShell launcher has no `daemon start|run` line.");
+  return {
+    tokens: launch.tokens.slice(launch.at, launch.end).map((token) => token.value),
+    envHome: readPowerShellEnv(text, "PASEO_HOME"),
+  };
+}
+
+function homeFromTokens(tokens) {
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] === "--home") return tokens[index + 1];
+    if (tokens[index].startsWith("--home=")) return tokens[index].slice("--home=".length);
+  }
+  return undefined;
+}
+
+function assertLauncherKind(kind) {
+  if (!["plist", "systemd", "powershell"].includes(kind)) {
+    throw new LauncherError(`Unknown launcher kind: ${kind}`);
+  }
+}
+
+/**
+ * The daemon home a launcher runs against: its `--home` argument, else the PASEO_HOME it exports,
+ * else the installer's home. Migration writes config there, so backup and rollback must too.
+ */
+export function resolveLauncherHome({ kind, file, home, plutil = "/usr/bin/plutil" }) {
+  assertLauncherKind(kind);
+  const { tokens, envHome } = readLauncher(kind, file, plutil);
+  return homeFromTokens(tokens) ?? envHome ?? home;
+}
+
+/** True when the launcher still passes launch flags the current CLI removed. */
+export function launcherNeedsMigration({ kind, file, home, plutil = "/usr/bin/plutil" }) {
+  assertLauncherKind(kind);
+  return planLaunchMigration(readLauncher(kind, file, plutil).tokens, { home }) !== null;
 }
 
 function runConfigCli({ node, cli, home }, args) {
@@ -271,11 +376,14 @@ function migrateTextLauncher(kind, file, home) {
  * failure leaves the launcher untouched.
  */
 export function migrateLauncher({ kind, file, home, node, cli, plutil = "/usr/bin/plutil" }) {
-  if (!["plist", "systemd", "powershell"].includes(kind)) {
-    throw new LauncherError(`Unknown launcher kind: ${kind}`);
-  }
+  assertLauncherKind(kind);
+  // The launcher's own PASEO_HOME outranks the installer's home; its `--home` argument outranks both
+  // and is resolved by the plan.
+  const launcherHome = readLauncher(kind, file, plutil).envHome ?? home;
   const { plan, commit } =
-    kind === "plist" ? migratePlist(file, home, plutil) : migrateTextLauncher(kind, file, home);
+    kind === "plist"
+      ? migratePlist(file, launcherHome, plutil)
+      : migrateTextLauncher(kind, file, launcherHome);
   if (!plan) return { status: "current", written: [], kept: [] };
   const applied = applyConfigIfAbsent(plan.config, { node, cli, home: plan.home });
   commit();
@@ -304,19 +412,38 @@ function parseOptions(argv) {
   return options;
 }
 
-function main(argv) {
-  const [command, ...rest] = argv;
-  const options = parseOptions(rest);
-  for (const required of ["home", "node", "cli", command === "seed" ? "listen" : "file"]) {
-    if (!options[required]) throw new LauncherError(`Missing --${required}`);
-  }
-  const run = { seed: seedConfig, migrate: migrateLauncher }[command];
-  const result = run ? run(options) : null;
-  if (!result) throw new LauncherError("Usage: installer-launcher.mjs <migrate|seed> [options]");
+function summarize(result) {
   const summary = [`launcher ${result.status}`];
   if (result.written.length) summary.push(`config written: ${result.written.join(", ")}`);
   if (result.kept.length) summary.push(`config kept: ${result.kept.join(", ")}`);
-  process.stdout.write(`${summary.join("; ")}\n`);
+  return summary.join("; ");
+}
+
+const COMMANDS = {
+  seed: { required: ["home", "node", "cli", "listen"], run: (o) => summarize(seedConfig(o)) },
+  migrate: {
+    required: ["kind", "file", "home", "node", "cli"],
+    run: (o) => summarize(migrateLauncher(o)),
+  },
+  home: { required: ["kind", "file", "home"], run: resolveLauncherHome },
+  "needs-migration": {
+    required: ["kind", "file", "home"],
+    run: (o) => (launcherNeedsMigration(o) ? "yes" : "no"),
+  },
+};
+
+function main(argv) {
+  const [command, ...rest] = argv;
+  const options = parseOptions(rest);
+  if (!Object.hasOwn(COMMANDS, command ?? "")) {
+    throw new LauncherError(
+      `Usage: installer-launcher.mjs <${Object.keys(COMMANDS).join("|")}> [options]`,
+    );
+  }
+  for (const required of COMMANDS[command].required) {
+    if (!options[required]) throw new LauncherError(`Missing --${required}`);
+  }
+  process.stdout.write(`${COMMANDS[command].run(options)}\n`);
 }
 
 // The installer reaches this file through the `current` symlink, and the module URL is the resolved

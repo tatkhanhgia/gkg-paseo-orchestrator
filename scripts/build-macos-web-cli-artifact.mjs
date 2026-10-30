@@ -360,6 +360,9 @@ UPDATE_STATUS_DIR="$DAEMON_HOME/updates"
 # The launcher and daemon config are rewritten during the transaction. Their pre-install bytes are
 # kept here so a rollback hands the previous release a launcher and config it can still read.
 LAUNCHER_BACKUP_DIR="$PREFIX/launcher-backups/$VERSION"
+# The first launcher this installer migrates is also kept once, outside any version, so a manual
+# rollback to a release older than \`daemon run\` still has the launcher that release can run.
+PRE_DAEMON_RUN_BACKUP_DIR="$PREFIX/launcher-backups/pre-daemon-run"
 CONFIG_FILE="$DAEMON_HOME/config.json"
 PLIST_BACKED_UP=0
 CONFIG_BACKED_UP=0
@@ -495,6 +498,9 @@ rollback_install() {
     elif [ "$CONFIG_TOUCHED" -eq 1 ]; then
       rm -f "$CONFIG_FILE"
     fi
+    # A launcher this install wrote has nothing to hand back; drop it before the restart below so
+    # the previous release is never bootstrapped from a plist it cannot run.
+    if [ "$PLIST_EXISTED" -eq 0 ]; then rm -f "$PLIST"; fi
     if [ -n "$PREVIOUS_RELEASE" ]; then
       ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
       if [ "$START" -eq 1 ] && [ -f "$PLIST" ]; then
@@ -525,7 +531,6 @@ rollback_install() {
     else
       rm -f "$CURRENT_LINK"
     fi
-    if [ "$PLIST_EXISTED" -eq 0 ]; then rm -f "$PLIST"; fi
     if [ "$INSTALL_CONFIG_EXISTED" -eq 0 ]; then rm -f "$INSTALL_CONFIG"; fi
     rm -rf "$RELEASE_DIR"
   fi
@@ -574,8 +579,18 @@ LAUNCHER_HELPER="$CURRENT_LINK/installer-launcher.mjs"
 BUNDLED_NODE="$CURRENT_LINK/runtime/bin/node"
 mkdir -p "$LAUNCHER_BACKUP_DIR"
 if [ -f "$PLIST" ]; then
+  # The launcher may name its own daemon home (--home or PASEO_HOME). Migration writes config there,
+  # so that is the config to back up and, on failure, to restore.
+  if MIGRATION_HOME=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" home --kind plist --file "$PLIST" --home "$DAEMON_HOME"); then
+    CONFIG_FILE="$MIGRATION_HOME/config.json"
+  fi
   cp -p "$PLIST" "$LAUNCHER_BACKUP_DIR/$LABEL.plist"
   PLIST_BACKED_UP=1
+  LEGACY_LAUNCHER=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" needs-migration --kind plist --file "$PLIST" --home "$DAEMON_HOME" 2>/dev/null || echo yes)
+  if [ "$LEGACY_LAUNCHER" = yes ] && [ ! -e "$PRE_DAEMON_RUN_BACKUP_DIR/$LABEL.plist" ]; then
+    mkdir -p "$PRE_DAEMON_RUN_BACKUP_DIR"
+    cp -p "$PLIST" "$PRE_DAEMON_RUN_BACKUP_DIR/$LABEL.plist"
+  fi
 fi
 if [ -f "$CONFIG_FILE" ]; then
   cp -p "$CONFIG_FILE" "$LAUNCHER_BACKUP_DIR/config.json"
@@ -779,6 +794,9 @@ UPDATE_STATUS_DIR="$DAEMON_HOME/updates"
 # The unit and daemon config are rewritten during the transaction. Their pre-install bytes are kept
 # here so a rollback hands the previous release a unit and config it can still read.
 LAUNCHER_BACKUP_DIR="$PREFIX/launcher-backups/$VERSION"
+# The first unit this installer migrates is also kept once, outside any version, so a manual
+# rollback to a release older than \`daemon run\` still has the unit that release can run.
+PRE_DAEMON_RUN_BACKUP_DIR="$PREFIX/launcher-backups/pre-daemon-run"
 CONFIG_FILE="$DAEMON_HOME/config.json"
 UNIT_BACKED_UP=0
 CONFIG_BACKED_UP=0
@@ -888,9 +906,15 @@ rollback_install() {
     elif [ "$CONFIG_TOUCHED" -eq 1 ]; then
       rm -f "$CONFIG_FILE"
     fi
+    # A unit this install wrote has nothing to hand back; drop it before the restart below so the
+    # previous release is never started from a unit it cannot run.
+    if [ "$UNIT_EXISTED" -eq 0 ]; then
+      rm -f "$UNIT"
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
     if [ -n "$PREVIOUS_RELEASE" ]; then
       ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
-      if [ "$START" -eq 1 ]; then
+      if [ "$START" -eq 1 ] && [ -f "$UNIT" ]; then
         # Restart the restored release and prove it is running, mirroring the forward path. A single
         # best-effort start swallowed by \`|| true\` is what left the production daemon dead on a
         # failed upgrade; retry then read back, and fail loud if it never reports running.
@@ -912,10 +936,6 @@ rollback_install() {
       fi
     else
       rm -f "$CURRENT_LINK"
-    fi
-    if [ "$UNIT_EXISTED" -eq 0 ]; then
-      rm -f "$UNIT"
-      systemctl --user daemon-reload >/dev/null 2>&1 || true
     fi
     if [ "$INSTALL_CONFIG_EXISTED" -eq 0 ]; then rm -f "$INSTALL_CONFIG"; fi
     rm -rf "$RELEASE_DIR"
@@ -944,8 +964,18 @@ LAUNCHER_HELPER="$CURRENT_LINK/installer-launcher.mjs"
 BUNDLED_NODE="$CURRENT_LINK/runtime/bin/node"
 mkdir -p "$LAUNCHER_BACKUP_DIR"
 if [ -f "$UNIT" ]; then
+  # The unit may name its own daemon home (--home or Environment=PASEO_HOME). Migration writes
+  # config there, so that is the config to back up and, on failure, to restore.
+  if MIGRATION_HOME=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" home --kind systemd --file "$UNIT" --home "$DAEMON_HOME"); then
+    CONFIG_FILE="$MIGRATION_HOME/config.json"
+  fi
   cp -p "$UNIT" "$LAUNCHER_BACKUP_DIR/$SERVICE_NAME"
   UNIT_BACKED_UP=1
+  LEGACY_LAUNCHER=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" needs-migration --kind systemd --file "$UNIT" --home "$DAEMON_HOME" 2>/dev/null || echo yes)
+  if [ "$LEGACY_LAUNCHER" = yes ] && [ ! -e "$PRE_DAEMON_RUN_BACKUP_DIR/$SERVICE_NAME" ]; then
+    mkdir -p "$PRE_DAEMON_RUN_BACKUP_DIR"
+    cp -p "$UNIT" "$PRE_DAEMON_RUN_BACKUP_DIR/$SERVICE_NAME"
+  fi
 fi
 if [ -f "$CONFIG_FILE" ]; then
   cp -p "$CONFIG_FILE" "$LAUNCHER_BACKUP_DIR/config.json"
@@ -1218,6 +1248,9 @@ $Staging = Join-Path $ReleasesDir ".install-$Version-$PID"
 # The launcher and daemon config are rewritten during the transaction. Their pre-install bytes are
 # kept here so a rollback hands the previous release a launcher and config it can still read.
 $LauncherBackupDir = Join-Path $Prefix "launcher-backups\\$Version"
+# The first launcher this installer migrates is also kept once, outside any version, so a manual
+# rollback to a release older than \`daemon run\` still has the launcher that release can run.
+$PreDaemonRunBackupDir = Join-Path $Prefix "launcher-backups\\pre-daemon-run"
 $ConfigFile = Join-Path $UpdateHome "config.json"
 $RunDaemonBackedUp = $false
 $ConfigBackedUp = $false
@@ -1290,8 +1323,18 @@ $DaemonLog = Join-Path $LogDir "daemon.log"
 $LauncherHelper = Join-Path $Current "installer-launcher.mjs"
 New-Item -ItemType Directory -Force -Path $LauncherBackupDir | Out-Null
 if ($RunDaemonExisted) {
+  # The launcher may name its own daemon home (--home or $env:PASEO_HOME). Migration writes config
+  # there, so that is the config to back up and, on failure, to restore.
+  $MigrationHome = (& $Node $LauncherHelper home --kind powershell --file $RunDaemon --home $UpdateHome)
+  if ($LASTEXITCODE -eq 0 -and "$MigrationHome".Trim()) { $ConfigFile = Join-Path ("$MigrationHome".Trim()) "config.json" }
   Copy-Item -Force $RunDaemon (Join-Path $LauncherBackupDir "run-daemon.ps1")
   $RunDaemonBackedUp = $true
+  $LegacyLauncher = (& $Node $LauncherHelper needs-migration --kind powershell --file $RunDaemon --home $UpdateHome)
+  $PreDaemonRunBackup = Join-Path $PreDaemonRunBackupDir "run-daemon.ps1"
+  if (($LASTEXITCODE -ne 0 -or "$LegacyLauncher".Trim() -eq "yes") -and -not (Test-Path $PreDaemonRunBackup)) {
+    New-Item -ItemType Directory -Force -Path $PreDaemonRunBackupDir | Out-Null
+    Copy-Item $RunDaemon $PreDaemonRunBackup
+  }
 }
 if (Test-Path $ConfigFile) {
   Copy-Item -Force $ConfigFile (Join-Path $LauncherBackupDir "config.json")
