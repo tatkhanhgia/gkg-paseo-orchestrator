@@ -1,6 +1,14 @@
 import type { ProjectedTimelineRow } from "./timeline-projection.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
 
+/** A row reuses a committed sequence with different content; committed history is authoritative. */
+export class TimelineRowConflictError extends Error {
+  constructor(public readonly seq: number) {
+    super(`Conflicting timeline row sequence ${seq}`);
+    this.name = "TimelineRowConflictError";
+  }
+}
+
 export interface AgentTimelineRow {
   seq: number;
   timestamp: string;

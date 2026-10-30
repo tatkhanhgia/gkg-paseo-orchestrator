@@ -15,6 +15,7 @@ import type {
   AgentTimelineSnapshot,
   AgentTimelineStore,
 } from "./agent-timeline-store-types.js";
+import { TimelineRowConflictError } from "./agent-timeline-store-types.js";
 
 interface CommittedTimeline {
   epoch: string;
@@ -166,7 +167,7 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
       for (const row of uniqueRows) {
         const existing = existingBySeq.get(row.seq);
         if (existing && !isDeepStrictEqual(existing, row)) {
-          throw new Error(`Conflicting timeline row sequence ${row.seq}`);
+          throw new TimelineRowConflictError(row.seq);
         }
       }
       const additions = uniqueRows

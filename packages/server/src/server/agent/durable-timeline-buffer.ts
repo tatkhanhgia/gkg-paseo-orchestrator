@@ -1,4 +1,5 @@
 import type { AgentTimelineRow, AgentTimelineStore } from "./agent-timeline-store-types.js";
+import { TimelineRowConflictError } from "./agent-timeline-store-types.js";
 
 export interface DurableTimelineTimers {
   setTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
@@ -29,6 +30,7 @@ export class DurableTimelineBuffer {
     private readonly timers: DurableTimelineTimers,
     private readonly onError: (agentId: string, error: unknown) => void,
     private readonly retryOptions: DurableTimelineRetryOptions = {},
+    private readonly onConflictDropped: (agentId: string, seq: number) => void = () => undefined,
   ) {}
 
   enqueue(agentId: string, row: AgentTimelineRow): void {
@@ -53,14 +55,23 @@ export class DurableTimelineBuffer {
       return;
     }
     const batch = [...state.rows];
+    let droppedConflict = false;
     state.flushing = this.store.bulkInsert(agentId, batch);
     try {
       await state.flushing;
       state.rows.splice(0, batch.length);
       state.retryAttempt = 0;
     } catch (error) {
-      this.scheduleRetry(agentId, state);
-      throw error;
+      if (!(error instanceof TimelineRowConflictError)) {
+        this.scheduleRetry(agentId, state);
+        throw error;
+      }
+      // A replayed row reused a committed sequence. Committed history wins; drop only that row so
+      // one conflict cannot block every later row for the agent.
+      state.rows = state.rows.filter((pending) => pending.seq !== error.seq);
+      state.retryAttempt = 0;
+      droppedConflict = true;
+      this.onConflictDropped(agentId, error.seq);
     } finally {
       state.flushing = null;
       if (state.rows.length === 0 && state.timer === null) {
@@ -69,6 +80,7 @@ export class DurableTimelineBuffer {
         this.schedule(agentId, state, this.delayMs);
       }
     }
+    if (droppedConflict) return this.flush(agentId);
   }
 
   async flushAll(): Promise<void> {

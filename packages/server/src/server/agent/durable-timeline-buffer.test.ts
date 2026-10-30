@@ -1,6 +1,10 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { DurableTimelineBuffer } from "./durable-timeline-buffer.js";
+import { FileAgentTimelineStore } from "./file-agent-timeline-store.js";
 import type {
   AgentTimelineFetchResult,
   AgentTimelineRow,
@@ -88,6 +92,33 @@ const timers = {
 };
 
 describe("DurableTimelineBuffer", () => {
+  test("drops a replayed row that conflicts with committed history and persists later rows", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "paseo-buffer-conflict-"));
+    const store = new FileAgentTimelineStore(directory);
+    const committedMerge: AgentTimelineRow = {
+      seq: 5,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      item: { type: "assistant_message", text: "4 5" },
+    };
+    await store.bulkInsert("agent", [committedMerge]);
+    const conflicts: number[] = [];
+    const buffer = new DurableTimelineBuffer(
+      store,
+      25,
+      timers,
+      () => undefined,
+      {},
+      (_agentId, seq) => conflicts.push(seq),
+    );
+
+    buffer.enqueue("agent", row(5));
+    buffer.enqueue("agent", row(6));
+    await buffer.flush("agent");
+
+    expect(await store.getCommittedRows("agent")).toEqual([committedMerge, row(6)]);
+    expect(conflicts).toEqual([5]);
+  });
+
   test("retries a failed prefix with later rows without a sequence hole", async () => {
     const store = new RecordingStore();
     store.failuresRemaining = 1;
