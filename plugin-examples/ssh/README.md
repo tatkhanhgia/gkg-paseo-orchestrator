@@ -61,6 +61,10 @@ with `paseo plugin reload ssh`.
   `plugin:ssh`, with no workspace, so no workspace lists, archives, or reports it, and the daemon
   ends it with the plugin. That ownership is hygiene, not a security boundary, because plugins are
   trusted local code that can reach the daemon.
+- **Any signed-in client can reach a session.** Like every terminal under Paseo's operator model,
+  any client signed in to the host can list the plugin's sessions, attach to one, type into it, and
+  end it by id. Attach cannot be limited to the plugin, because the Paseo app itself renders the
+  plugin's terminal. Treat access to the host as access to every open ssh session.
 - `ssh` runs from an argv array, never through a shell, with `--` before the destination. A host,
   alias, or user that is empty, starts with `-`, or contains whitespace or control characters is
   rejected, as is an identity file path that starts with `-` or contains control characters.
@@ -99,6 +103,12 @@ with `paseo plugin reload ssh`.
 - Filesystem errors are reported in plain words (disk full, name too long, permission denied, file
   exists, no longer exists). If a failed upload cannot remove its partial file, the message gives the
   remote path to delete by hand.
+
+## Upgrade note
+
+Sessions now belong to the plugin, not a workspace. Sessions started by the previous version in a
+workspace (owned terminals named `ssh <label>`) also end when the plugin is reloaded, disabled, or
+removed, which includes the reload that installs this version.
 
 ## Limits
 
