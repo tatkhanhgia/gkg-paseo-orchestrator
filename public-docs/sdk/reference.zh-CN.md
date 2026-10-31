@@ -158,9 +158,18 @@ nav: API 参考
 | `name`            | 可选的终端名称。                                                 |
 | `command`、`args` | 可选的可执行文件和参数数组。省略时启动默认 shell。               |
 | `size`            | 可选的初始视口：`{ rows, cols }`。                               |
+| `owned`           | 可选。创建[受管终端](#owned-terminals)，而不是工作区终端。       |
 | `requestId`       | 可选的请求关联 ID。                                              |
 
-列表选项有 `workspaceId`、`cwd` 和 `requestId`。`workspaceId` 按所有权筛选，包括在工作区目录之外启动的终端。提供它时，`cwd` 不会限制结果。没有 ID 时，`cwd` 按工作区根目录过滤。每个条目包含 `id`、`workspaceId`、`cwd` 和 `name`；`cwd` 是终端实际的起始目录。
+列表选项有 `workspaceId`、`cwd`、`owned` 和 `requestId`。`workspaceId` 按所有权筛选，包括在工作区目录之外启动的终端。提供它时，`cwd` 不会限制结果。没有 ID 时，`cwd` 按工作区根目录过滤。每个条目包含 `id`、`workspaceId`、`cwd` 和 `name`；`cwd` 是终端实际的起始目录。
+
+### 受管终端 {#owned-terminals}
+
+受管终端仍绑定在它的工作区，但不会出现在工作区展示的任何位置：终端列表和标签页、工作区状态、注意力通知以及 Agent MCP 的终端列表。它让集成能在自己的界面里渲染终端。归档工作区或重启 daemon 仍会结束它。
+
+用 `createPaseoApi(client, { terminalOwner })` 创建 `PaseoApi`，再向 `create` 和 `list` 传入 `owned: true`。所有者由 SDK 盖章，调用方从不传所有者字符串。`list({ owned: true })` 只返回该 API 的所有者创建的终端；单独的 `ref(id)` 无法刷新受管终端，请用这个列表重新找到它。按终端 ID 附加流、输入、调整大小、capture 和 `kill` 与普通终端相同。受管终端不发出推送事件，因此请轮询列表或监听流的退出。
+
+没有 `terminalOwner` 时 SDK 会抛出明确的错误；`server_info.features` 未报告 `owned-terminals` 的主机会以 “Update the host to use owned terminals.” 失败。插件的 `terminalOwner` 已是 `plugin:<id>`，只需传 `owned: true`；要显示终端，见 [`TerminalView`](/docs/plugins/reference#show-a-terminal-in-your-plugin)。
 
 终端句柄提供：
 
@@ -177,7 +186,7 @@ nav: API 参考
 
 capture 接受可选的 `start`、`end`、`stripAnsi` 和 `requestId`。行范围从零开始、包含两端，跨越回滚缓冲区和视口。负数范围从末尾开始计数；省略范围时捕获所有行。`stripAnsi` 默认为 `true`。终端不存在时返回空行。
 
-使用 `workspace.terminals.create(options?)` 和 `workspace.terminals.list(options?)` 可以从句柄提供工作区 ID。创建接受除 `workspaceId` 之外的相同选项；列表只接受 `requestId`。插件通过 `usePaseo()` 和处理函数的 `paseo` context 获得这些方法。
+使用 `workspace.terminals.create(options?)` 和 `workspace.terminals.list(options?)` 可以从句柄提供工作区 ID。创建接受除 `workspaceId` 之外的相同选项；列表只接受 `owned` 和 `requestId`。插件通过 `usePaseo()` 和处理函数的 `paseo` context 获得这些方法。
 
 ## `client.providers` {#clientproviders}
 

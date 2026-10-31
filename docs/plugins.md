@@ -385,6 +385,15 @@ bindings supplied by the bundle loader. Bind the imperative getter to that insta
 resolve ownership through a mutable current-plugin global. Keep observation ownership in this module
 and transport ownership in the app host runtime. See the [public host API contract](../public-docs/plugins/reference.md#discover-hosts-and-target-another-host).
 
+Plugins show a terminal of their own with owned terminals ([contract](architecture.md), [author
+guide](../public-docs/plugins/reference.md#show-a-terminal-in-your-plugin)). The host stamps the
+owner: the app creates each installation's API with `terminalOwner: "plugin:<id>"` in `registry.ts`,
+the subprocess session does the same, and a plugin only passes `owned: true`. `TerminalView` in
+`plugins/react-native/terminal-view.tsx` renders `TerminalPane` in its `embedded` mode, which drops the
+workspace-only swipes, file links, and focused-terminal report, and reads the host from
+`usePluginServerId()`. APIs borrowed through `getPaseoClient` carry no owner; they target other
+hosts, where `TerminalView` could not render the terminal anyway.
+
 Each subprocess gets an exclusively owned `plugin:<id>` session. That identity is reserved from
 normal clients, never resumes another session, and is cleaned immediately on exit without reconnect
 grace. During daemon startup, plugin sessions may connect while application WebSockets remain

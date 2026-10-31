@@ -14,6 +14,7 @@ export interface WorkerTerminalInfo {
   name: string;
   cwd: string;
   workspaceId?: string;
+  owner?: string;
   title?: string;
   activity: TerminalActivity | null;
 }
@@ -22,6 +23,7 @@ export interface WorkerCreateTerminalOptions {
   id?: string;
   cwd: string;
   workspaceId?: string;
+  owner?: string;
   name?: string;
   title?: string;
   env?: Record<string, string>;

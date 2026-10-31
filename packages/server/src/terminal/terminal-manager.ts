@@ -49,12 +49,35 @@ export type TerminalWorkspaceContributionChangedListener = (
   event: TerminalWorkspaceContributionChangedEvent,
 ) => void;
 
+export interface GetTerminalsOptions {
+  workspaceId?: string;
+  /** Return only terminals created with exactly this owner. */
+  owner?: string;
+  /** Include owned terminals when no `owner` is given. For workspace cleanup only. */
+  includeOwned?: boolean;
+}
+
+/**
+ * Owned terminals are invisible unless the caller names their owner (or opts in with
+ * `includeOwned`). Filtering lives here so a new listing caller fails closed.
+ */
+export function matchesTerminalOwnerScope(
+  session: Pick<TerminalSession, "owner">,
+  options: GetTerminalsOptions | undefined,
+): boolean {
+  if (options?.owner !== undefined) {
+    return session.owner === options.owner;
+  }
+  return options?.includeOwned === true || session.owner === undefined;
+}
+
 export interface TerminalManager {
-  getTerminals(cwd: string, options?: { workspaceId?: string }): Promise<TerminalSession[]>;
+  getTerminals(cwd: string, options?: GetTerminalsOptions): Promise<TerminalSession[]>;
   createTerminal(options: {
     id?: string;
     cwd: string;
     workspaceId: string;
+    owner?: string;
     name?: string;
     title?: string;
     env?: Record<string, string>;
@@ -156,6 +179,11 @@ export function createTerminalManager(
       session.kill();
     }
 
+    // Owned terminals are invisible to workspace surfaces, so their lifecycle emits nothing there.
+    if (session.owner !== undefined) {
+      return;
+    }
+
     const previousActivity = session.getActivity();
     const previousBucket = deriveTerminalActivityStatusBucket(previousActivity);
     if (previousBucket !== null) {
@@ -192,9 +220,14 @@ export function createTerminalManager(
       removeSessionById(session.id, { kill: false });
     });
     const unsubscribeTitle = session.onTitleChange(() => {
-      emitTerminalsChanged({ cwd: session.cwd });
+      if (session.owner === undefined) {
+        emitTerminalsChanged({ cwd: session.cwd });
+      }
     });
     const unsubscribeActivity = session.onActivityChange((transition) => {
+      if (session.owner !== undefined) {
+        return;
+      }
       emitTerminalActivityTransition({ session, transition });
       emitTerminalsChanged({ cwd: session.cwd });
       const previousBucket = deriveTerminalActivityStatusBucket(transition.previous);
@@ -229,9 +262,9 @@ export function createTerminalManager(
       return;
     }
 
-    const terminals = (terminalsByCwd.get(input.cwd) ?? []).map((session) =>
-      toTerminalListItem({ session }),
-    );
+    const terminals = (terminalsByCwd.get(input.cwd) ?? [])
+      .filter((session) => session.owner === undefined)
+      .map((session) => toTerminalListItem({ session }));
     const event: TerminalsChangedEvent = {
       cwd: input.cwd,
       terminals,
@@ -283,10 +316,7 @@ export function createTerminalManager(
   }
 
   return {
-    async getTerminals(
-      cwd: string,
-      options?: { workspaceId?: string },
-    ): Promise<TerminalSession[]> {
+    async getTerminals(cwd: string, options?: GetTerminalsOptions): Promise<TerminalSession[]> {
       assertAbsolutePath(cwd);
 
       // Terminals are bucketed by exact cwd, but an agent can open a terminal in
@@ -295,7 +325,7 @@ export function createTerminalManager(
       const sessions: TerminalSession[] = [];
       for (const [bucketCwd, bucketSessions] of terminalsByCwd) {
         if (isSameOrDescendantPath(cwd, bucketCwd)) {
-          sessions.push(...bucketSessions);
+          sessions.push(...bucketSessions.filter((s) => matchesTerminalOwnerScope(s, options)));
         }
       }
 
@@ -312,6 +342,7 @@ export function createTerminalManager(
       id?: string;
       cwd: string;
       workspaceId: string;
+      owner?: string;
       name?: string;
       title?: string;
       env?: Record<string, string>;
@@ -325,7 +356,9 @@ export function createTerminalManager(
       assertAbsolutePath(options.cwd);
 
       const terminals = terminalsByCwd.get(options.cwd) ?? [];
-      const defaultName = `Terminal ${terminals.length + 1}`;
+      // Number within the same visibility class so owned terminals do not shift user terminal names.
+      const sameClassCount = terminals.filter((t) => t.owner === options.owner).length;
+      const defaultName = `Terminal ${sameClassCount + 1}`;
       const inheritedEnv = resolveDefaultEnvForCwd(options.cwd);
       const mergedEnv =
         inheritedEnv || options.env ? { ...inheritedEnv, ...options.env } : undefined;
@@ -348,6 +381,7 @@ export function createTerminalManager(
             id: terminalId,
             cwd: options.cwd,
             workspaceId: options.workspaceId,
+            ...(options.owner === undefined ? {} : { owner: options.owner }),
             name: options.name ?? defaultName,
             ...(options.title ? { title: options.title } : {}),
             ...(options.command ? { command: options.command } : {}),
@@ -365,7 +399,9 @@ export function createTerminalManager(
 
       terminals.push(session);
       terminalsByCwd.set(options.cwd, terminals);
-      emitTerminalsChanged({ cwd: options.cwd });
+      if (session.owner === undefined) {
+        emitTerminalsChanged({ cwd: options.cwd });
+      }
 
       return session;
     },

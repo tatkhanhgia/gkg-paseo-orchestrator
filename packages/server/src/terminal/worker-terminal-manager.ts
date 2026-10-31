@@ -15,7 +15,9 @@ import type {
   TerminalStateSnapshot,
 } from "./terminal.js";
 import type { CaptureTerminalLinesResult } from "./terminal-capture.js";
+import { matchesTerminalOwnerScope } from "./terminal-manager.js";
 import type {
+  GetTerminalsOptions,
   TerminalActivityListener,
   TerminalActivityTransitionEvent,
   TerminalListItem,
@@ -133,6 +135,7 @@ function cloneTerminalInfo(info: RequiredWorkerTerminalInfo): RequiredWorkerTerm
     name: info.name,
     cwd: info.cwd,
     workspaceId: info.workspaceId,
+    ...(info.owner === undefined ? {} : { owner: info.owner }),
     ...(info.title ? { title: info.title } : {}),
     activity: info.activity,
   };
@@ -205,7 +208,7 @@ export function createWorkerTerminalManager(
     const terminals: TerminalListItem[] = [];
     for (const terminalId of terminalIds) {
       const record = recordsById.get(terminalId);
-      if (!record) {
+      if (!record || record.info.owner !== undefined) {
         continue;
       }
       terminals.push({
@@ -257,6 +260,9 @@ export function createWorkerTerminalManager(
       },
       get workspaceId() {
         return record.info.workspaceId;
+      },
+      get owner() {
+        return record.info.owner;
       },
       send(message: ClientMessage): void {
         if (message.type === "resize") {
@@ -443,6 +449,10 @@ export function createWorkerTerminalManager(
     record.exitListeners.clear();
     const previousBucket = deriveTerminalActivityStatusBucket(record.activity);
     const removedRecord = removeRecord(message.terminalId);
+    // Owned terminals are invisible to workspace surfaces, so their lifecycle emits nothing there.
+    if (record.info.owner !== undefined) {
+      return;
+    }
     if (previousBucket !== null && removedRecord) {
       emitTerminalWorkspaceContributionChanged({
         terminalId: removedRecord.info.id,
@@ -476,6 +486,9 @@ export function createWorkerTerminalManager(
     record.state = nextState;
     for (const listener of Array.from(record.titleChangeListeners)) {
       listener(message.title);
+    }
+    if (record.info.owner !== undefined) {
+      return;
     }
     emitTerminalsChanged({
       cwd: record.info.cwd,
@@ -511,6 +524,9 @@ export function createWorkerTerminalManager(
     for (const listener of Array.from(record.activityChangeListeners)) {
       listener(transition);
     }
+    if (record.info.owner !== undefined) {
+      return;
+    }
     emitTerminalActivityTransition({
       terminalId: record.info.id,
       name: record.info.name,
@@ -544,6 +560,9 @@ export function createWorkerTerminalManager(
         const pendingCreation = pendingCreationsById.get(message.terminal.id);
         if (pendingCreation) {
           pendingCreation.session = session;
+        }
+        if (message.terminal.owner !== undefined) {
+          return;
         }
         emitTerminalsChanged({
           cwd: message.terminal.cwd,
@@ -646,10 +665,7 @@ export function createWorkerTerminalManager(
   }
 
   return {
-    async getTerminals(
-      cwd: string,
-      options?: { workspaceId?: string },
-    ): Promise<TerminalSession[]> {
+    async getTerminals(cwd: string, options?: GetTerminalsOptions): Promise<TerminalSession[]> {
       assertAbsolutePath(cwd);
 
       // Served from the local mirror, exactly like every other parent read.
@@ -663,7 +679,7 @@ export function createWorkerTerminalManager(
         }
         for (const terminalId of terminalIds) {
           const session = recordsById.get(terminalId)?.session;
-          if (session) {
+          if (session && matchesTerminalOwnerScope(session, options)) {
             sessions.push(session);
           }
         }

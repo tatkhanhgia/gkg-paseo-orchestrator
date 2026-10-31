@@ -1,4 +1,4 @@
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { WorkspaceOption } from "../shared/workspaces";

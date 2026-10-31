@@ -590,7 +590,11 @@ function toDaemonAgentCreateOptions(
 
 export function createPaseoApi(
   daemonClient: DaemonClient,
-  scopeOptions?: { signal?: AbortSignal },
+  scopeOptions?: {
+    signal?: AbortSignal;
+    /** Stamps terminals created or listed with `owned: true`; callers never pass an owner string. */
+    terminalOwner?: string;
+  },
 ): PaseoApi {
   const handles = new Set<{ release(): Promise<void> }>();
   const agentListeners = new Set<PaseoAgentUpdateHandler>();
@@ -639,13 +643,17 @@ export function createPaseoApi(
     );
     return createAgentHandle(agent);
   };
-  const terminals = createTerminalActions(daemonClient, async (workspaceId) => {
-    const workspace = await createWorkspaceHandle(workspaceId).refresh();
-    if (!workspace?.workspaceDirectory) {
-      throw new Error(`Workspace ${workspaceId} is not active or has no available directory`);
-    }
-    return workspace.workspaceDirectory;
-  });
+  const terminals = createTerminalActions(
+    daemonClient,
+    async (workspaceId) => {
+      const workspace = await createWorkspaceHandle(workspaceId).refresh();
+      if (!workspace?.workspaceDirectory) {
+        throw new Error(`Workspace ${workspaceId} is not active or has no available directory`);
+      }
+      return workspace.workspaceDirectory;
+    },
+    scopeOptions?.terminalOwner,
+  );
   const createWorkspaceHandle = createWorkspaceHandleFactory(
     daemonClient,
     createAgent,
