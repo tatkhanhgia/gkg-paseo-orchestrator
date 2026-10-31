@@ -3337,6 +3337,9 @@ export const ListTerminalsRequestSchema = z.object({
   type: z.literal("list_terminals_request"),
   cwd: z.string().optional(),
   workspaceId: z.string().optional(),
+  // Added with the `owned-terminals` feature. Absent: owned terminals are hidden. Present: only
+  // terminals created with exactly this owner are returned.
+  owner: z.string().optional(),
   requestId: z.string(),
 });
 
@@ -3357,6 +3360,9 @@ export const CreateTerminalRequestSchema = z.object({
   type: z.literal("create_terminal_request"),
   cwd: z.string(),
   workspaceId: z.string().optional(),
+  // Added with the `owned-terminals` feature. An owned terminal stays bound to its workspace but is
+  // excluded from every listing, push, status, and notification surface that omits `owner`.
+  owner: z.string().optional(),
   name: z.string().optional(),
   agentId: z.string().optional(),
   command: z.string().optional(),
@@ -4105,6 +4111,8 @@ export const ServerInfoStatusPayloadSchema = z
         "terminal-input-mode-replay": z.boolean().optional(),
         // COMPAT(terminalSizeOwnership): added in v0.2.6, remove gate after 2027-02-02.
         "terminal-size-ownership": z.boolean().optional(),
+        // COMPAT(ownedTerminals): added in v0.13.2-paseo.3, remove gate after 2027-04-30.
+        "owned-terminals": z.boolean().optional(),
         // COMPAT(rewind): added in v0.1.X, drop the gate when floor >= v0.1.X.
         rewind: z.boolean().optional(),
         // COMPAT(agentTimelinePromptIndex): added in v0.2.X, drop the gate when floor >= v0.2.X.
@@ -6993,6 +7001,7 @@ const TerminalInfoSchema = z.object({
   name: z.string(),
   cwd: z.string(),
   workspaceId: z.string().optional(),
+  owner: z.string().optional(),
   title: z.string().optional(),
   activity: TerminalActivitySchema.nullable().optional(),
 });

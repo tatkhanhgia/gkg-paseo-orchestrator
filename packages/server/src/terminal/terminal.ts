@@ -104,6 +104,8 @@ export interface TerminalSession {
   name: string;
   cwd: string;
   workspaceId: string;
+  /** Present for owned terminals; they are hidden from every surface that omits the owner. */
+  owner?: string;
   send(msg: ClientMessage): void;
   subscribe(listener: (msg: ServerMessage) => void, options?: TerminalSubscribeOptions): () => void;
   onExit(listener: (info: TerminalExitInfo) => void): () => void;
@@ -145,6 +147,7 @@ export interface CreateTerminalOptions {
   id?: string;
   cwd: string;
   workspaceId: string;
+  owner?: string;
   shell?: string;
   env?: Record<string, string>;
   activityEnv?: Record<string, string>;
@@ -972,6 +975,7 @@ export async function createTerminal(options: CreateTerminalOptions): Promise<Te
   const {
     cwd,
     workspaceId,
+    owner,
     shell,
     env = {},
     activityEnv = {},
@@ -1643,6 +1647,7 @@ export async function createTerminal(options: CreateTerminalOptions): Promise<Te
     name,
     cwd,
     workspaceId,
+    ...(owner === undefined ? {} : { owner }),
     send,
     subscribe,
     onExit,
