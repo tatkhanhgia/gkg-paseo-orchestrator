@@ -2,11 +2,11 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "../support/fixtures";
-import { gotoWorkspace } from "../support/helpers/launcher";
+import { composerLocator } from "../support/helpers/composer";
+import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 import { connectNewWorkspaceDaemonClient } from "../support/helpers/new-workspace";
 import { copyPluginExample } from "../support/helpers/plugin-fixture";
-import { COMPACT, WIDE, runCommand } from "../support/helpers/plugin-sidebar-items";
-import { seedWorkspace } from "../support/helpers/seed-client";
+import { COMPACT, WIDE } from "../support/helpers/plugin-sidebar-items";
 import { getServerId } from "../support/helpers/server-id";
 import { getTerminalBufferText } from "../support/helpers/terminal-perf";
 import { expectNoTerminalTabs } from "../support/helpers/workspace-tabs";
@@ -48,14 +48,54 @@ async function expectTerminalText(page: Page, text: string) {
   await expect.poll(() => getTerminalBufferText(page), { timeout: 30_000 }).toContain(text);
 }
 
-test("Connect shows an interactive SSH terminal inside the plugin, not in the workspace tabs", async ({
+function sessionChips(page: Page) {
+  return page.getByRole("button", { name: "ssh e2e box", exact: true }).filter({ visible: true });
+}
+
+/** Types the password (echo is off), then a line, and expects ssh to answer both. */
+async function driveSession(page: Page, input: { password: string; line: string }) {
+  await expectTerminalText(page, "fake-ssh password:");
+  await terminalSurface(page).locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type(`${input.password}\n`);
+  await expectTerminalText(page, `authenticated (${input.password.length} chars)`);
+  await page.keyboard.type(`${input.line}\n`);
+  await expectTerminalText(page, `echo:${input.line}`);
+}
+
+/** Runs `/ssh e2e box` from the agent's composer in the workspace. */
+async function runSshSlashCommand(page: Page, agentId: string) {
+  await page
+    .getByTestId(`workspace-tab-agent_${agentId}`)
+    .filter({ visible: true })
+    .first()
+    .click();
+  const composer = composerLocator(page);
+  await expect(composer).toBeEditable({ timeout: 30_000 });
+  await composer.fill("/ssh e2e box");
+  await composer.press("Enter");
+}
+
+test("Connect and /ssh show interactive SSH terminals inside the plugin, not in the workspace tabs", async ({
   page,
 }) => {
-  test.setTimeout(180_000);
-  const workspace = await seedWorkspace({ repoPrefix: "ssh-embedded-" });
+  test.setTimeout(240_000);
+  const workspace = await seedMockAgentWorkspace({
+    repoPrefix: "ssh-embedded-",
+    title: "ssh embedded",
+    initialPrompt: "Prepare an ssh embedded terminal test agent.",
+  });
   const example = await copyPluginExample("ssh");
   const daemon = await connectNewWorkspaceDaemonClient({ ownProjects: false });
   const config = await daemon.getDaemonConfig();
+  // The daemon's owned terminals of the ssh plugin, in the target workspace and on the whole host.
+  async function ownedTerminalCounts() {
+    const inWorkspace = await daemon.listTerminals(undefined, undefined, {
+      workspaceId: workspace.workspaceId,
+      owner: "plugin:ssh",
+    });
+    const onHost = await daemon.listTerminals(undefined, undefined, { owner: "plugin:ssh" });
+    return { inWorkspace: inWorkspace.terminals.length, onHost: onHost.terminals.length };
+  }
   try {
     await daemon.patchDaemonConfig({ pluginsEnabled: true });
     await daemon.installDirectoryPlugin(example.directory);
@@ -76,50 +116,58 @@ test("Connect shows an interactive SSH terminal inside the plugin, not in the wo
     });
 
     await test.step("typed input reaches ssh and its output renders there", async () => {
-      await terminalSurface(page).locator(".xterm-helper-textarea").focus();
-      await page.keyboard.type("s3cret\n");
-      await expectTerminalText(page, "authenticated (6 chars)");
-      await page.keyboard.type("hello\n");
-      await expectTerminalText(page, "echo:hello");
+      await driveSession(page, { password: "s3cret", line: "hello" });
       // The password was typed with echo off, so it never reached the screen.
       expect(await getTerminalBufferText(page)).not.toContain("s3cret");
       await qaScreenshot(page, "ssh-embedded-wide-session");
     });
 
-    await test.step("the session creates no workspace terminal", async () => {
+    await test.step("the session is one owned terminal in the target workspace, not a workspace terminal", async () => {
+      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 1, onHost: 1 });
       const unowned = await daemon.listTerminals(undefined, undefined, {
         workspaceId: workspace.workspaceId,
       });
       expect(unowned.terminals).toEqual([]);
-      await gotoWorkspace(page, workspace.workspaceId);
+      await openAgentRoute(page, workspace);
       await expectNoTerminalTabs(page);
     });
 
-    await test.step("the SSH hosts panel reattaches to the running session", async () => {
-      await runCommand(page, "SSH: Open hosts");
-      await expect(page.getByRole("button", { name: "ssh e2e box", exact: true })).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(terminalSurface(page)).toBeVisible();
-      await expectTerminalText(page, "echo:hello");
+    await test.step("/ssh opens the SSH hosts panel on its new session and reattaches the running one", async () => {
+      await runSshSlashCommand(page, workspace.agentId);
+      await expect(sessionChips(page)).toHaveCount(2, { timeout: 30_000 });
+      // The new session is the one shown: a fresh prompt, none of the first session's output.
+      await driveSession(page, { password: "pw2", line: "second" });
+      expect(await getTerminalBufferText(page)).not.toContain("echo:hello");
+      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 2, onHost: 2 });
       await expectNoTerminalTabs(page);
       await qaScreenshot(page, "ssh-embedded-wide-panel");
     });
 
-    await test.step("a compact layout shows the same session", async () => {
+    await test.step("/ssh while the panel is open adds and shows the next session", async () => {
+      await runSshSlashCommand(page, workspace.agentId);
+      await expect(sessionChips(page)).toHaveCount(3, { timeout: 30_000 });
+      await driveSession(page, { password: "pw33", line: "third" });
+      expect(await getTerminalBufferText(page)).not.toContain("echo:second");
+      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 3, onHost: 3 });
+    });
+
+    await test.step("a chip switches back to the first, still running, session", async () => {
+      await sessionChips(page).first().click();
+      await expectTerminalText(page, "echo:hello");
+    });
+
+    await test.step("a compact layout shows the newest running session", async () => {
       await page.setViewportSize(COMPACT);
       await expect(terminalSurface(page)).toBeVisible({ timeout: 30_000 });
-      await expectTerminalText(page, "echo:hello");
+      await expectTerminalText(page, "echo:third");
       await qaScreenshot(page, "ssh-embedded-compact-panel");
     });
 
     await test.step("the session list drops a session when ssh exits", async () => {
       await terminalSurface(page).locator(".xterm-helper-textarea").focus();
       await page.keyboard.press("Control+d");
-      await expect(page.getByRole("button", { name: "ssh e2e box", exact: true })).toHaveCount(0, {
-        timeout: 30_000,
-      });
-      await expect(terminalSurface(page)).toHaveCount(0);
+      await expect(sessionChips(page)).toHaveCount(2, { timeout: 30_000 });
+      await expectNoTerminalTabs(page);
     });
   } finally {
     await daemon.removePlugin("ssh").catch(() => undefined);

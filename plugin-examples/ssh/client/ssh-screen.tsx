@@ -6,7 +6,7 @@ import { FilesBrowser, TransferList, useTransfers } from "./files-browser";
 import { HostsList } from "./hosts-list";
 import { SessionChips } from "./session-chips";
 import { CompactSshLayout, WideSshLayout, type SshScreenParts } from "./ssh-layouts";
-import { canShowSessions, SessionPane } from "./session-pane";
+import { SessionPane } from "./session-pane";
 import type { Layout, TargetWorkspace, Theme } from "./types";
 import { useSshSessions } from "./use-ssh-sessions";
 
@@ -51,10 +51,6 @@ export function SshScreen({
     async (entry: SshHostEntry) => {
       if (!workspace) {
         toast.error("Choose a target workspace first.");
-        return;
-      }
-      if (!canShowSessions) {
-        toast.error("Update the Paseo app to use SSH sessions here.");
         return;
       }
       try {
