@@ -36,7 +36,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addSlashCommand({
     name: "ssh",
-    description: "Open an SSH session in a workspace terminal",
+    description: "Open an SSH session in the SSH hosts panel",
     argumentHint: "<host>",
     context: "workspace",
     onSubmit: runSshSlashCommand,

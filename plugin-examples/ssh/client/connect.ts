@@ -1,22 +1,26 @@
 import type { PluginCommandCapabilities } from "@getpaseo/plugin/client";
 import type { SshHostEntry } from "../shared/hosts";
-import { buildSshInvocation, hasControlCharacter } from "../shared/ssh-args";
+import { sessionName } from "../shared/sessions";
+import { buildSshInvocation } from "../shared/ssh-args";
+import { canShowSessions } from "./session-pane";
 
-function displayName(label: string): string {
-  return [...label].map((char) => (hasControlCharacter(char) ? " " : char)).join("");
-}
-
-/** Opens `ssh` as a terminal in the workspace. ssh prompts for any password or passphrase itself. */
-export async function openSshTerminal(
+/**
+ * Starts `ssh` in an owned terminal: bound to the workspace but hidden from its terminal tabs, so
+ * the plugin shows it itself. ssh prompts for any password or passphrase in that terminal.
+ */
+export async function openSshSession(
   paseo: PluginCommandCapabilities["paseo"],
   workspaceId: string,
   entry: SshHostEntry,
 ) {
+  // An app that cannot render the terminal would leave ssh running where nobody can see or close it.
+  if (!canShowSessions) throw new Error("Update the Paseo app to use SSH sessions here.");
   const { command, args } = buildSshInvocation(entry.target);
   return paseo.terminals.create({
     workspaceId,
-    name: `ssh ${displayName(entry.label)}`,
+    name: sessionName(entry.label),
     command,
     args,
+    owned: true,
   });
 }

@@ -308,11 +308,15 @@ export class TerminalSessionController {
   }
 
   private toTerminalInfo(
-    terminal: Pick<TerminalSession, "id" | "name" | "workspaceId" | "getTitle" | "getActivity">,
+    terminal: Pick<
+      TerminalSession,
+      "id" | "name" | "workspaceId" | "owner" | "getTitle" | "getActivity"
+    >,
   ): {
     id: string;
     name: string;
     workspaceId: string;
+    owner?: string;
     title?: string;
     activity: TerminalActivity | null;
   } {
@@ -322,6 +326,7 @@ export class TerminalSessionController {
       id: terminal.id,
       name: terminal.name,
       workspaceId: terminal.workspaceId,
+      ...(terminal.owner === undefined ? {} : { owner: terminal.owner }),
       ...(title ? { title } : {}),
       activity,
     };
@@ -429,13 +434,13 @@ export class TerminalSessionController {
     try {
       let terminals: TerminalSession[];
       if (msg.workspaceId !== undefined) {
-        terminals = (await this.getAllTerminalSessions()).filter(
+        terminals = (await this.getAllTerminalSessions(msg.owner)).filter(
           (terminal) => terminal.workspaceId === msg.workspaceId,
         );
       } else if (typeof msg.cwd === "string") {
-        terminals = await this.getTerminalsForWorkspaceRoot(msg.cwd);
+        terminals = await this.getTerminalsForWorkspaceRoot(msg.cwd, undefined, msg.owner);
       } else {
-        terminals = await this.getAllTerminalSessions();
+        terminals = await this.getAllTerminalSessions(msg.owner);
       }
       this.emit({
         type: "list_terminals_response",
@@ -460,14 +465,14 @@ export class TerminalSessionController {
     }
   }
 
-  private async getAllTerminalSessions(): Promise<TerminalSession[]> {
+  private async getAllTerminalSessions(owner?: string): Promise<TerminalSession[]> {
     if (!this.terminalManager) {
       return [];
     }
     const directories = this.terminalManager.listDirectories();
     const manager = this.terminalManager;
     const terminalsByDirectory = await Promise.all(
-      directories.map((cwd) => manager.getTerminals(cwd)),
+      directories.map((cwd) => manager.getTerminals(cwd, { owner })),
     );
     return [
       ...new Map(terminalsByDirectory.flat().map((terminal) => [terminal.id, terminal])).values(),
@@ -477,12 +482,13 @@ export class TerminalSessionController {
   private async getTerminalsForWorkspaceRoot(
     cwd: string,
     workspaceId?: string,
+    owner?: string,
   ): Promise<TerminalSession[]> {
     if (!this.terminalManager) {
       return [];
     }
 
-    const terminals = await this.terminalManager.getTerminals(cwd, { workspaceId });
+    const terminals = await this.terminalManager.getTerminals(cwd, { workspaceId, owner });
     const workspaceRoots = await this.listTerminalWorkspaceRoots();
     if (workspaceRoots.length === 0) {
       return terminals;
@@ -574,6 +580,7 @@ export class TerminalSessionController {
       const session = await this.terminalManager.createTerminal({
         cwd: msg.cwd,
         workspaceId,
+        ...(msg.owner === undefined ? {} : { owner: msg.owner }),
         name: msg.name,
         command: msg.command,
         args: msg.args,
@@ -588,6 +595,7 @@ export class TerminalSessionController {
             name: session.name,
             cwd: session.cwd,
             workspaceId: session.workspaceId,
+            ...(session.owner === undefined ? {} : { owner: session.owner }),
             ...(session.getTitle() ? { title: session.getTitle() } : {}),
             activity: session.getActivity(),
           },

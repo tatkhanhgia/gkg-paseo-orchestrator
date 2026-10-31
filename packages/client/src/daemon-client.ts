@@ -6754,13 +6754,14 @@ export class DaemonClient {
   async listTerminals(
     cwd?: string,
     requestId?: string,
-    options?: { workspaceId?: string },
+    options?: { workspaceId?: string; owner?: string },
   ): Promise<ListTerminalsPayload> {
     const resolvedRequestId = this.createRequestId(requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "list_terminals_request",
       ...(cwd === undefined ? {} : { cwd }),
       ...(options?.workspaceId !== undefined ? { workspaceId: options.workspaceId } : {}),
+      ...(options?.owner !== undefined ? { owner: options.owner } : {}),
       requestId: resolvedRequestId,
     });
     return this.sendCorrelatedRequest({
@@ -6780,6 +6781,7 @@ export class DaemonClient {
       command?: string;
       args?: string[];
       workspaceId?: string;
+      owner?: string;
       size?: { rows: number; cols: number };
     },
   ): Promise<CreateTerminalPayload> {
@@ -6792,6 +6794,7 @@ export class DaemonClient {
       command: options?.command,
       args: options?.args,
       ...(options?.workspaceId !== undefined ? { workspaceId: options.workspaceId } : {}),
+      ...(options?.owner !== undefined ? { owner: options.owner } : {}),
       ...(options?.size !== undefined ? { size: options.size } : {}),
       requestId: resolvedRequestId,
     });

@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createWorkerTerminalManager } from "./worker-terminal-manager.js";
+import { killTerminalsForWorkspace } from "../server/workspace-archive-service.js";
+import type { Logger } from "pino";
 import type {
   TerminalActivityTransitionEvent,
   TerminalManager,
@@ -1103,4 +1105,100 @@ it("rejects createTerminal and registers nothing when the worker cannot start th
   expect(manager.getTerminal("terminal-a")).toBeUndefined();
   expect(await manager.getTerminals("/workspace")).toEqual([]);
   expect(snapshots).toEqual([]);
+});
+
+function emitCreatedTerminal(
+  worker: FakeTerminalWorker,
+  terminal: { id: string; owner?: string; workspaceId?: string },
+): void {
+  worker.emitWorkerMessage({
+    type: "terminalCreated",
+    terminal: {
+      id: terminal.id,
+      name: terminal.id,
+      cwd: "/workspace",
+      workspaceId: terminal.workspaceId ?? "ws-test",
+      ...(terminal.owner === undefined ? {} : { owner: terminal.owner }),
+      activity: null,
+    },
+    state: createTerminalState(),
+  });
+}
+
+it("hides owned terminals from unowned reads and returns them only to their exact owner", async () => {
+  const worker = new FakeTerminalWorker();
+  manager = createWorkerTerminalManager({ requestTimeoutMs: 5, forkWorker: () => worker });
+  emitCreatedTerminal(worker, { id: "plain" });
+  emitCreatedTerminal(worker, { id: "ssh-a", owner: "plugin:ssh" });
+  emitCreatedTerminal(worker, { id: "other-b", owner: "plugin:other" });
+
+  const ids = async (options?: Parameters<TerminalManager["getTerminals"]>[1]) =>
+    (await manager!.getTerminals("/workspace", options)).map((terminal) => terminal.id);
+
+  expect(await ids()).toEqual(["plain"]);
+  expect(await ids({ workspaceId: "ws-test" })).toEqual(["plain"]);
+  expect(await ids({ owner: "plugin:ssh" })).toEqual(["ssh-a"]);
+  expect(await ids({ owner: "plugin:ssh", workspaceId: "ws-elsewhere" })).toEqual([]);
+  expect(await ids({ includeOwned: true })).toEqual(["plain", "ssh-a", "other-b"]);
+  expect(manager.getTerminal("ssh-a")?.owner).toBe("plugin:ssh");
+});
+
+it("emits no workspace-visible event for an owned terminal's lifecycle", async () => {
+  const worker = new FakeTerminalWorker();
+  manager = createWorkerTerminalManager({ requestTimeoutMs: 5, forkWorker: () => worker });
+  const snapshots: string[][] = [];
+  const activity: string[] = [];
+  const contributions: string[] = [];
+  manager.subscribeTerminalsChanged((event) => snapshots.push(event.terminals.map((t) => t.id)));
+  manager.subscribeTerminalActivity((event) => activity.push(event.terminalId));
+  manager.subscribeTerminalWorkspaceContributionChanged((event) =>
+    contributions.push(event.terminalId),
+  );
+
+  emitCreatedTerminal(worker, { id: "ssh-a", owner: "plugin:ssh" });
+  worker.emitWorkerMessage({
+    type: "terminalActivityChange",
+    terminalId: "ssh-a",
+    activity: { state: "working", changedAt: 1000 },
+    previous: null,
+  });
+  worker.emitWorkerMessage({ type: "terminalTitleChange", terminalId: "ssh-a", title: "host" });
+  worker.emitWorkerMessage({
+    type: "terminalExit",
+    terminalId: "ssh-a",
+    info: { exitCode: 0, signal: null, lastOutputLines: [] },
+  });
+  expect([snapshots, activity, contributions]).toEqual([[], [], []]);
+
+  // Control: the same lifecycle on an unowned terminal is observable.
+  emitCreatedTerminal(worker, { id: "plain" });
+  worker.emitWorkerMessage({
+    type: "terminalActivityChange",
+    terminalId: "plain",
+    activity: { state: "working", changedAt: 1000 },
+    previous: null,
+  });
+  expect([snapshots, activity, contributions]).toEqual([
+    [["plain"], ["plain"]],
+    ["plain"],
+    ["plain"],
+  ]);
+});
+
+it("workspace archive cleanup still kills owned terminals", async () => {
+  const worker = new FakeTerminalWorker();
+  manager = createWorkerTerminalManager({ requestTimeoutMs: 5, forkWorker: () => worker });
+  emitCreatedTerminal(worker, { id: "plain", workspaceId: "ws-archived" });
+  emitCreatedTerminal(worker, { id: "ssh-a", owner: "plugin:ssh", workspaceId: "ws-archived" });
+  emitCreatedTerminal(worker, { id: "ssh-elsewhere", owner: "plugin:ssh", workspaceId: "ws-kept" });
+
+  await killTerminalsForWorkspace(
+    { terminalManager: manager, sessionLogger: { warn: () => {} } as unknown as Logger },
+    "ws-archived",
+  );
+
+  const killedIds = worker.sentMessages.flatMap((message) =>
+    message.type === "killTerminalAndWait" ? [message.terminalId] : [],
+  );
+  expect(killedIds.sort()).toEqual(["plain", "ssh-a"]);
 });

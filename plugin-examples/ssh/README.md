@@ -1,7 +1,8 @@
 # SSH session manager
 
-A minimal MobaXterm-style screen. **Connect** opens `ssh` in a Paseo workspace terminal, and
-**Files** browses the host's file tree with download and upload.
+A minimal MobaXterm-style screen. **Connect** runs `ssh` and shows an interactive terminal inside
+the plugin's own screen, and **Files** browses the host's file tree with download and upload.
+The session is not a workspace terminal tab.
 
 Install with `paseo plugin install /absolute/path/to/plugin-examples/ssh`, then reload after edits
 with `paseo plugin reload ssh`.
@@ -13,23 +14,32 @@ with `paseo plugin reload ssh`.
 - **Command Center (⌘K) → SSH.** Opens the same screen from anywhere.
 - **Workspace panel.** Command Center → **SSH: Open hosts** in a workspace opens the panel as a
   tab. The workspace it sits in is the target, so it has no picker.
-- **`/ssh <host>`** in a workspace composer connects without opening a screen.
+- **`/ssh <host>`** in a workspace composer starts the session and opens the **SSH hosts** panel
+  showing it.
 
 ## Use it
 
-- **Screen layout.** Hosts on the left and the remote file browser on the right on wide layouts;
-  on compact layouts (phones) the host list is replaced by the browser while a host is open, and
-  **Hosts** goes back. The panel and the sidebar screen are the same component.
+- **Screen layout.** Hosts on the left on wide layouts, and on the right a pane that switches
+  between **Files** and the running sessions (one chip each, with an × to close it). On compact
+  layouts (phones) the session or the file browser replaces the host list while it is open, and
+  the back arrow or **Hosts** returns. The panel and the sidebar screen are the same component.
 - **Target workspace.** The sidebar screen lists the workspaces of the selected host by project and
-  name. **Connect**, **Download**, and **Upload** need one: the terminal opens in it, downloads
+  name. **Connect**, **Download**, and **Upload** need one: the session belongs to it, downloads
   land in its directory, and uploads read from it. The choice is saved in the plugin settings (per
   host) and restored next time. If the saved workspace no longer exists you are asked to choose
-  again; if only one workspace exists it is used. After **Connect** the screen opens that workspace
-  when the client supports it (`navigation.openWorkspace`); older clients only show the toast.
+  again; if only one workspace exists it is used. **Connect** stays on the screen; it does not
+  open the workspace.
 - **Hosts.** Both screens list user-added hosts and the hosts in the daemon user's `~/.ssh/config`.
-  **Connect** opens a terminal tab named `ssh <label>` in the target workspace.
+  **Connect** starts `ssh` in an owned terminal named `ssh <label>` in the target workspace and
+  shows it in the pane. Typing, a password or passphrase, resize, colors, copy and paste, find, and
+  the mobile key bar all work there.
+- **Sessions.** The screen lists the workspace's running sessions and shows the newest, so reopening
+  the screen or reloading the plugin reattaches to ssh that is still running. Pick a chip to switch
+  sessions; × ends one. When ssh exits, its chip goes away. Closing the screen keeps ssh
+  running; archiving the workspace or restarting the daemon ends it.
 - **Slash command.** `/ssh <host>` in a workspace composer connects to the host whose label (user
-  hosts, ignoring case) or alias (config hosts, exact) matches.
+  hosts, ignoring case) or alias (config hosts, exact) matches, then opens the **SSH hosts** panel,
+  which shows the newest session.
 - **Files.** **Files** on a host opens a remote file tree that starts at the remote home, with
   **Up**, **Home**, and **Refresh**, and shows each entry's name, type, size, and modified time.
   Tap a folder to enter it. **Download** (the arrow icon on a file) copies a remote file into the current
@@ -49,7 +59,10 @@ with `paseo plugin reload ssh`.
 
 ## Security
 
-- Passwords, passphrases, and key contents are never stored. `ssh` prompts for them in the terminal.
+- Passwords, passphrases, and key contents are never stored. `ssh` prompts for them in the session.
+- The session is an owned terminal: the host stamps it with `plugin:ssh`, and Paseo hides it from
+  the workspace's terminal list, tabs, status, and notifications. That tag is hygiene, not a
+  security boundary, because plugins are trusted local code that can reach the daemon.
 - `ssh` runs from an argv array, never through a shell, with `--` before the destination. A host,
   alias, or user that is empty, starts with `-`, or contains whitespace or control characters is
   rejected, as is an identity file path that starts with `-` or contains control characters.
@@ -87,10 +100,15 @@ with `paseo plugin reload ssh`.
 
 ## Limits
 
-- Paseo plugins cannot focus a terminal tab (the client navigation API only opens agents and
-  workspaces). **Connect** opens the workspace but not the new tab, so a toast names the tab
-  (`ssh <label>`) and the workspace and you select the tab yourself. `/ssh` shows nothing on
-  success.
+- Sessions need a daemon that reports `owned-terminals` and an app whose plugin UI has
+  `TerminalView`. On an older daemon **Connect** says "Update the host to use owned terminals."; on
+  an older app it says to update the Paseo app. The manifest cannot block either, so the rest of
+  the plugin keeps working.
+- Owned terminals send no push events, so the session list refreshes when you open the screen,
+  connect, close a session, or ssh exits in a visible session. An ssh that ends while its screen is
+  closed disappears the next time the list is read.
+- The terminal is verified in a desktop browser (wide and compact layouts). It is not yet verified
+  on a device (iOS or Android).
 - The workspace picker lists at most 1000 workspaces (five pages of 200) and hides ones being
   archived.
 - `Host` patterns containing `*`, `?`, or `!` are skipped. `Include` is followed with `*`/`?` only in the

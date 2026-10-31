@@ -6,6 +6,7 @@ const TerminalSchema = z.object({
   workspaceId: z.string(),
   cwd: z.string(),
   name: z.string(),
+  owner: z.string().optional(),
 });
 
 export type PaseoTerminal = z.infer<typeof TerminalSchema>;
@@ -18,6 +19,11 @@ export interface PaseoTerminalCreateOptions {
   command?: string;
   args?: string[];
   size?: { rows: number; cols: number };
+  /**
+   * Create the terminal under this API's `terminalOwner`: it stays bound to the workspace but is
+   * hidden from workspace terminal lists, tabs, status, and notifications.
+   */
+  owned?: boolean;
   requestId?: string;
 }
 
@@ -26,6 +32,8 @@ export interface PaseoTerminalListOptions {
   workspaceId?: string;
   /** Workspace root directory filter for unscoped listings. */
   cwd?: string;
+  /** List only the terminals owned by this API's `terminalOwner` instead of workspace terminals. */
+  owned?: boolean;
   requestId?: string;
 }
 
@@ -63,7 +71,7 @@ export interface PaseoTerminalActions {
 
 export interface PaseoWorkspaceTerminalActions {
   create(options?: Omit<PaseoTerminalCreateOptions, "workspaceId">): Promise<PaseoTerminalHandle>;
-  list(options?: { requestId?: string }): Promise<PaseoTerminalListResult>;
+  list(options?: { owned?: boolean; requestId?: string }): Promise<PaseoTerminalListResult>;
 }
 
 type TerminalClient = Pick<
@@ -81,6 +89,7 @@ type TerminalClient = Pick<
 export function createTerminalActions(
   daemonClient: TerminalClient,
   resolveWorkspaceDirectory: (workspaceId: string) => Promise<string>,
+  terminalOwner?: string,
 ): PaseoTerminalActions {
   function client(): TerminalClient {
     daemonClient.ensureConnected();
@@ -91,9 +100,24 @@ export function createTerminalActions(
     return daemonClient;
   }
 
+  const resolveOwner = (owned: boolean | undefined): string | undefined => {
+    if (!owned) return undefined;
+    if (terminalOwner === undefined) {
+      throw new Error("Owned terminals require an API created with a terminalOwner.");
+    }
+    // COMPAT(ownedTerminals): added in v0.13.2-paseo.3, remove gate after 2027-04-30.
+    if (daemonClient.getLastServerInfoMessage()?.features?.["owned-terminals"] !== true) {
+      throw new Error("Update the host to use owned terminals.");
+    }
+    return terminalOwner;
+  };
+
   const list = async (options: PaseoTerminalListOptions = {}): Promise<PaseoTerminalListResult> => {
-    const result = await client().listTerminals(options.cwd, options.requestId, {
+    const driver = client();
+    const owner = resolveOwner(options.owned);
+    const result = await driver.listTerminals(options.cwd, options.requestId, {
       workspaceId: options.workspaceId,
+      ...(owner === undefined ? {} : { owner }),
     });
     return {
       entries: result.terminals.map((terminal) => TerminalSchema.parse(terminal)),
@@ -112,7 +136,7 @@ export function createTerminalActions(
       id,
       current: () => current,
       refresh: async (options) => {
-        const result = await list(options);
+        const result = await list({ ...options, owned: current?.owner !== undefined });
         current = result.entries.find((entry) => entry.id === id) ?? null;
         return current;
       },
@@ -131,13 +155,15 @@ export function createTerminalActions(
   };
 
   return {
-    create: async ({ workspaceId, cwd, name, requestId, ...options }) => {
+    create: async ({ workspaceId, cwd, name, requestId, owned, ...options }) => {
       const driver = client();
       if (!workspaceId) throw new Error("workspaceId is required");
+      const owner = resolveOwner(owned);
       const directory = cwd ?? (await resolveWorkspaceDirectory(workspaceId));
       const result = await driver.createTerminal(directory, name, requestId, {
         ...options,
         workspaceId,
+        ...(owner === undefined ? {} : { owner }),
       });
       if (result.error || !result.terminal) {
         throw new Error(result.error ?? "The daemon did not create a terminal");

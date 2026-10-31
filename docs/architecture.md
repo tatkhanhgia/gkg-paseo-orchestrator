@@ -323,6 +323,8 @@ Terminal I/O is sent as binary WebSocket frames decoded by `decodeTerminalStream
 - 1-byte slot: terminal slot id
 - variable payload: bytes for output/input, JSON-encoded `{ rows, cols }` for resize, terminal snapshot for snapshot
 
+Owned terminals (`server_info.features["owned-terminals"]`) let an integration run a terminal inside its own surface instead of as a workspace tab. `create_terminal_request.owner` binds the terminal to an active workspace as usual, but the terminal managers hide it from every listing, `terminals_changed` push, workspace status contribution, attention notification, and agent MCP terminal listing that omits the owner. `list_terminals_request.owner` returns only terminals with exactly that owner; workspace archive still kills them. Stream attach, input, resize, kill, and capture by terminal id are unchanged. The client SDK stamps the owner from `createPaseoApi(client, { terminalOwner })`, so callers pass `owned: true` and never an owner string, and the server plugin host stamps `plugin:<pluginId>`.
+
 Terminal PTY size is last-interacting-client-wins. A client claims the PTY size only when its terminal viewport genuinely changes size or the user focuses/taps the terminal. Passive rendering work — attaching, restoring visibility, font settling, renderer refits, or just looking at a visible terminal — must not send a resize frame. The server does not broadcast resize ownership; the resized PTY redraws through normal output, and every attached client renders that output in its own local viewport.
 
 There is also a separate file-transfer binary frame format in the same directory, used for download/upload streams.

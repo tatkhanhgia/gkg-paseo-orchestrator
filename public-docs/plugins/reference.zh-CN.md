@@ -2094,6 +2094,20 @@ function PullRequestAction({ theme }: PluginSurfaceProps) {
 
 返回的 API 涵盖项目、工作区、Agent、终端、Provider 和 daemon 配置。其方法请参阅 [SDK API 参考](/docs/sdk/reference)。这里刻意没有连接生命周期方法，因为连接由 Paseo 负责。
 
+### 在插件中显示终端 {#show-a-terminal-in-your-plugin}
+
+用 `paseo.terminals.create({ workspaceId, command, args, owned: true })` 创建[受管终端](/docs/sdk/reference#owned-terminals)，再用 `@getpaseo/plugin/client/ui` 中的 `TerminalView` 渲染。该终端不会出现在工作区的终端标签页里；你的屏幕或面板是它唯一的视图。
+
+| 属性       | 必填 | 含义                                                                                     |
+| ---------- | ---- | ---------------------------------------------------------------------------------------- |
+| `terminal` | 是   | `{ id, cwd }`，`paseo.terminals` 返回的 `PaseoTerminal` 即满足。它运行在插件所在的主机。 |
+| `style`    | 否   | 外层视图的样式。终端会填满父级，因此请给它一个有界的高度。                               |
+| `onExit`   | 否   | 终端进程结束时调用。受管终端不发出推送事件，请在这里刷新你的列表。                       |
+
+`TerminalView` 支持键盘输入、密码输入、调整大小、颜色、复制粘贴、查找和移动端按键栏。它去掉了只有工作区标签页才需要的部分：滑动到移动端 Agent 列表或文件浏览器，以及打开工作区文件链接。关闭你的屏幕不会结束进程；之后可用 `list({ workspaceId, owned: true })` 重新找到它，因此插件重新加载后可以重新附加；`ref(id).kill()` 结束它。
+
+`TerminalView` 随加入受管终端的版本提供；更早的应用在 `@getpaseo/plugin/client/ui` 中没有这个导出，且 `requirements.paseo` 无法阻止它。请用 `import * as ui` 读取，并在 `ui.TerminalView` 为 `undefined` 时显示提示。[SSH 插件](https://github.com/getpaseo/paseo/tree/main/plugin-examples/ssh)是完整示例。
+
 ### 发现主机并指定另一台主机 {#discover-hosts-and-target-another-host}
 
 使用 `useHosts()` 显示已配置的主机，并在操作回调中使用 `getPaseoClient(serverId)` 对其中一台主机

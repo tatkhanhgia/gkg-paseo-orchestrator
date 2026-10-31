@@ -396,6 +396,84 @@ async function waitForCoalescerFlush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 30));
 }
 
+function filterByOwner(sessions: TerminalSession[], owner: string | undefined): TerminalSession[] {
+  return sessions.filter((session) => session.owner === owner);
+}
+
+describe("terminal-session-controller owned terminals", () => {
+  test("creates under the requested owner and lists by owner only when the request names it", async () => {
+    const outboundMessages: SessionOutboundMessage[] = [];
+    const sessions: TerminalSession[] = [
+      listSession({ id: "plain-1", name: "Shell", cwd: "/work/repo", workspaceId: "ws-1" }),
+    ];
+    const terminalManager = {
+      createTerminal: vi.fn(async (options: Parameters<TerminalManager["createTerminal"]>[0]) => {
+        const session = {
+          ...listSession({
+            id: "owned-1",
+            name: "Shell",
+            cwd: options.cwd,
+            workspaceId: options.workspaceId,
+          }),
+          ...(options.owner === undefined ? {} : { owner: options.owner }),
+        };
+        sessions.push(session);
+        return session;
+      }),
+      listDirectories: () => ["/work/repo"],
+      getTerminals: vi.fn(async (_cwd: string, options?: { owner?: string }) =>
+        filterByOwner(sessions, options?.owner),
+      ),
+    } as unknown as TerminalManager;
+    const controller = createController({
+      terminalManager,
+      emit: (message) => outboundMessages.push(message),
+      emitBinary: vi.fn(),
+      hasBinaryChannel: () => true,
+      isPathWithinRoot: isSameOrDescendantPath,
+      sessionLogger: createLogger(),
+      listTerminalWorkspaceRefs: async () => [{ workspaceId: "ws-1", cwd: "/work/repo" }],
+    });
+
+    await controller.dispatch({
+      type: "create_terminal_request",
+      cwd: "/work/repo",
+      workspaceId: "ws-1",
+      owner: "plugin:ssh",
+      requestId: "req-create-owned",
+    });
+    await controller.dispatch({
+      type: "list_terminals_request",
+      workspaceId: "ws-1",
+      requestId: "req-list-plain",
+    });
+    await controller.dispatch({
+      type: "list_terminals_request",
+      workspaceId: "ws-1",
+      owner: "plugin:ssh",
+      requestId: "req-list-owned",
+    });
+
+    const byRequest = (requestId: string) =>
+      outboundMessages.find(
+        (message) =>
+          "payload" in message &&
+          (message.payload as { requestId?: string }).requestId === requestId,
+      )?.payload as unknown as {
+        terminal?: { id: string; owner?: string };
+        terminals?: Array<{ id: string; owner?: string }>;
+      };
+    expect(byRequest("req-create-owned").terminal).toMatchObject({
+      id: "owned-1",
+      owner: "plugin:ssh",
+    });
+    expect(byRequest("req-list-plain").terminals?.map((t) => t.id)).toEqual(["plain-1"]);
+    expect(byRequest("req-list-owned").terminals).toMatchObject([
+      { id: "owned-1", owner: "plugin:ssh" },
+    ]);
+  });
+});
+
 describe("terminal-session-controller wrap-flag gating", () => {
   function setup(clientSupportsWrapReflow?: () => boolean): {
     controller: ReturnType<typeof createController>;

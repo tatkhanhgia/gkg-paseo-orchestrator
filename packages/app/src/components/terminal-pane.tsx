@@ -104,15 +104,35 @@ import {
   type WorkspaceFileOpenRequest,
 } from "@/workspace/file-open";
 
-interface TerminalPaneProps {
+interface TerminalPaneBaseProps {
   serverId: string;
   cwd: string;
   terminalId: string;
   isWorkspaceFocused: boolean;
   isPaneFocused: boolean;
+  /** Runs when the terminal's process ends. */
+  onExit?: () => void;
+}
+
+/** A terminal tab: it can open the workspace file explorer and workspace files. */
+interface WorkspaceTerminalPaneProps extends TerminalPaneBaseProps {
+  embedded?: false;
   onOpenFileExplorer: () => void;
   onOpenWorkspaceFile: (request: WorkspaceFileOpenRequest) => void;
 }
+
+/**
+ * A terminal inside another screen, such as a plugin's. It keeps input, resize, find, copy/paste,
+ * and the mobile key bar; it drops what only makes sense in a workspace: the swipes to the mobile
+ * agent list and file explorer, workspace file links, and reporting itself as the focused terminal.
+ */
+interface EmbeddedTerminalPaneProps extends TerminalPaneBaseProps {
+  embedded: true;
+  onOpenFileExplorer?: never;
+  onOpenWorkspaceFile?: never;
+}
+
+type TerminalPaneProps = WorkspaceTerminalPaneProps | EmbeddedTerminalPaneProps;
 
 const TERMINAL_REFIT_DELAYS_MS = [0, 48, 144, 320];
 const TERMINAL_RESIZE_DEBOUNCE_MS = 100;
@@ -264,6 +284,8 @@ export function TerminalPane({
   terminalId,
   isWorkspaceFocused,
   isPaneFocused,
+  embedded = false,
+  onExit,
   onOpenFileExplorer,
   onOpenWorkspaceFile,
 }: TerminalPaneProps) {
@@ -286,7 +308,7 @@ export function TerminalPane({
   });
   const mobileView = usePanelStore((state) => state.mobilePanel.target);
   const showMobileAgentList = usePanelStore((state) => state.showMobileAgentList);
-  const swipeGesturesEnabled = isMobile;
+  const swipeGesturesEnabled = isMobile && !embedded;
   const { shift: keyboardShift, style: keyboardPaddingStyle } = useKeyboardShiftStyle({
     mode: "padding",
     enabled: isNative || isMobile,
@@ -432,11 +454,11 @@ export function TerminalPane({
     setResizeRequestToken((current) => current + 1);
   }, []);
   useEffect(() => {
-    if (!isMobile || !isWorkspaceFocused || mobileView === "agent") {
+    if (embedded || !isMobile || !isWorkspaceFocused || mobileView === "agent") {
       return;
     }
     emulatorRef.current?.blur();
-  }, [isMobile, isWorkspaceFocused, mobileView]);
+  }, [embedded, isMobile, isWorkspaceFocused, mobileView]);
   const handleRendererReadyChange = useCallback(
     (change: TerminalRendererReadyChange) => {
       if (!change.isReady && change.streamKey === terminalStreamKey) findRef.current?.reset();
@@ -501,13 +523,14 @@ export function TerminalPane({
   ]);
 
   const handleTerminalFocus = useCallback(() => {
-    if (isWorkspaceFocused && isPaneFocused) {
+    if (!embedded && isWorkspaceFocused && isPaneFocused) {
       setFocusedTerminalId(serverId, terminalId);
     }
     lastSentTerminalSizeRef.current = null;
     requestTerminalReflow();
     emulatorRef.current?.claimSize();
   }, [
+    embedded,
     isPaneFocused,
     isWorkspaceFocused,
     requestTerminalReflow,
@@ -565,7 +588,10 @@ export function TerminalPane({
 
   const handleStreamExit = useStableEvent((exitedTerminalId: string) => {
     workspaceTerminalSession.snapshots.clear({ terminalId: exitedTerminalId });
-    if (terminalIdRef.current === exitedTerminalId) emulatorRef.current?.clear();
+    if (terminalIdRef.current === exitedTerminalId) {
+      emulatorRef.current?.clear();
+      onExit?.();
+    }
     setModifiers({ ...EMPTY_MODIFIERS });
   });
 
@@ -1075,7 +1101,7 @@ export function TerminalPane({
       if (!location) {
         return;
       }
-      onOpenWorkspaceFile({ location, disposition });
+      onOpenWorkspaceFile?.({ location, disposition });
     },
     [onOpenWorkspaceFile],
   );
@@ -1132,7 +1158,7 @@ export function TerminalPane({
   const handleSwipeLeft = useCallback(() => {
     if (!swipeGesturesEnabled) return;
     emulatorRef.current?.blur();
-    onOpenFileExplorer();
+    onOpenFileExplorer?.();
   }, [swipeGesturesEnabled, onOpenFileExplorer]);
   const showPasteAction = shouldShowTerminalPasteAction({ isNative });
   const showFloatingCopyAction = shouldShowTerminalFloatingCopyAction({
@@ -1229,8 +1255,8 @@ export function TerminalPane({
             onFilePaste={handleFilePaste}
             onInputModeChange={handleInputModeChange}
             onSelectionChange={handleSelectionChange}
-            onResolveLocalFileLink={handleResolveLocalFileLink}
-            onOpenLocalFileLink={handleOpenLocalFileLink}
+            onResolveLocalFileLink={embedded ? undefined : handleResolveLocalFileLink}
+            onOpenLocalFileLink={embedded ? undefined : handleOpenLocalFileLink}
             onPendingModifiersConsumed={handlePendingModifiersConsumed}
             pendingModifiers={modifiers}
             focusRequestToken={focusRequestToken}

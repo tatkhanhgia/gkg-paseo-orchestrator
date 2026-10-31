@@ -545,7 +545,7 @@ export async function killTerminalsForWorkspace(
   const terminalLists = await Promise.all(
     terminalManager.listDirectories().map(async (terminalCwd) => {
       try {
-        return await terminalManager.getTerminals(terminalCwd, { workspaceId });
+        return await terminalManager.getTerminals(terminalCwd, { workspaceId, includeOwned: true });
       } catch (error) {
         dependencies.sessionLogger.warn(
           { err: error, cwd: terminalCwd },

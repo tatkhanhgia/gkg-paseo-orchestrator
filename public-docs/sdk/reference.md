@@ -164,9 +164,18 @@ Creation options:
 | `name`            | Optional terminal name.                                                                                                  |
 | `command`, `args` | Optional executable and argument array. Omit them to start the default shell.                                            |
 | `size`            | Optional initial viewport: `{ rows, cols }`.                                                                             |
+| `owned`           | Optional. Creates an [owned terminal](#owned-terminals) instead of a workspace terminal.                                 |
 | `requestId`       | Optional request correlation ID.                                                                                         |
 
-List options are `workspaceId`, `cwd`, and `requestId`. `workspaceId` selects ownership, including terminals started outside the workspace directory. When it is present, `cwd` does not restrict the results. Without an ID, `cwd` filters by workspace root directory. Each entry contains `id`, `workspaceId`, `cwd`, and `name`; `cwd` is the terminal's actual starting directory.
+List options are `workspaceId`, `cwd`, `owned`, and `requestId`. `workspaceId` selects ownership, including terminals started outside the workspace directory. When it is present, `cwd` does not restrict the results. Without an ID, `cwd` filters by workspace root directory. Each entry contains `id`, `workspaceId`, `cwd`, and `name`; `cwd` is the terminal's actual starting directory.
+
+### Owned terminals
+
+An owned terminal stays bound to its workspace but is hidden from everything the workspace shows: terminal lists and tabs, workspace status, attention notifications, and the agent MCP terminal listing. It exists so an integration can render a terminal inside its own surface. Archiving the workspace or restarting the daemon still ends it.
+
+Create a `PaseoApi` with `createPaseoApi(client, { terminalOwner })`, then pass `owned: true` to `create` and `list`. The SDK stamps the owner; callers never pass an owner string. `list({ owned: true })` returns only the terminals that API's owner created, and a bare `ref(id)` cannot refresh an owned terminal, so use that list to find one again. Stream attach, input, resize, capture, and `kill` by terminal id work as for any terminal. Owned terminals emit no push events, so poll the list or watch the stream's exit.
+
+Without a `terminalOwner` the SDK throws a clear error, and a host that does not report `owned-terminals` in `server_info.features` fails with "Update the host to use owned terminals." Plugins already have a `terminalOwner` of `plugin:<id>`, so they only pass `owned: true`; to show the terminal, see [`TerminalView`](/docs/plugins/reference#show-a-terminal-in-your-plugin).
 
 Terminal handles expose:
 
@@ -183,7 +192,7 @@ Terminal handles expose:
 
 Capture accepts optional `start`, `end`, `stripAnsi`, and `requestId`. Line bounds are zero-based and inclusive across scrollback and the viewport. Negative bounds count from the end; omitted bounds capture all lines. `stripAnsi` defaults to `true`. A missing terminal returns empty lines.
 
-Use `workspace.terminals.create(options?)` and `workspace.terminals.list(options?)` to supply the workspace ID from a handle. Creation accepts the same options except `workspaceId`; listing accepts only `requestId`. Plugins get these methods through `usePaseo()` and the handler's `paseo` context.
+Use `workspace.terminals.create(options?)` and `workspace.terminals.list(options?)` to supply the workspace ID from a handle. Creation accepts the same options except `workspaceId`; listing accepts only `owned` and `requestId`. Plugins get these methods through `usePaseo()` and the handler's `paseo` context.
 
 ## `client.providers`
 

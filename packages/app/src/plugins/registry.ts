@@ -86,7 +86,8 @@ export class PluginRegistry {
           lifetime: new AbortController(),
           locale: this.dependencies.localeSource.getLocale(),
           i18n: new PluginTranslationRuntime(this.dependencies.localeSource),
-          paseo: createPaseoApi(client),
+          // The host stamps the owner; plugins never choose one.
+          paseo: createPaseoApi(client, { terminalOwner: `plugin:${entry.id}` }),
           invoke: (method, input) => client.invokePluginRpc(entry.id, method, input),
           id: entry.id,
           serverId,
