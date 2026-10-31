@@ -175,6 +175,8 @@ An owned terminal stays bound to its workspace but is hidden from everything the
 
 Create a `PaseoApi` with `createPaseoApi(client, { terminalOwner })`, then pass `owned: true` to `create` and `list`. The SDK stamps the owner; callers never pass an owner string. `list({ owned: true })` returns only the terminals that API's owner created, and a bare `ref(id)` cannot refresh an owned terminal, so use that list to find one again. Stream attach, input, resize, capture, and `kill` by terminal id work as for any terminal. Owned terminals emit no push events, so poll the list or watch the stream's exit.
 
+A plugin's server code may also omit `workspaceId` and pass `cwd`: `paseo.terminals.create({ cwd, command, args, owned: true })` creates a terminal that belongs to the plugin alone. No workspace lists or archives it, and it ends when the plugin stops, reloads, or is removed, and when the daemon restarts. Only the plugin's server-side `paseo` can do this; the API a plugin's UI gets still needs a workspace, though it lists and kills these terminals with `list({ owned: true })` and `ref(id).kill()`.
+
 Without a `terminalOwner` the SDK throws a clear error, and a host that does not report `owned-terminals` in `server_info.features` fails with "Update the host to use owned terminals." Plugins already have a `terminalOwner` of `plugin:<id>`, so they only pass `owned: true`; to show the terminal, see [`TerminalView`](/docs/plugins/reference#show-a-terminal-in-your-plugin).
 
 Terminal handles expose:

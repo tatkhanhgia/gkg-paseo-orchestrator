@@ -141,7 +141,10 @@ import {
   toAgentPayload,
 } from "./agent/agent-projections.js";
 import { assertPluginTimelineDataSize } from "./agent/agent-timeline-content.js";
-import { parsePluginClientId } from "./plugins/plugin-session-identity.js";
+import {
+  parsePluginClientId,
+  pluginTerminalOwnerForClientId,
+} from "./plugins/plugin-session-identity.js";
 import {
   projectTimelineRows,
   selectProjectedTimelinePage,
@@ -1320,6 +1323,8 @@ export class Session {
       clientSupportsWrapReflow: (source) =>
         this.supportsForSource(CLIENT_CAPS.terminalReflowableSnapshot, source),
       getClientBufferedAmount: (source) => this.getTransportBufferedAmount(source),
+      // The hello handler reserves `plugin:<id>` client ids for that plugin's own subprocess.
+      pluginTerminalOwner: pluginTerminalOwnerForClientId(this.clientId),
     });
     this.agentDirectory = new AgentDirectory({
       manager: this.agentManager,

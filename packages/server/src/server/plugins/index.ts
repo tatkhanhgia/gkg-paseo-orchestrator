@@ -95,6 +95,7 @@ export class PluginService {
   private globalStartsBlocked = true;
   private started = false;
   private readonly settingsListeners = new Set<(pluginId: string, settingsId: string) => void>();
+  private releasePluginResources: ((pluginId: string) => Promise<void>) | null = null;
 
   constructor(
     logger: pino.Logger,
@@ -124,6 +125,8 @@ export class PluginService {
       this.removeProviderRegistrations(pluginId);
       this.removeUsageSources(pluginId);
       if (error) this.errors.set(pluginId, error);
+      // An error here means the plugin process died: its resources die with it.
+      if (error) void this.releaseResources(pluginId);
       this.notify(pluginId);
     });
   }
@@ -155,6 +158,23 @@ export class PluginService {
 
   bindPaseoSessionHost(sessionHost: Parameters<PluginRuntime["bindPaseoSessionHost"]>[0]): void {
     this.runtime.bindPaseoSessionHost(sessionHost);
+  }
+
+  /**
+   * Daemon resources a plugin owns (its terminals) that must not outlive it. `release` runs after
+   * the plugin stops, reloads, crashes, or is removed, and before it starts, which sweeps what an
+   * unclean stop left behind.
+   */
+  bindPluginResourceCleanup(release: (pluginId: string) => Promise<void>): void {
+    this.releasePluginResources = release;
+  }
+
+  private async releaseResources(pluginId: string): Promise<void> {
+    try {
+      await this.releasePluginResources?.(pluginId);
+    } catch (error) {
+      this.logger.warn({ err: error, pluginId }, "Failed to release plugin resources");
+    }
   }
 
   getProviderRegistrations(): readonly ProviderRegistration[] {
@@ -543,6 +563,7 @@ export class PluginService {
   }
 
   private async startPlugin(pluginId: string, sourcePath: string): Promise<void> {
+    await this.releaseResources(pluginId);
     await this.runtime.startPlugin(pluginId, sourcePath, () => this.canPublish(pluginId));
     try {
       await this.publishProviderRegistrations(pluginId, sourcePath);
@@ -558,10 +579,15 @@ export class PluginService {
     }
   }
 
-  private stopPlugin(pluginId: string): Promise<boolean> {
+  private async stopPlugin(pluginId: string): Promise<boolean> {
     this.removeProviderRegistrations(pluginId);
     this.removeUsageSources(pluginId);
-    return this.runtime.stopPluginById(pluginId);
+    try {
+      return await this.runtime.stopPluginById(pluginId);
+    } finally {
+      // After the process is gone, so its teardown cannot create a terminal nobody would end.
+      await this.releaseResources(pluginId);
+    }
   }
 
   private async stopConfiguredPlugins(): Promise<void> {
@@ -576,7 +602,12 @@ export class PluginService {
       this.removeProviderRegistrations(pluginId);
     }
     for (const pluginId of this.usageSourceIdsByPlugin.keys()) this.removeUsageSources(pluginId);
-    await this.runtime.stopAll();
+    const running = this.runtime.catalog().map((plugin) => plugin.id);
+    try {
+      await this.runtime.stopAll();
+    } finally {
+      await Promise.all(running.map((pluginId) => this.releaseResources(pluginId)));
+    }
   }
 
   private publishUsageSources(pluginId: string): void {

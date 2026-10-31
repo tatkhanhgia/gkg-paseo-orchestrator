@@ -12,19 +12,32 @@ const TerminalSchema = z.object({
 export type PaseoTerminal = z.infer<typeof TerminalSchema>;
 
 export interface PaseoTerminalCreateOptions {
-  workspaceId: string;
-  /** Process working directory; defaults to the workspace directory. */
+  /**
+   * The workspace the terminal belongs to. Required, except for an owned terminal created from a
+   * plugin's server code, which may omit it and pass `cwd` instead: that terminal belongs to the
+   * plugin alone, no workspace lists or archives it, and it ends when the plugin stops.
+   */
+  workspaceId?: string;
+  /** Process working directory; defaults to the workspace directory. Required without a workspace. */
   cwd?: string;
   name?: string;
   command?: string;
   args?: string[];
   size?: { rows: number; cols: number };
   /**
-   * Create the terminal under this API's `terminalOwner`: it stays bound to the workspace but is
-   * hidden from workspace terminal lists, tabs, status, and notifications.
+   * Create the terminal under this API's `terminalOwner`: it is hidden from workspace terminal
+   * lists, tabs, status, and notifications. With a workspace it stays bound to that workspace.
    */
   owned?: boolean;
   requestId?: string;
+}
+
+export interface PaseoTerminalActionsOptions {
+  /**
+   * Allow `create({ owned: true })` without a workspace. Only a plugin's own subprocess API sets
+   * this: the daemon accepts such a terminal only from the plugin session that owns it.
+   */
+  workspacelessOwned?: boolean;
 }
 
 export interface PaseoTerminalListOptions {
@@ -90,6 +103,7 @@ export function createTerminalActions(
   daemonClient: TerminalClient,
   resolveWorkspaceDirectory: (workspaceId: string) => Promise<string>,
   terminalOwner?: string,
+  actionOptions: PaseoTerminalActionsOptions = {},
 ): PaseoTerminalActions {
   function client(): TerminalClient {
     daemonClient.ensureConnected();
@@ -155,14 +169,20 @@ export function createTerminalActions(
   };
 
   return {
-    create: async ({ workspaceId, cwd, name, requestId, owned, ...options }) => {
+    create: async ({ workspaceId, cwd, name, requestId, owned, ...createOptions }) => {
       const driver = client();
-      if (!workspaceId) throw new Error("workspaceId is required");
+      if (!workspaceId && (!owned || !actionOptions.workspacelessOwned)) {
+        throw new Error("workspaceId is required");
+      }
       const owner = resolveOwner(owned);
-      const directory = cwd ?? (await resolveWorkspaceDirectory(workspaceId));
+      let directory = cwd;
+      if (directory === undefined) {
+        if (!workspaceId) throw new Error("cwd is required for a terminal without a workspace");
+        directory = await resolveWorkspaceDirectory(workspaceId);
+      }
       const result = await driver.createTerminal(directory, name, requestId, {
-        ...options,
-        workspaceId,
+        ...createOptions,
+        ...(workspaceId ? { workspaceId } : {}),
         ...(owner === undefined ? {} : { owner }),
       });
       if (result.error || !result.terminal) {

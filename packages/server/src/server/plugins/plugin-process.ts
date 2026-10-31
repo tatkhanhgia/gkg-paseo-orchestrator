@@ -276,7 +276,11 @@ export function createPluginWorker(options: {
       reconnect: { enabled: true },
       transportFactory,
     });
-    paseo = createPaseoApi(daemonClient, { terminalOwner: `plugin:${message.pluginId}` });
+    paseo = createPaseoApi(daemonClient, {
+      terminalOwner: `plugin:${message.pluginId}`,
+      // The daemon accepts a workspace-less terminal only from this session, as its owner.
+      workspacelessOwnedTerminals: true,
+    });
     await daemonClient.connect();
     settingsStore = message.settingsDirectory
       ? new PluginSettingsStore(message.settingsDirectory, (settingsId) =>

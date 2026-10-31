@@ -594,6 +594,8 @@ export function createPaseoApi(
     signal?: AbortSignal;
     /** Stamps terminals created or listed with `owned: true`; callers never pass an owner string. */
     terminalOwner?: string;
+    /** Lets owned terminals omit the workspace. Set only by a plugin's own subprocess. */
+    workspacelessOwnedTerminals?: boolean;
   },
 ): PaseoApi {
   const handles = new Set<{ release(): Promise<void> }>();
@@ -653,6 +655,7 @@ export function createPaseoApi(
       return workspace.workspaceDirectory;
     },
     scopeOptions?.terminalOwner,
+    { workspacelessOwned: scopeOptions?.workspacelessOwnedTerminals === true },
   );
   const createWorkspaceHandle = createWorkspaceHandleFactory(
     daemonClient,

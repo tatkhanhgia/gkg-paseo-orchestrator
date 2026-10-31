@@ -1269,6 +1269,76 @@ export default function contribute(plugin: unknown) {
     await service.stopAllPlugins();
   });
 
+  it("releases a plugin's daemon resources before each start, after each stop, and when its process dies", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
+    roots.push(home);
+    const directory = await createPlugin(
+      "owner-test",
+      `export default function contribute(plugin: unknown) { void plugin; return () => undefined; }`,
+    );
+    const events: string[] = [];
+    const running = new Set<string>();
+    let emitRuntimeEvent: (pluginId: string, error?: string) => void = () => undefined;
+    const runtime: TestPluginRuntime = {
+      ...emptyUsageRuntime,
+      catalog: () => [...running].map((id) => ({ id, clientBundle: "bundle" })),
+      invoke: async () => undefined,
+      getLogs: () => [],
+      clearLogs: () => undefined,
+      startPlugin: async (pluginId) => {
+        events.push(`start:${pluginId}`);
+        running.add(pluginId);
+      },
+      stopPluginById: async (pluginId) => {
+        events.push(`stop:${pluginId}`);
+        return running.delete(pluginId);
+      },
+      stopAll: async () => {
+        for (const pluginId of running) events.push(`stop:${pluginId}`);
+        running.clear();
+      },
+      subscribe: (listener) => {
+        emitRuntimeEvent = listener;
+        return () => undefined;
+      },
+      bindPaseoSessionHost: () => undefined,
+    };
+    const service = createService(home, {}, { runtime });
+    service.bindPluginResourceCleanup(async (pluginId) => {
+      events.push(`release:${pluginId}`);
+    });
+    await service.start();
+
+    await service.installDirectory({ path: directory });
+    await service.reloadPlugin("owner-test");
+    running.delete("owner-test");
+    emitRuntimeEvent("owner-test", "Plugin process exited: owner-test");
+    await new Promise((resolve) => setImmediate(resolve));
+    await service.reloadPlugin("owner-test");
+    await service.stopAllPlugins();
+
+    expect(events).toEqual([
+      // install
+      "release:owner-test",
+      "start:owner-test",
+      // reload
+      "stop:owner-test",
+      "release:owner-test",
+      "release:owner-test",
+      "start:owner-test",
+      // the process died
+      "release:owner-test",
+      // reload after the crash
+      "stop:owner-test",
+      "release:owner-test",
+      "release:owner-test",
+      "start:owner-test",
+      // daemon shutdown
+      "stop:owner-test",
+      "release:owner-test",
+    ]);
+  });
+
   it("contains cleanup errors and invokes server cleanup once per stopped installation", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
     roots.push(home);

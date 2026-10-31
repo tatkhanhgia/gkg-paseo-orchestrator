@@ -169,6 +169,8 @@ nav: API 参考
 
 用 `createPaseoApi(client, { terminalOwner })` 创建 `PaseoApi`，再向 `create` 和 `list` 传入 `owned: true`。所有者由 SDK 盖章，调用方从不传所有者字符串。`list({ owned: true })` 只返回该 API 的所有者创建的终端；单独的 `ref(id)` 无法刷新受管终端，请用这个列表重新找到它。按终端 ID 附加流、输入、调整大小、capture 和 `kill` 与普通终端相同。受管终端不发出推送事件，因此请轮询列表或监听流的退出。
 
+插件的服务端代码也可以省略 `workspaceId` 并传入 `cwd`：`paseo.terminals.create({ cwd, command, args, owned: true })` 会创建只属于该插件的终端。没有任何工作区会列出或归档它；插件停止、重新加载或被移除时，以及守护进程重启时，它会结束。只有插件服务端的 `paseo` 能这样做；插件 UI 得到的 API 仍需要工作区，但可以用 `list({ owned: true })` 和 `ref(id).kill()` 列出并结束这些终端。
+
 没有 `terminalOwner` 时 SDK 会抛出明确的错误；`server_info.features` 未报告 `owned-terminals` 的主机会以 “Update the host to use owned terminals.” 失败。插件的 `terminalOwner` 已是 `plugin:<id>`，只需传 `owned: true`；要显示终端，见 [`TerminalView`](/docs/plugins/reference#show-a-terminal-in-your-plugin)。
 
 终端句柄提供：
