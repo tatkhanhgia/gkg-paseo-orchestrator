@@ -25,7 +25,7 @@ import {
 import {
   createDownloadTarget,
   describeErrno,
-  openUploadSource,
+  openDeviceUpload,
   type UploadSource,
 } from "./local-files";
 import { SftpClient, SftpStatusError } from "./sftp-client";
@@ -454,7 +454,7 @@ export async function startUpload(
     const record = transfers.begin("upload", input.upload.fileName);
     if (!record) return BUSY;
     try {
-      const source = await openUploadSource(path.dirname(upload.path), path.basename(upload.path));
+      const source = await openDeviceUpload(upload.path);
       if (source.size > MAX_TRANSFER_BYTES) {
         await source.handle.close();
         throw new FileOpError("too-large", "That file is larger than the 2 GiB limit.");

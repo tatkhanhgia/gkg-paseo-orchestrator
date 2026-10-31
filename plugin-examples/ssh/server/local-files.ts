@@ -1,49 +1,9 @@
 import { constants } from "node:fs";
-import { open, realpath, stat, type FileHandle } from "node:fs/promises";
+import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { FileErrorCode } from "../shared/contracts";
 import { describeUnsafeFileName } from "../shared/remote-path";
 import { FileOpError } from "./ssh-transport";
-
-/** Splits a `/`-relative path into segments and refuses anything that could leave the root. */
-function relativeSegments(relative: string): string[] {
-  if (relative.includes("\0")) throw new FileOpError("invalid", "The path contains a NUL byte.");
-  if (relative.startsWith("/") || path.isAbsolute(relative) || relative.includes("\\")) {
-    throw new FileOpError("invalid", "The path must be relative to its folder.");
-  }
-  const segments = relative.split("/").filter((segment) => segment !== "" && segment !== ".");
-  if (segments.includes("..")) {
-    throw new FileOpError("invalid", "The path must not contain '..'.");
-  }
-  return segments;
-}
-
-function isInside(root: string, candidate: string): boolean {
-  const relation = path.relative(root, candidate);
-  return (
-    relation === "" ||
-    (relation !== ".." && !relation.startsWith(`..${path.sep}`) && !path.isAbsolute(relation))
-  );
-}
-
-/**
- * Resolves an existing path under `root` and returns its real path. Every symlink on the way is
- * followed first, then the result must still be inside `root`, so neither `..` nor a link that
- * points elsewhere can reach outside it. `root` must itself be a real path.
- */
-export async function resolveInside(root: string, relative: string): Promise<string> {
-  const joined = path.join(root, ...relativeSegments(relative));
-  let resolved: string;
-  try {
-    resolved = await realpath(joined);
-  } catch {
-    throw new FileOpError("not-found", "That file no longer exists on the daemon host.");
-  }
-  if (!isInside(root, resolved)) {
-    throw new FileOpError("invalid", "That path resolves outside its folder.");
-  }
-  return resolved;
-}
 
 /** Plain-language outcome for the filesystem errors a person can act on, or `null` for others. */
 export function describeErrno(code: string | undefined): FileOpErrorInfo | null {
@@ -88,36 +48,40 @@ function fsError(error: unknown, fallback: string): FileOpError {
 
 export interface UploadSource {
   handle: FileHandle;
-  /** The name the file gets on the remote side: the last segment of the requested path. */
+  /** The name the file gets on the remote side: the uploaded file's name. */
   name: string;
   size: number;
   mode: number;
 }
 
 /**
- * Opens a regular file under `root` for reading. The path is resolved and confined first, then
- * opened without following a final symlink. A parent directory could still be swapped for a
- * link between those two steps, so the open file is then compared with a fresh resolution of the
- * path: it must still be inside `root` and be the same file (device and inode).
+ * Opens a device upload the daemon resolved (`resolveDeviceUpload`) for reading. It opens that
+ * exact path with `O_NOFOLLOW`, so a final symlink swapped in after the daemon's check is refused,
+ * and requires a regular file. After the open, the folder must still resolve to itself and the
+ * name must still be the opened file (device and inode), so a folder swapped for a link between
+ * the daemon's check and this open is refused too.
  */
-export async function openUploadSource(root: string, relative: string): Promise<UploadSource> {
-  const segments = relativeSegments(relative);
-  const name = segments.at(-1);
-  if (!name) throw new FileOpError("invalid", "Choose a file to upload.");
+export async function openDeviceUpload(filePath: string): Promise<UploadSource> {
+  const name = path.basename(filePath);
   const nameProblem = describeUnsafeFileName(name);
   if (nameProblem) throw new FileOpError("invalid", `The file name ${nameProblem}.`);
-  const resolved = await resolveInside(root, relative);
-  const handle = await open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(
+  const handle = await open(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(
     (error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+        throw new FileOpError("invalid", "Only regular files can be uploaded, not links.");
+      }
       throw fsError(error, "Could not open the file");
     },
   );
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw new FileOpError("not-a-file", "Only regular files can be uploaded.");
-    const fresh = await resolveInside(root, relative);
-    const freshInfo = await stat(fresh);
-    if (freshInfo.dev !== info.dev || freshInfo.ino !== info.ino) {
+    const directory = path.dirname(filePath);
+    const [realDirectory, current] = await Promise.all([
+      realpath(directory).catch(() => null),
+      lstat(filePath).catch(() => null),
+    ]);
+    if (realDirectory !== directory || current?.dev !== info.dev || current?.ino !== info.ino) {
       throw new FileOpError("invalid", "The file changed while it was being opened. Try again.");
     }
     return { handle, name, size: info.size, mode: info.mode & 0o777 };

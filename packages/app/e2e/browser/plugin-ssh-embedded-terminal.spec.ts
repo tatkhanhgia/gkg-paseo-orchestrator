@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "../support/fixtures";
@@ -12,10 +12,23 @@ import { getTerminalBufferText } from "../support/helpers/terminal-perf";
 import { expectNoTerminalTabs } from "../support/helpers/workspace-tabs";
 
 // CI has no ssh server. A stand-in `ssh` asks for a password with echo off, then echoes each line.
+// Asked for the `sftp` subsystem (`-s`), as file browsing does, it serves the real OpenSSH
+// sftp-server over a sandbox folder instead, so file transfers run the real SFTP path.
+const SFTP_SERVER = [
+  "/usr/libexec/sftp-server",
+  "/usr/lib/openssh/sftp-server",
+  "/usr/libexec/openssh/sftp-server",
+  "/usr/lib/ssh/sftp-server",
+].find((candidate) => existsSync(candidate));
+const fakeRemoteHome = mkdtempSync(path.join(tmpdir(), "paseo-fake-remote-"));
+writeFileSync(path.join(fakeRemoteHome, "report.txt"), "remote report body\n");
 const fakeSshBin = mkdtempSync(path.join(tmpdir(), "paseo-fake-ssh-"));
 writeFileSync(
   path.join(fakeSshBin, "ssh"),
   `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "-s" ]; then exec "$FAKE_SFTP_SERVER" -d "$FAKE_SFTP_HOME"; fi
+done
 printf 'fake-ssh password: '
 stty -echo
 IFS= read -r secret
@@ -27,9 +40,16 @@ while IFS= read -r line; do printf 'echo:%s\\r\\n' "$line"; done
 chmodSync(path.join(fakeSshBin, "ssh"), 0o755);
 
 test.use({
-  e2eDaemonEnvironment: { PATH: `${fakeSshBin}${path.delimiter}${process.env.PATH ?? ""}` },
+  e2eDaemonEnvironment: {
+    PATH: `${fakeSshBin}${path.delimiter}${process.env.PATH ?? ""}`,
+    FAKE_SFTP_SERVER: SFTP_SERVER ?? "",
+    FAKE_SFTP_HOME: fakeRemoteHome,
+  },
 });
-test.afterAll(() => rmSync(fakeSshBin, { recursive: true, force: true }));
+test.afterAll(() => {
+  rmSync(fakeSshBin, { recursive: true, force: true });
+  rmSync(fakeRemoteHome, { recursive: true, force: true });
+});
 
 /** Set PASEO_QA_SCREENSHOT_DIR to keep a screenshot of each state. */
 async function qaScreenshot(page: Page, name: string) {
@@ -195,5 +215,60 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, owned b
     await daemon.close();
     await example.cleanup();
     await workspace.cleanup();
+  }
+});
+
+test("Files downloads a remote file to the browser and uploads a file picked in it, with no workspace", async ({
+  page,
+}) => {
+  test.skip(!SFTP_SERVER, "needs the OpenSSH sftp-server binary");
+  test.setTimeout(180_000);
+  const example = await copyPluginExample("ssh");
+  const daemon = await connectNewWorkspaceDaemonClient({ ownProjects: false });
+  const config = await daemon.getDaemonConfig();
+  try {
+    await daemon.patchDaemonConfig({ pluginsEnabled: true });
+    await daemon.installDirectoryPlugin(example.directory);
+    await page.setViewportSize(WIDE);
+    await page.goto(`/h/${encodeURIComponent(getServerId())}/plugin/ssh/sidebar/ssh`);
+    await page.getByRole("button", { name: "Add host", exact: true }).click();
+    await page.getByLabel("Label (e.g. build server)").fill("files box");
+    await page.getByLabel("Host or address").fill("files.example");
+    await page.getByRole("button", { name: "Save host", exact: true }).click();
+    await page.getByRole("button", { name: "Browse files on files box", exact: true }).click();
+    const download = page.getByRole("button", { name: "Download report.txt", exact: true });
+    await expect(download).toBeVisible({ timeout: 30_000 });
+
+    await test.step("Download saves the remote file in the browser", async () => {
+      const saved = page.waitForEvent("download", { timeout: 30_000 });
+      await download.click();
+      const file = await saved;
+      expect(file.suggestedFilename()).toBe("report.txt");
+      expect(readFileSync(await file.path(), "utf8")).toBe("remote report body\n");
+      await expect(page.getByText('Saved "report.txt" to this device.')).toBeVisible();
+    });
+
+    await test.step("Upload from device sends a picked file to the remote folder", async () => {
+      const chooser = page.waitForEvent("filechooser", { timeout: 30_000 });
+      await page.getByRole("button", { name: "Upload from device…", exact: true }).click();
+      await (
+        await chooser
+      ).setFiles({
+        name: "from-device.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("picked on the device\n"),
+      });
+      const uploaded = path.join(fakeRemoteHome, "from-device.txt");
+      await expect
+        .poll(() => (existsSync(uploaded) ? readFileSync(uploaded, "utf8") : null), {
+          timeout: 30_000,
+        })
+        .toBe("picked on the device\n");
+    });
+  } finally {
+    await daemon.removePlugin("ssh").catch(() => undefined);
+    await daemon.patchDaemonConfig({ pluginsEnabled: config.config.pluginsEnabled });
+    await daemon.close();
+    await example.cleanup();
   }
 });

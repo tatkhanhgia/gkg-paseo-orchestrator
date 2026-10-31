@@ -2,68 +2,27 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createDownloadTarget,
-  describeErrno,
-  openUploadSource,
-  resolveInside,
-} from "./local-files";
+import { createDownloadTarget, describeErrno, openDeviceUpload } from "./local-files";
 
 let sandbox: string;
 let root: string;
 let outside: string;
-let evilSibling: string;
 
 beforeEach(async () => {
   sandbox = await realpath(await mkdtemp(path.join(tmpdir(), "ssh-local-files-")));
   root = path.join(sandbox, "ws");
   outside = path.join(sandbox, "outside");
-  // Shares the prefix "ws", which a naive startsWith(root) containment check would accept.
-  evilSibling = path.join(sandbox, "ws-evil");
   await mkdir(path.join(root, "sub"), { recursive: true });
   await mkdir(outside);
-  await mkdir(evilSibling);
   await writeFile(path.join(root, "a.txt"), "inside");
   await writeFile(path.join(root, "sub", "b.txt"), "nested");
   await writeFile(path.join(outside, "secret.txt"), "secret");
-  await writeFile(path.join(evilSibling, "secret.txt"), "secret");
-  await symlink("sub", path.join(root, "link-in"));
   await symlink(outside, path.join(root, "link-out"));
   await symlink(path.join(outside, "secret.txt"), path.join(root, "file-link-out"));
-  await symlink("../ws-evil", path.join(root, "link-evil"));
-  await symlink("missing", path.join(root, "link-broken"));
 });
 
 afterEach(async () => {
   await rm(sandbox, { recursive: true, force: true });
-});
-
-describe("resolveInside", () => {
-  it.each([
-    ["the root itself", "", ""],
-    ["a nested file", "sub/b.txt", "sub/b.txt"],
-    ["redundant separators", "sub//./b.txt", "sub/b.txt"],
-    ["a link that stays inside", "link-in/b.txt", "sub/b.txt"],
-  ])("resolves %s", async (_name, relative, expected) => {
-    await expect(resolveInside(root, relative)).resolves.toBe(path.join(root, expected));
-  });
-
-  it.each([
-    ["a parent segment", "../outside/secret.txt"],
-    ["a parent segment in the middle", "sub/../../outside/secret.txt"],
-    ["an absolute path", "/etc/hosts"],
-    ["a backslash", "sub\\b.txt"],
-    ["a NUL byte", "a.txt\0.png"],
-    ["a directory link that leaves the root", "link-out/secret.txt"],
-    ["a file link that leaves the root", "file-link-out"],
-    ["a link into a sibling sharing the root's prefix", "link-evil/secret.txt"],
-  ])("refuses %s", async (_name, relative) => {
-    await expect(resolveInside(root, relative)).rejects.toMatchObject({ code: "invalid" });
-  });
-
-  it("reports a missing path as not found", async () => {
-    await expect(resolveInside(root, "nope.txt")).rejects.toMatchObject({ code: "not-found" });
-  });
 });
 
 describe("describeErrno", () => {
@@ -86,18 +45,9 @@ describe("describeErrno", () => {
   });
 });
 
-describe("openUploadSource", () => {
-  it("opens a file reached through a link that stays inside the root", async () => {
-    const source = await openUploadSource(root, "link-in/b.txt");
-    try {
-      expect(source).toMatchObject({ name: "b.txt", size: 6 });
-    } finally {
-      await source.handle.close();
-    }
-  });
-
-  it("opens a regular file and reports its size", async () => {
-    const source = await openUploadSource(root, "sub/b.txt");
+describe("openDeviceUpload", () => {
+  it("opens the regular file the daemon resolved and reports its name and size", async () => {
+    const source = await openDeviceUpload(path.join(root, "sub", "b.txt"));
     try {
       expect(source).toMatchObject({ name: "b.txt", size: 6 });
     } finally {
@@ -106,12 +56,19 @@ describe("openUploadSource", () => {
   });
 
   it.each([
-    ["a file link that leaves the root", "file-link-out", "invalid"],
-    ["a parent segment", "../outside/secret.txt", "invalid"],
-    ["a directory", "sub", "not-a-file"],
-    ["nothing", "", "invalid"],
-  ])("refuses %s", async (_name, relative, code) => {
-    await expect(openUploadSource(root, relative)).rejects.toMatchObject({ code });
+    ["a file link out of its folder", () => path.join(root, "file-link-out"), "invalid"],
+    ["a file link that stays in its folder", () => path.join(root, "a-link.txt"), "invalid"],
+    [
+      "a file inside a folder that is a link",
+      () => path.join(root, "link-out", "secret.txt"),
+      "invalid",
+    ],
+    ["a directory", () => path.join(root, "sub"), "not-a-file"],
+    ["a missing file", () => path.join(root, "gone.txt"), "not-found"],
+    ["a name with a backslash", () => path.join(root, "a\\b.txt"), "invalid"],
+  ])("refuses %s", async (_name, filePath, code) => {
+    await symlink("a.txt", path.join(root, "a-link.txt"));
+    await expect(openDeviceUpload(filePath())).rejects.toMatchObject({ code });
   });
 });
 

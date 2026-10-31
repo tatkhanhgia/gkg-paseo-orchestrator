@@ -5,12 +5,19 @@ import { startSession } from "./sessions";
 type Context = Parameters<typeof startSession>[1];
 type CreateOptions = Parameters<Context["paseo"]["terminals"]["create"]>[0];
 
-/** Records what the plugin asks the daemon for, and answers like the daemon would. */
-function daemon(create: (options: CreateOptions) => Promise<unknown>) {
+/**
+ * Records what the plugin asks the daemon for, and answers like the daemon would. `capabilities`
+ * is what the daemon's SDK reports; an older daemon reports none.
+ */
+function daemon(
+  create: (options: CreateOptions) => Promise<unknown>,
+  capabilities: { workspacelessOwned: boolean } | undefined = { workspacelessOwned: true },
+) {
   const calls: CreateOptions[] = [];
   const context = {
     paseo: {
       terminals: {
+        ...(capabilities ? { capabilities } : {}),
         create: vi.fn(async (options: CreateOptions) => {
           calls.push(options);
           return create(options);
@@ -69,22 +76,27 @@ describe("startSession", () => {
     },
   );
 
-  it("asks for a host update when the daemon still requires a workspace", async () => {
+  it.each([
+    { label: "reports no capabilities", capabilities: undefined },
+    { label: "cannot omit the workspace", capabilities: { workspacelessOwned: false } },
+  ])(
+    "asks for a host update when the daemon $label, without creating anything",
+    async ({ capabilities }) => {
+      const { context, calls } = daemon(created, capabilities);
+      await expect(
+        startSession({ target: { host: "build-box" }, label: "box" }, context),
+      ).resolves.toEqual({
+        ok: false,
+        message: "Update the host to run SSH sessions outside a workspace.",
+      });
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it("reports the daemon's own refusal as it is, even one that mentions a workspace", async () => {
     const { context } = daemon(() => Promise.reject(new Error("workspaceId is required")));
     await expect(
       startSession({ target: { host: "build-box" }, label: "box" }, context),
-    ).resolves.toEqual({
-      ok: false,
-      message: "Update the host to run SSH sessions outside a workspace.",
-    });
-  });
-
-  it("reports any other daemon error as it is", async () => {
-    const { context } = daemon(() =>
-      Promise.reject(new Error("Update the host to use owned terminals.")),
-    );
-    await expect(
-      startSession({ target: { host: "build-box" }, label: "box" }, context),
-    ).resolves.toEqual({ ok: false, message: "Update the host to use owned terminals." });
+    ).resolves.toEqual({ ok: false, message: "workspaceId is required" });
   });
 });
