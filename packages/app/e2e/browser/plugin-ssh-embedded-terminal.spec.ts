@@ -75,7 +75,7 @@ async function runSshSlashCommand(page: Page, agentId: string) {
   await composer.press("Enter");
 }
 
-test("Connect and /ssh show interactive SSH terminals inside the plugin, not in the workspace tabs", async ({
+test("Connect and /ssh show interactive SSH terminals inside the plugin, owned by no workspace", async ({
   page,
 }) => {
   test.setTimeout(240_000);
@@ -87,7 +87,7 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, not in 
   const example = await copyPluginExample("ssh");
   const daemon = await connectNewWorkspaceDaemonClient({ ownProjects: false });
   const config = await daemon.getDaemonConfig();
-  // The daemon's owned terminals of the ssh plugin, in the target workspace and on the whole host.
+  // The daemon's owned terminals of the ssh plugin, in the seeded workspace and on the whole host.
   async function ownedTerminalCounts() {
     const inWorkspace = await daemon.listTerminals(undefined, undefined, {
       workspaceId: workspace.workspaceId,
@@ -100,7 +100,7 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, not in 
     await daemon.patchDaemonConfig({ pluginsEnabled: true });
     await daemon.installDirectoryPlugin(example.directory);
 
-    await test.step("Connect opens the session inside the SSH screen", async () => {
+    await test.step("Connect opens the session inside the SSH screen without choosing a workspace", async () => {
       await page.setViewportSize(WIDE);
       await page.goto(`/h/${encodeURIComponent(getServerId())}/plugin/ssh/sidebar/ssh`);
       await page.getByRole("button", { name: "Add host", exact: true }).click();
@@ -110,6 +110,8 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, not in 
       await page.getByRole("button", { name: "Connect to e2e box", exact: true }).click();
 
       await expect(terminalSurface(page)).toBeVisible({ timeout: 30_000 });
+      // The screen has rendered, and it never asked for a workspace.
+      await expect(page.getByText("Target workspace", { exact: true })).toHaveCount(0);
       await expect(page).toHaveURL(/\/plugin\/ssh\/sidebar\/ssh/);
       await expectTerminalText(page, "fake-ssh password:");
       await qaScreenshot(page, "ssh-embedded-wide-prompt");
@@ -122,8 +124,8 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, not in 
       await qaScreenshot(page, "ssh-embedded-wide-session");
     });
 
-    await test.step("the session is one owned terminal in the target workspace, not a workspace terminal", async () => {
-      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 1, onHost: 1 });
+    await test.step("the session is one terminal the plugin owns, in no workspace", async () => {
+      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 0, onHost: 1 });
       const unowned = await daemon.listTerminals(undefined, undefined, {
         workspaceId: workspace.workspaceId,
       });
@@ -138,7 +140,7 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, not in 
       // The new session is the one shown: a fresh prompt, none of the first session's output.
       await driveSession(page, { password: "pw2", line: "second" });
       expect(await getTerminalBufferText(page)).not.toContain("echo:hello");
-      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 2, onHost: 2 });
+      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 0, onHost: 2 });
       await expectNoTerminalTabs(page);
       await qaScreenshot(page, "ssh-embedded-wide-panel");
     });
@@ -148,7 +150,7 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, not in 
       await expect(sessionChips(page)).toHaveCount(3, { timeout: 30_000 });
       await driveSession(page, { password: "pw33", line: "third" });
       expect(await getTerminalBufferText(page)).not.toContain("echo:second");
-      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 3, onHost: 3 });
+      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 0, onHost: 3 });
     });
 
     await test.step("a chip switches back to the first, still running, session", async () => {
@@ -168,6 +170,24 @@ test("Connect and /ssh show interactive SSH terminals inside the plugin, not in 
       await page.keyboard.press("Control+d");
       await expect(sessionChips(page)).toHaveCount(2, { timeout: 30_000 });
       await expectNoTerminalTabs(page);
+    });
+
+    await test.step("archiving the workspace leaves the sessions running in the SSH screen", async () => {
+      expect((await daemon.archiveWorkspace(workspace.workspaceId)).error).toBeNull();
+      expect(await ownedTerminalCounts()).toEqual({ inWorkspace: 0, onHost: 2 });
+      await page.setViewportSize(WIDE);
+      await page.goto(`/h/${encodeURIComponent(getServerId())}/plugin/ssh/sidebar/ssh`);
+      await expect(sessionChips(page)).toHaveCount(2, { timeout: 30_000 });
+      await sessionChips(page).first().click();
+      await expectTerminalText(page, "echo:hello");
+    });
+
+    await test.step("removing the plugin ends its sessions", async () => {
+      await daemon.removePlugin("ssh");
+      await expect.poll(ownedTerminalCounts, { timeout: 30_000 }).toEqual({
+        inWorkspace: 0,
+        onHost: 0,
+      });
     });
   } finally {
     await daemon.removePlugin("ssh").catch(() => undefined);

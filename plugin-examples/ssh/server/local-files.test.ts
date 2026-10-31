@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createDownloadTarget,
   describeErrno,
-  listWorkspaceDirectory,
   openUploadSource,
   resolveInside,
 } from "./local-files";
@@ -64,34 +63,6 @@ describe("resolveInside", () => {
 
   it("reports a missing path as not found", async () => {
     await expect(resolveInside(root, "nope.txt")).rejects.toMatchObject({ code: "not-found" });
-  });
-});
-
-describe("listWorkspaceDirectory", () => {
-  it("lists directories first and shows links by where they lead", async () => {
-    const listing = await listWorkspaceDirectory(root, "");
-    expect(listing.parent).toBeNull();
-    const byName = Object.fromEntries(listing.entries.map((entry) => [entry.name, entry]));
-    expect(listing.entries.map((entry) => entry.name).slice(0, 2)).toEqual(["link-in", "sub"]);
-    expect(byName["a.txt"]).toMatchObject({ kind: "file", size: 6 });
-    expect(byName["link-in"]).toMatchObject({ kind: "directory", size: null });
-    // Links that leave the root or lead nowhere are not offered as files or directories.
-    expect(byName["link-out"]).toMatchObject({ kind: "symlink", size: null });
-    expect(byName["file-link-out"]).toMatchObject({ kind: "symlink", size: null });
-    expect(byName["link-evil"]).toMatchObject({ kind: "symlink", size: null });
-    expect(byName["link-broken"]).toMatchObject({ kind: "symlink", size: null });
-  });
-
-  it("reports the parent of a subdirectory", async () => {
-    const listing = await listWorkspaceDirectory(root, "sub");
-    expect(listing).toMatchObject({ directory: "sub", parent: "" });
-    expect(listing.entries.map((entry) => entry.name)).toEqual(["b.txt"]);
-  });
-
-  it("refuses to list a directory outside the root", async () => {
-    await expect(listWorkspaceDirectory(root, "link-out")).rejects.toMatchObject({
-      code: "invalid",
-    });
   });
 });
 

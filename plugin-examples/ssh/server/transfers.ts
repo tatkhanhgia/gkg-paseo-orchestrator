@@ -10,13 +10,13 @@ export interface TransferRecord {
   id: string;
   kind: Transfer["kind"];
   fileName: string;
-  /** Only this workspace may read or cancel the transfer. */
-  workspaceId: string;
   state: TransferState;
   bytesDone: number;
   total: number | null;
   error?: { code: FileErrorCode; message: string };
   remotePath?: string;
+  /** A finished download's copy on the daemon host, until the device has it. */
+  staged?: { directory: string; path: string };
   finishedAt?: number;
   /** Aborted by `cancel`; the transfer stops, removes its partial file, and ends `cancelled`. */
   abort: AbortController;
@@ -34,7 +34,7 @@ export class TransferRegistry {
   private readonly settle = new Map<string, () => void>();
 
   /** Registers a running transfer, or returns `null` when the running limit is reached. */
-  begin(kind: Transfer["kind"], fileName: string, workspaceId: string): TransferRecord | null {
+  begin(kind: Transfer["kind"], fileName: string): TransferRecord | null {
     this.prune();
     let running = 0;
     for (const record of this.records.values()) if (record.state === "running") running += 1;
@@ -44,7 +44,6 @@ export class TransferRegistry {
       id: randomUUID(),
       kind,
       fileName,
-      workspaceId,
       state: "running",
       bytesDone: 0,
       total: null,
@@ -58,11 +57,10 @@ export class TransferRegistry {
     return record;
   }
 
-  /** The transfer, if it exists and was started by `workspaceId`. */
-  get(id: string, workspaceId: string): TransferRecord | undefined {
+  /** The transfer, if it exists. Its id is a random UUID only the starting client was given. */
+  get(id: string): TransferRecord | undefined {
     this.prune();
-    const record = this.records.get(id);
-    return record?.workspaceId === workspaceId ? record : undefined;
+    return this.records.get(id);
   }
 
   /** Forgets a transfer that failed before it started, so the caller reports the error itself. */
@@ -127,5 +125,6 @@ export function toTransfer(record: TransferRecord): Transfer {
     total: record.total,
     ...(record.error ? { error: record.error } : {}),
     ...(record.remotePath ? { remotePath: record.remotePath } : {}),
+    ...(record.staged ? { staged: record.staged } : {}),
   };
 }

@@ -30,14 +30,6 @@ export const hostsSettings = defineSettings({
   schema: z.object({ hosts: z.array(userHostSchema).max(200).default([]) }),
 });
 
-/** The workspace the surface opens terminals in and transfers files to; remembered across sessions. */
-export const targetWorkspaceSettings = defineSettings({
-  id: "target-workspace",
-  scope: "host",
-  version: 1,
-  schema: z.object({ workspaceId: z.string().min(1).max(256).optional() }),
-});
-
 export const listConfigHostsRpc = defineRpc({
   name: "ssh.config-hosts",
   input: z.object({}),
@@ -57,8 +49,19 @@ export const connectionTargetSchema = z.object({
 });
 
 const remotePathSchema = z.string().min(1).max(MAX_REMOTE_PATH_LENGTH);
-/** A path under the workspace directory, `/`-separated and relative to it. `""` is the root. */
-const workspaceRelativePathSchema = z.string().max(MAX_REMOTE_PATH_LENGTH);
+
+/** A running ssh session: a terminal the plugin owns, outside every workspace. */
+export const sessionSchema = z.object({ id: z.string(), cwd: z.string(), name: z.string() });
+
+/** Starts `ssh` in a terminal the plugin owns. It belongs to no workspace. */
+export const startSessionRpc = defineRpc({
+  name: "ssh.sessions.start",
+  input: z.object({ target: connectionTargetSchema, label: z.string().max(80) }),
+  output: z.union([
+    z.object({ ok: z.literal(true), session: sessionSchema }),
+    z.object({ ok: z.literal(false), message: z.string() }),
+  ]),
+});
 
 export const fileErrorCodeSchema = z.enum([
   "invalid",
@@ -121,26 +124,6 @@ export const listRemoteFilesRpc = defineRpc({
   ]),
 });
 
-export const listWorkspaceFilesRpc = defineRpc({
-  name: "ssh.files.list-workspace",
-  input: z.object({
-    workspaceId: z.string().min(1),
-    /** Directory relative to the workspace directory; omit for the workspace directory itself. */
-    directory: workspaceRelativePathSchema.optional(),
-  }),
-  output: z.union([
-    z.object({
-      ok: z.literal(true),
-      /** The workspace directory on the daemon host. */
-      root: z.string(),
-      directory: z.string(),
-      parent: z.string().nullable(),
-      ...listingShape,
-    }),
-    fileFailureSchema,
-  ]),
-});
-
 export const transferStateSchema = z.enum(["running", "done", "failed", "cancelled"]);
 export type TransferState = z.infer<typeof transferStateSchema>;
 
@@ -148,7 +131,7 @@ export type TransferState = z.infer<typeof transferStateSchema>;
 export const transferSchema = z.object({
   id: z.string(),
   kind: z.enum(["download", "upload"]),
-  /** The file's name in the workspace directory (download) or on the remote host (upload). */
+  /** The file's name: on the remote host for a download, as picked on the device for an upload. */
   fileName: z.string(),
   state: transferStateSchema,
   bytesDone: z.number(),
@@ -158,6 +141,11 @@ export const transferSchema = z.object({
   error: z.object({ code: fileErrorCodeSchema, message: z.string() }).optional(),
   /** Set when an upload is `done`. */
   remotePath: z.string().optional(),
+  /**
+   * Set when a download is `done`: the copy on the daemon host, waiting to be saved to the device
+   * with `useDeviceFiles().save()`. Call `releaseDownloadRpc` after saving.
+   */
+  staged: z.object({ directory: z.string(), path: z.string() }).optional(),
 });
 export type Transfer = z.infer<typeof transferSchema>;
 
@@ -168,38 +156,41 @@ const transferStartedSchema = z.union([
 
 // Plugin RPCs time out on the client after 60 s, so a copy never runs inside one: these start it
 // and return at once, and `transferStatusRpc` reports on it.
+/** Copies a remote file into a private staging directory on the daemon host, never a workspace. */
 export const startDownloadRpc = defineRpc({
   name: "ssh.files.start-download",
-  input: z.object({
-    target: connectionTargetSchema,
-    workspaceId: z.string().min(1),
-    remotePath: remotePathSchema,
-  }),
+  input: z.object({ target: connectionTargetSchema, remotePath: remotePathSchema }),
   output: transferStartedSchema,
 });
 
+/** Copies a file the user picked on their device (`useDeviceFiles().pick()`) to the remote host. */
 export const startUploadRpc = defineRpc({
   name: "ssh.files.start-upload",
   input: z.object({
     target: connectionTargetSchema,
-    workspaceId: z.string().min(1),
-    /** File relative to the workspace directory. */
-    localPath: workspaceRelativePathSchema.min(1),
+    upload: z.object({ id: z.string().min(1).max(128), fileName: z.string().min(1).max(255) }),
     /** Remote directory that receives the file. */
     remoteDirectory: remotePathSchema,
   }),
   output: transferStartedSchema,
 });
 
+// A transfer id is a random UUID returned only to the client that started it.
 export const transferStatusRpc = defineRpc({
   name: "ssh.files.transfer-status",
-  // A transfer is only visible to the workspace that started it.
-  input: z.object({ transferId: z.string().min(1), workspaceId: z.string().min(1) }),
+  input: z.object({ transferId: z.string().min(1) }),
   output: z.union([z.object({ ok: z.literal(true), transfer: transferSchema }), fileFailureSchema]),
 });
 
 export const cancelTransferRpc = defineRpc({
   name: "ssh.files.cancel-transfer",
-  input: z.object({ transferId: z.string().min(1), workspaceId: z.string().min(1) }),
+  input: z.object({ transferId: z.string().min(1) }),
+  output: z.union([z.object({ ok: z.literal(true) }), fileFailureSchema]),
+});
+
+/** The device has the downloaded file (or gave up); the staged copy may go. */
+export const releaseDownloadRpc = defineRpc({
+  name: "ssh.files.release-download",
+  input: z.object({ transferId: z.string().min(1) }),
   output: z.union([z.object({ ok: z.literal(true) }), fileFailureSchema]),
 });

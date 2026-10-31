@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRpc } from "@getpaseo/plugin/client";
-import { Icon, useToast } from "@getpaseo/plugin/client/ui";
+import { Icon, useDeviceFiles, useToast, type DeviceFiles } from "@getpaseo/plugin/client/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
+import type { z } from "zod";
 import {
   cancelTransferRpc,
   listRemoteFilesRpc,
-  listWorkspaceFilesRpc,
+  releaseDownloadRpc,
   startDownloadRpc,
   startUploadRpc,
   transferStatusRpc,
@@ -19,10 +20,18 @@ import { remoteJoin, remoteParent } from "../shared/remote-path";
 import { CANCELLED_MESSAGE } from "../shared/transfer-messages";
 import { FileRow, MIN_TOUCH_TARGET } from "./file-row";
 import { formatProgress } from "./format";
-import type { Layout, TargetWorkspace, Theme } from "./types";
+import type { Layout, Theme } from "./types";
 
 const REMOTE_KEY = ["ssh", "files", "remote"] as const;
-const WORKSPACE_KEY = ["ssh", "files", "workspace"] as const;
+
+// An older app's ui module has no useDeviceFiles. The import is a property read, so it is
+// undefined there rather than a crash; the fallback is fixed per app, so hook order never changes.
+const hostDeviceFiles: typeof useDeviceFiles | undefined = useDeviceFiles;
+function noDeviceFiles(): DeviceFiles | null {
+  return null;
+}
+const useDeviceFilesIfAvailable: () => DeviceFiles | null = hostDeviceFiles ?? noDeviceFiles;
+const UPDATE_APP_MESSAGE = "Update the Paseo app to download or upload files here.";
 
 interface ToolbarButtonProps {
   theme: Theme;
@@ -147,8 +156,8 @@ function Pane({
 }
 
 /** Why a toolbar button is disabled, or `null` when none is. */
-function remoteHint(hasWorkspace: boolean, hasListing: boolean, loading: boolean): string | null {
-  if (!hasWorkspace) return "Choose a target workspace to download or upload.";
+function remoteHint(canTransfer: boolean, hasListing: boolean, loading: boolean): string | null {
+  if (!canTransfer) return UPDATE_APP_MESSAGE;
   return hasListing ? null : uploadHint(loading);
 }
 
@@ -157,15 +166,6 @@ function uploadHint(loading: boolean): string {
   return loading
     ? "Upload is available once the remote folder has loaded."
     : "Upload needs a remote folder that loaded. Press Refresh, or go Up.";
-}
-
-function joinRelative(directory: string, name: string): string {
-  return directory ? `${directory}/${name}` : name;
-}
-
-function relativeParent(directory: string): string | null {
-  const segments = directory.split("/").filter(Boolean);
-  return segments.length === 0 ? null : segments.slice(0, -1).join("/");
 }
 
 function parentOfPath(path: string | undefined): string | null {
@@ -196,35 +196,6 @@ function useRemoteListing(entry: SshHostEntry) {
   const home = useCallback(() => setPath(undefined), []);
   const refresh = useCallback(() => void query.refetch(), [query]);
   return { query, listing, parent, open, up, home, refresh };
-}
-
-function useWorkspaceListing(workspaceId: string | null, enabled: boolean) {
-  const listWorkspace = useRpc(listWorkspaceFilesRpc);
-  const [directory, setDirectory] = useState("");
-  // A folder of one workspace need not exist in another.
-  useEffect(() => setDirectory(""), [workspaceId]);
-  const query = useQuery({
-    queryKey: [...WORKSPACE_KEY, workspaceId, directory],
-    queryFn: () => {
-      if (!workspaceId) throw new Error("Choose a target workspace first.");
-      return listWorkspace({ workspaceId, directory });
-    },
-    enabled: enabled && workspaceId !== null,
-    retry: false,
-  });
-  const listing = query.data?.ok ? query.data : null;
-  const parent = listing ? listing.parent : relativeParent(directory);
-  const open = useCallback(
-    (item: FileEntry) => {
-      if (listing) setDirectory(joinRelative(listing.directory, item.name));
-    },
-    [listing],
-  );
-  const up = useCallback(() => {
-    if (parent !== null) setDirectory(parent);
-  }, [parent]);
-  const root = useCallback(() => setDirectory(""), []);
-  return { query, listing, parent, directory, open, up, root };
 }
 
 const POLL_INTERVAL_MS = 1000;
@@ -262,14 +233,14 @@ function transferProblem(
 }
 
 /** Polls a transfer's status; polling stops on a final state, an unknown id, or repeated failures. */
-function useTransferStatus(transferId: string, workspaceId: string) {
+function useTransferStatus(transferId: string) {
   const status = useRpc(transferStatusRpc);
   const [failures, setFailures] = useState(0);
   const query = useQuery({
     queryKey: ["ssh", "files", "transfer", transferId],
     queryFn: async () => {
       try {
-        const result = await status({ transferId, workspaceId });
+        const result = await status({ transferId });
         setFailures(0);
         return result;
       } catch (error) {
@@ -298,10 +269,10 @@ interface TransferRowProps {
 
 /** One transfer: progress, Cancel while it runs, Dismiss after. Polling ends if the row unmounts. */
 function TransferRow({ theme, transfer: ref, onFinished, onDismiss }: TransferRowProps) {
-  const { id: transferId, workspaceId } = ref;
+  const { id: transferId } = ref;
   const toast = useToast();
   const cancel = useRpc(cancelTransferRpc);
-  const { query, lostContact, retry } = useTransferStatus(transferId, workspaceId);
+  const { query, lostContact, retry } = useTransferStatus(transferId);
   const transfer = query.data?.ok ? query.data.transfer : null;
   const ended = transfer && transfer.state !== "running" ? transfer : null;
   const reported = useRef(false);
@@ -313,10 +284,10 @@ function TransferRow({ theme, transfer: ref, onFinished, onDismiss }: TransferRo
   }, [ended, onFinished]);
 
   const handleCancel = useCallback(() => {
-    cancel({ transferId, workspaceId }).catch((error: unknown) =>
+    cancel({ transferId }).catch((error: unknown) =>
       toast.error(error instanceof Error ? error.message : String(error)),
     );
-  }, [cancel, transferId, workspaceId, toast]);
+  }, [cancel, transferId, toast]);
   const handleDismiss = useCallback(() => onDismiss(transferId), [onDismiss, transferId]);
 
   const styles = useMemo(
@@ -356,55 +327,95 @@ function TransferRow({ theme, transfer: ref, onFinished, onDismiss }: TransferRo
   );
 }
 
-/** A started transfer and the workspace that owns it; only that workspace can read or cancel it. */
+/** A started transfer. Its id is all the daemon needs to report on it. */
 interface TransferRef {
   id: string;
-  workspaceId: string;
 }
+
+/** Where an upload goes: the host and the remote folder. The file comes from the device picker. */
+type UploadTarget = Omit<z.input<(typeof startUploadRpc)["input"]>, "upload">;
 
 export function useTransfers() {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const deviceFiles = useDeviceFilesIfAvailable();
   const startDownload = useRpc(startDownloadRpc);
   const startUpload = useRpc(startUploadRpc);
+  const releaseDownload = useRpc(releaseDownloadRpc);
   const [refs, setRefs] = useState<TransferRef[]>([]);
   const onStarted = useCallback(
-    (result: { ok: true; transferId: string } | FileFailure, workspaceId: string) => {
-      if (result.ok) setRefs((current) => [...current, { id: result.transferId, workspaceId }]);
+    (result: { ok: true; transferId: string } | FileFailure) => {
+      if (result.ok) setRefs((current) => [...current, { id: result.transferId }]);
       else toast.error(result.message);
     },
     [toast],
   );
   const downloadMutation = useMutation({
     mutationFn: (variables: Parameters<typeof startDownload>[0]) => startDownload(variables),
-    onSuccess: (result, variables) => onStarted(result, variables.workspaceId),
+    onSuccess: onStarted,
     onError: (error) => toast.error(error.message),
   });
   const uploadMutation = useMutation({
     mutationFn: (variables: Parameters<typeof startUpload>[0]) => startUpload(variables),
-    onSuccess: (result, variables) => onStarted(result, variables.workspaceId),
+    onSuccess: onStarted,
     onError: (error) => toast.error(error.message),
   });
+  const { mutate: mutateUpload } = uploadMutation;
+  /**
+   * Opens this device's file picker, uploads the chosen file to the daemon host, then copies it
+   * to the remote folder. Call it straight from a press: a browser opens its picker only then.
+   */
+  const uploadFromDevice = useCallback(
+    (target: UploadTarget) => {
+      if (!deviceFiles) {
+        toast.error(UPDATE_APP_MESSAGE);
+        return;
+      }
+      // The picker opens synchronously inside this call, before its first await.
+      const pickAndUpload = async () => {
+        const upload = await deviceFiles.pick();
+        if (upload)
+          mutateUpload({ ...target, upload: { id: upload.id, fileName: upload.fileName } });
+      };
+      pickAndUpload().catch((error: unknown) =>
+        toast.error(error instanceof Error ? error.message : String(error)),
+      );
+    },
+    [deviceFiles, mutateUpload, toast],
+  );
+  /** Hands a finished download to this device, then lets the daemon remove its staged copy. */
+  const saveToDevice = useCallback(
+    async (transfer: Transfer & { staged: NonNullable<Transfer["staged"]> }) => {
+      try {
+        if (!deviceFiles) throw new Error(UPDATE_APP_MESSAGE);
+        await deviceFiles.save(transfer.staged);
+        toast.show(`Saved "${transfer.fileName}" to this device.`, { variant: "success" });
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      } finally {
+        await releaseDownload({ transferId: transfer.id }).catch(() => undefined);
+      }
+    },
+    [deviceFiles, releaseDownload, toast],
+  );
   const finished = useCallback(
     (transfer: Transfer) => {
-      if (transfer.state === "done") {
-        toast.show(
-          transfer.kind === "download"
-            ? `Saved "${transfer.fileName}" in the target workspace directory. Open the file explorer to get it onto your phone or browser.`
-            : `Uploaded to ${transfer.remotePath ?? "the remote host"}`,
-          { variant: "success" },
-        );
+      if (transfer.state === "done" && transfer.kind === "download") {
+        if (transfer.staged) void saveToDevice({ ...transfer, staged: transfer.staged });
+      } else if (transfer.state === "done") {
+        toast.show(`Uploaded to ${transfer.remotePath ?? "the remote host"}`, {
+          variant: "success",
+        });
       } else if (transfer.state === "failed") {
         toast.error(transfer.error?.message ?? "The transfer failed.");
       } else if (transfer.error && transfer.error.message !== CANCELLED_MESSAGE) {
         // Cancelled, but the partial file could not be removed: the message says where it is.
         toast.error(transfer.error.message);
       }
-      void queryClient.invalidateQueries({
-        queryKey: [...(transfer.kind === "download" ? WORKSPACE_KEY : REMOTE_KEY)],
-      });
+      if (transfer.kind === "upload")
+        void queryClient.invalidateQueries({ queryKey: [...REMOTE_KEY] });
     },
-    [toast, queryClient],
+    [toast, queryClient, saveToDevice],
   );
   const dismiss = useCallback(
     (transferId: string) => setRefs((current) => current.filter((ref) => ref.id !== transferId)),
@@ -412,9 +423,10 @@ export function useTransfers() {
   );
   return {
     refs,
+    canTransfer: deviceFiles !== null,
     starting: downloadMutation.isPending || uploadMutation.isPending,
     download: downloadMutation.mutate,
-    upload: uploadMutation.mutate,
+    uploadFromDevice,
     finished,
     dismiss,
   };
@@ -444,76 +456,19 @@ export function TransferList({ theme, transfers }: TransferListProps) {
   );
 }
 
-type WorkspaceListing = ReturnType<typeof useWorkspaceListing>;
 type RemoteListing = ReturnType<typeof useRemoteListing>;
-
-interface UploadPaneProps {
-  theme: Theme;
-  workspace: WorkspaceListing;
-  remotePath: string | null;
-  busy: boolean;
-  onUpload(entry: FileEntry): void;
-}
-
-function UploadPane({ theme, workspace, remotePath, busy, onUpload }: UploadPaneProps) {
-  const listing = workspace.listing;
-  const where = `${listing?.root ?? "Workspace"}${workspace.directory ? `/${workspace.directory}` : ""}`;
-  const toolbar = (
-    <>
-      <ToolbarButton
-        theme={theme}
-        icon="ArrowUp"
-        label="Up"
-        disabled={workspace.parent === null}
-        onPress={workspace.up}
-      />
-      <ToolbarButton theme={theme} icon="Home" label="Workspace" onPress={workspace.root} />
-    </>
-  );
-  return (
-    <Pane
-      theme={theme}
-      title="Upload from workspace"
-      location={`${where} → ${remotePath ?? "remote"}`}
-      toolbar={toolbar}
-      failure={failureText(workspace.query.data, workspace.query.error)}
-      hint={
-        remotePath === null
-          ? "Waiting for the remote folder to load; files can be uploaded after that."
-          : null
-      }
-      loading={workspace.query.isFetching && !workspace.query.data}
-      entries={listing?.entries ?? null}
-      truncated={listing?.truncated ?? false}
-      actionLabel="Upload"
-      actionIcon="Upload"
-      busy={busy || remotePath === null}
-      onOpenDirectory={workspace.open}
-      onAction={onUpload}
-    />
-  );
-}
 
 interface RemotePaneProps {
   theme: Theme;
   remote: RemoteListing;
-  picking: boolean;
   busy: boolean;
-  /** False while no target workspace is chosen: nothing can be downloaded or uploaded. */
-  hasWorkspace: boolean;
-  onTogglePicker(): void;
+  /** False on an app too old to move files to or from this device. */
+  canTransfer: boolean;
+  onUpload(): void;
   onDownload(entry: FileEntry): void;
 }
 
-function RemotePane({
-  theme,
-  remote,
-  picking,
-  busy,
-  hasWorkspace,
-  onTogglePicker,
-  onDownload,
-}: RemotePaneProps) {
+function RemotePane({ theme, remote, busy, canTransfer, onUpload, onDownload }: RemotePaneProps) {
   const listing = remote.listing;
   const toolbar = (
     <>
@@ -529,9 +484,9 @@ function RemotePane({
       <ToolbarButton
         theme={theme}
         icon="Upload"
-        label={picking ? "Close upload" : "Upload…"}
-        disabled={!listing || (!hasWorkspace && !picking)}
-        onPress={onTogglePicker}
+        label="Upload from device…"
+        disabled={!listing || !canTransfer || busy}
+        onPress={onUpload}
       />
     </>
   );
@@ -542,13 +497,13 @@ function RemotePane({
       location={listing?.path ?? "Remote home"}
       toolbar={toolbar}
       failure={failureText(remote.query.data, remote.query.error)}
-      hint={remoteHint(hasWorkspace, listing !== null, remote.query.isFetching)}
+      hint={remoteHint(canTransfer, listing !== null, remote.query.isFetching)}
       loading={remote.query.isFetching && !remote.query.data}
       entries={listing?.entries ?? null}
       truncated={listing?.truncated ?? false}
       actionLabel="Download"
       actionIcon="Download"
-      busy={busy || !hasWorkspace}
+      busy={busy || !canTransfer}
       onOpenDirectory={remote.open}
       onAction={onDownload}
     />
@@ -559,53 +514,27 @@ interface FilesBrowserProps {
   entry: SshHostEntry;
   theme: Theme;
   layout: Layout;
-  /** Where downloads land and uploads come from; `null` until one is chosen. */
-  workspace: TargetWorkspace | null;
   transfers: Transfers;
   /** Shows a back button when the host list is not on screen at the same time. */
   onClose?(): void;
 }
 
-export function FilesBrowser({
-  entry,
-  theme,
-  layout,
-  workspace: target,
-  transfers,
-  onClose,
-}: FilesBrowserProps) {
-  const workspaceId = target?.id ?? null;
-  const [picking, setPicking] = useState(false);
+export function FilesBrowser({ entry, theme, transfers, onClose }: FilesBrowserProps) {
   const remote = useRemoteListing(entry);
-  const workspace = useWorkspaceListing(workspaceId, picking);
   const remoteListing = remote.listing;
-  const workspaceListing = workspace.listing;
-  const { download, upload } = transfers;
+  const { download, uploadFromDevice } = transfers;
 
   const handleDownload = useCallback(
     (item: FileEntry) => {
-      if (!remoteListing || !workspaceId) return;
-      download({
-        target: entry.target,
-        workspaceId,
-        remotePath: remoteJoin(remoteListing.path, item.name),
-      });
+      if (!remoteListing) return;
+      download({ target: entry.target, remotePath: remoteJoin(remoteListing.path, item.name) });
     },
-    [remoteListing, workspaceId, entry.target, download],
+    [remoteListing, entry.target, download],
   );
-  const handleUpload = useCallback(
-    (item: FileEntry) => {
-      if (!workspaceListing || !remoteListing || !workspaceId) return;
-      upload({
-        target: entry.target,
-        workspaceId,
-        localPath: joinRelative(workspaceListing.directory, item.name),
-        remoteDirectory: remoteListing.path,
-      });
-    },
-    [workspaceListing, remoteListing, workspaceId, entry.target, upload],
-  );
-  const handleTogglePicker = useCallback(() => setPicking((value) => !value), []);
+  const handleUpload = useCallback(() => {
+    if (!remoteListing) return;
+    uploadFromDevice({ target: entry.target, remoteDirectory: remoteListing.path });
+  }, [remoteListing, entry.target, uploadFromDevice]);
 
   const styles = useMemo(
     () => ({
@@ -613,12 +542,8 @@ export function FilesBrowser({
       header: { flexDirection: "row" as const, alignItems: "center" as const, gap: 12 },
       title: { flex: 1, minWidth: 0, color: theme.colors.foreground, fontSize: 18 },
       note: { color: theme.colors.foregroundMuted },
-      panes: {
-        flexDirection: layout.compact || !picking ? ("column" as const) : ("row" as const),
-        gap: 16,
-      },
     }),
-    [theme, layout.compact, picking],
+    [theme],
   );
 
   return (
@@ -632,32 +557,20 @@ export function FilesBrowser({
         ) : null}
       </View>
       <Text style={styles.note}>
-        Downloads are saved in the directory of the target workspace on the daemon host. Open the
-        Paseo file explorer to get them onto your phone or browser. Existing files are never
-        overwritten. Transfers keep running on the daemon if you close this screen, but progress and
-        cancel are only shown while it is open. Browsing needs a key or ssh-agent; the terminal
-        still works for password logins.
+        Download saves a file to this device; Upload from device sends a file from this device to
+        the folder shown. No workspace is involved. Existing remote files are never overwritten.
+        Transfers keep running on the daemon if you close this screen, but progress, cancel, and the
+        save to this device happen only while it is open. Browsing needs a key or ssh-agent; the
+        terminal still works for password logins.
       </Text>
-      <View style={styles.panes}>
-        <RemotePane
-          theme={theme}
-          remote={remote}
-          picking={picking}
-          busy={transfers.starting}
-          hasWorkspace={workspaceId !== null}
-          onTogglePicker={handleTogglePicker}
-          onDownload={handleDownload}
-        />
-        {picking ? (
-          <UploadPane
-            theme={theme}
-            workspace={workspace}
-            remotePath={remoteListing?.path ?? null}
-            busy={transfers.starting}
-            onUpload={handleUpload}
-          />
-        ) : null}
-      </View>
+      <RemotePane
+        theme={theme}
+        remote={remote}
+        busy={transfers.starting}
+        canTransfer={transfers.canTransfer}
+        onUpload={handleUpload}
+        onDownload={handleDownload}
+      />
     </View>
   );
 }

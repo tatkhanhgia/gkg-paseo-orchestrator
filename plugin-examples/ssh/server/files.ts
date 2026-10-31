@@ -1,12 +1,14 @@
 import { unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import path from "node:path";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
 import type { z } from "zod";
 import type {
   FileEntry,
   FileFailure,
   cancelTransferRpc,
   listRemoteFilesRpc,
-  listWorkspaceFilesRpc,
+  releaseDownloadRpc,
   startDownloadRpc,
   startUploadRpc,
   transferStatusRpc,
@@ -23,21 +25,18 @@ import {
 import {
   createDownloadTarget,
   describeErrno,
-  listWorkspaceDirectory,
   openUploadSource,
-  resolveRoot,
   type UploadSource,
 } from "./local-files";
 import { SftpClient, SftpStatusError } from "./sftp-client";
 import { kindFromPermissions, SftpProtocolError, StatusCode } from "./sftp-wire";
+import { StagingArea } from "./staging";
 import { FileOpError, withSftp } from "./ssh-transport";
 import { toTransfer, TransferRegistry, type TransferRecord } from "./transfers";
 
-type Paseo = import("@getpaseo/plugin/server").PluginHandlerContext["paseo"];
 type Input<Contract extends { input: z.ZodType }> = z.output<Contract["input"]>;
-interface Context {
-  paseo: Paseo;
-}
+/** The daemon's resolver for device uploads; absent on daemons that cannot resolve them. */
+export type ResolveDeviceUpload = PluginServerContext["resolveDeviceUpload"];
 
 // Plugin RPCs time out on the client after 60 s. Every RPC below returns well inside that:
 // listings stop at 25 s, and copies run in the background behind start/status/cancel RPCs.
@@ -50,9 +49,17 @@ const CHUNK_BYTES = 32 * 1024;
 const WINDOW = 16;
 /** Each listing spawns its own ssh, so cap how many run at once. */
 const MAX_CONCURRENT_LISTINGS = 4;
+/** A finished download nobody saved is removed after this long. */
+export const STAGED_TTL_MS = 15 * 60_000;
+/**
+ * After the device saved a download, its staged copy stays this long. A browser download fetches
+ * the file after `save()` returns, and the daemon's download token lives 60 s by default.
+ */
+export const RELEASE_GRACE_MS = 90_000;
 
 let activeListings = 0;
 const transfers = new TransferRegistry();
+const staging = new StagingArea();
 
 function failure(code: FileFailure["code"], message: string): FileFailure {
   return { ok: false, code, message };
@@ -109,14 +116,6 @@ function noop(): void {}
 
 function throwIfCancelled(signal: AbortSignal): void {
   if (signal.aborted) throw new FileOpError("cancelled", CANCELLED_MESSAGE);
-}
-
-async function workspaceDirectory(paseo: Paseo, workspaceId: string): Promise<string> {
-  const workspace = await paseo.workspaces.ref(workspaceId).refresh();
-  if (!workspace?.workspaceDirectory) {
-    throw new FileOpError("not-found", "This workspace has no directory on the daemon host.");
-  }
-  return workspace.workspaceDirectory;
 }
 
 function requireValidRemotePath(value: string, field: string): void {
@@ -184,13 +183,6 @@ export function listRemoteFiles(input: Input<typeof listRemoteFilesRpc>) {
         truncated,
       };
     });
-  });
-}
-
-export function listWorkspaceFiles(input: Input<typeof listWorkspaceFilesRpc>, ctx: Context) {
-  return capture(async () => {
-    const root = await resolveRoot(await workspaceDirectory(ctx.paseo, input.workspaceId));
-    return { root, ...(await listWorkspaceDirectory(root, input.directory ?? "")) };
   });
 }
 
@@ -304,6 +296,7 @@ async function runDownload(
   local: FileHandle,
   filePath: string,
 ): Promise<void> {
+  const directory = path.dirname(filePath);
   const { signal } = record.abort;
   try {
     await withSftp(input.target, { timeoutMs: TRANSFER_TIMEOUT_MS, signal }, async (client) => {
@@ -328,6 +321,8 @@ async function runDownload(
       }
     });
     await local.close();
+    record.staged = { directory, path: record.fileName };
+    staging.scheduleRemoval(directory, STAGED_TTL_MS);
     transfers.finish(record, { state: "done" });
   } catch (error) {
     await local.close().catch(noop);
@@ -336,12 +331,11 @@ async function runDownload(
       () => true,
       () => false,
     );
+    await staging.remove(directory).catch(noop);
     finishWithError(
       record,
       error,
-      removed
-        ? ""
-        : ` A partial file named "${record.fileName}" may remain in the workspace directory; delete it in the file explorer.`,
+      removed ? "" : ` A partial file may remain at ${filePath} on the daemon host.`,
     );
   }
 }
@@ -350,9 +344,16 @@ async function runUpload(
   record: TransferRecord,
   input: Input<typeof startUploadRpc>,
   source: UploadSource,
+  removeUpload: () => Promise<void>,
 ): Promise<void> {
   const { signal } = record.abort;
   let partialRemotePath: string | null = null;
+  // The device copy on the daemon host only carries this transfer, so it goes before the
+  // transfer reports how it ended.
+  const releaseSource = async () => {
+    await source.handle.close().catch(noop);
+    await removeUpload().catch(noop);
+  };
   try {
     throwIfCancelled(signal);
     await withSftp(input.target, { timeoutMs: TRANSFER_TIMEOUT_MS, signal }, async (client) => {
@@ -386,8 +387,10 @@ async function runUpload(
       }
       record.remotePath = remotePath;
     });
+    await releaseSource();
     transfers.finish(record, { state: "done" });
   } catch (error) {
+    await releaseSource();
     finishWithError(
       record,
       error,
@@ -395,32 +398,32 @@ async function runUpload(
         ? ` A partial file may remain at ${partialRemotePath} on the remote host and may need to be removed manually.`
         : "",
     );
-  } finally {
-    await source.handle.close().catch(noop);
   }
 }
 
 const BUSY = failure("busy", "Too many transfers are running. Wait for one to finish.");
 
 /**
- * Validates the request, creates the local file, and starts the copy in the background. The RPC
- * returns as soon as the transfer id exists.
+ * Validates the request, creates the staging file, and starts the copy in the background. The
+ * file lands in a fresh private directory on the daemon host, outside every workspace, and waits
+ * there until the device saves it. The RPC returns as soon as the transfer id exists.
  */
-export async function startDownload(input: Input<typeof startDownloadRpc>, ctx: Context) {
+export async function startDownload(input: Input<typeof startDownloadRpc>) {
   try {
     requireValidRemotePath(input.remotePath, "remote path");
     const name = remoteBasename(input.remotePath);
     const nameProblem = describeUnsafeFileName(name);
     if (nameProblem) throw new FileOpError("invalid", `The remote file name ${nameProblem}.`);
-    const record = transfers.begin("download", name, input.workspaceId);
+    const record = transfers.begin("download", name);
     if (!record) return BUSY;
+    let directory: string | null = null;
     try {
-      const root = await resolveRoot(await workspaceDirectory(ctx.paseo, input.workspaceId));
-      // Create the local file first: an existing file stops the download before any network use.
-      const { handle, filePath } = await createDownloadTarget(root, name);
+      directory = await staging.createDirectory();
+      const { handle, filePath } = await createDownloadTarget(directory, name);
       void runDownload(record, input, handle, filePath);
     } catch (error) {
       transfers.discard(record);
+      if (directory) await staging.remove(directory).catch(noop);
       throw error;
     }
     return { ok: true as const, transferId: record.id };
@@ -429,25 +432,37 @@ export async function startDownload(input: Input<typeof startDownloadRpc>, ctx: 
   }
 }
 
-export async function startUpload(input: Input<typeof startUploadRpc>, ctx: Context) {
+/**
+ * Starts copying a file the user picked on their device to `remoteDirectory`. The daemon resolves
+ * the upload handle, so a value from the screen cannot name any other file on the host. The upload
+ * is deleted from the daemon host when the transfer ends, however it ends.
+ */
+export async function startUpload(
+  input: Input<typeof startUploadRpc>,
+  resolveUpload: ResolveDeviceUpload,
+) {
+  if (!resolveUpload) {
+    return failure("failed", "Update the host to upload files from this device.");
+  }
+  let removeUpload: (() => Promise<void>) | null = null;
   try {
     requireValidRemotePath(input.remoteDirectory, "remote directory");
-    const record = transfers.begin(
-      "upload",
-      input.localPath.split("/").at(-1) ?? "",
-      input.workspaceId,
-    );
+    const upload = await resolveUpload(input.upload).catch((error: unknown) => {
+      throw new FileOpError("not-found", error instanceof Error ? error.message : String(error));
+    });
+    removeUpload = upload.remove;
+    const record = transfers.begin("upload", input.upload.fileName);
     if (!record) return BUSY;
     try {
-      const root = await resolveRoot(await workspaceDirectory(ctx.paseo, input.workspaceId));
-      const source = await openUploadSource(root, input.localPath);
+      const source = await openUploadSource(path.dirname(upload.path), path.basename(upload.path));
       if (source.size > MAX_TRANSFER_BYTES) {
         await source.handle.close();
         throw new FileOpError("too-large", "That file is larger than the 2 GiB limit.");
       }
       record.fileName = source.name;
       record.total = source.size;
-      void runUpload(record, input, source);
+      void runUpload(record, input, source, upload.remove);
+      removeUpload = null;
     } catch (error) {
       transfers.discard(record);
       throw error;
@@ -455,11 +470,14 @@ export async function startUpload(input: Input<typeof startUploadRpc>, ctx: Cont
     return { ok: true as const, transferId: record.id };
   } catch (error) {
     return toFailure(error);
+  } finally {
+    // Still set when the transfer did not start; nothing else will remove the upload then.
+    await removeUpload?.().catch(noop);
   }
 }
 
 export function transferStatus(input: Input<typeof transferStatusRpc>) {
-  const record = transfers.get(input.transferId, input.workspaceId);
+  const record = transfers.get(input.transferId);
   if (!record) {
     return failure("not-found", "That transfer is no longer known to the daemon.");
   }
@@ -468,13 +486,36 @@ export function transferStatus(input: Input<typeof transferStatusRpc>) {
 
 /** Asks a running transfer to stop. It then removes its partial file and ends `cancelled`. */
 export function cancelTransfer(input: Input<typeof cancelTransferRpc>) {
-  const record = transfers.get(input.transferId, input.workspaceId);
+  const record = transfers.get(input.transferId);
   if (!record) return failure("not-found", "That transfer is no longer known to the daemon.");
   if (record.state === "running") record.abort.abort();
   return { ok: true as const };
 }
 
-/** Plugin teardown: stop every running transfer and remove its partial file, within a bound. */
-export function stopTransfers(waitMs: number): Promise<void> {
-  return transfers.shutdown(waitMs);
+/**
+ * The device saved a finished download, or gave up: its staged copy goes after a short grace,
+ * because a browser download may still be fetching it.
+ */
+export function releaseDownload(input: Input<typeof releaseDownloadRpc>) {
+  const record = transfers.get(input.transferId);
+  if (!record) return failure("not-found", "That transfer is no longer known to the daemon.");
+  if (record.staged) {
+    staging.scheduleRemoval(record.staged.directory, RELEASE_GRACE_MS);
+    record.staged = undefined;
+  }
+  return { ok: true as const };
+}
+
+/**
+ * Plugin teardown: stop every running transfer and remove its partial file, within a bound, then
+ * remove every staged download.
+ */
+export async function stopTransfers(waitMs: number): Promise<void> {
+  await transfers.shutdown(waitMs);
+  await staging.clear();
+}
+
+/** Plugin start: remove staging left behind by plugin processes that no longer run. */
+export function sweepStaleStaging(): Promise<void> {
+  return staging.sweepStale();
 }

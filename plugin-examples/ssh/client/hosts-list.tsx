@@ -18,22 +18,12 @@ interface HostRowProps {
   theme: Theme;
   busy: boolean;
   selected: boolean;
-  connectDisabled: boolean;
   onConnect(entry: SshHostEntry): void;
   onBrowse(entry: SshHostEntry): void;
   onRemove(entry: SshHostEntry): void;
 }
 
-function HostRow({
-  entry,
-  theme,
-  busy,
-  selected,
-  connectDisabled,
-  onConnect,
-  onBrowse,
-  onRemove,
-}: HostRowProps) {
+function HostRow({ entry, theme, busy, selected, onConnect, onBrowse, onRemove }: HostRowProps) {
   const styles = useMemo(
     () => ({
       row: {
@@ -56,7 +46,6 @@ function HostRow({
         paddingHorizontal: 12,
         borderRadius: 8,
         backgroundColor: theme.colors.accent,
-        opacity: connectDisabled ? 0.5 : 1,
       },
       connectText: { color: theme.colors.accentForeground },
       files: {
@@ -75,7 +64,7 @@ function HostRow({
         justifyContent: "center" as const,
       },
     }),
-    [theme, selected, connectDisabled],
+    [theme, selected],
   );
   const handleConnect = useCallback(() => onConnect(entry), [entry, onConnect]);
   const handleBrowse = useCallback(() => onBrowse(entry), [entry, onBrowse]);
@@ -93,7 +82,6 @@ function HostRow({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Connect to ${entry.label}`}
-        disabled={connectDisabled}
         onPress={handleConnect}
         style={styles.connect}
       >
@@ -128,21 +116,12 @@ interface HostsListProps {
   layout: Layout;
   /** The host whose files are open, so its row can show it. */
   selectedKey: string | null;
-  /** True while there is no workspace to open a terminal in. */
-  connectDisabled: boolean;
   onConnect(entry: SshHostEntry): void;
   onBrowse(entry: SshHostEntry): void;
 }
 
 /** User-added and ssh-config hosts, with add and remove. Owns the host settings and config reads. */
-export function HostsList({
-  theme,
-  layout,
-  selectedKey,
-  connectDisabled,
-  onConnect,
-  onBrowse,
-}: HostsListProps) {
+export function HostsList({ theme, layout, selectedKey, onConnect, onBrowse }: HostsListProps) {
   const settings = useSettings(hostsSettings);
   const listConfigHosts = useRpc(listConfigHostsRpc);
   const config = useQuery({
@@ -222,7 +201,6 @@ export function HostsList({
           theme={theme}
           busy={settings.saving}
           selected={entry.key === selectedKey}
-          connectDisabled={connectDisabled}
           onConnect={onConnect}
           onBrowse={onBrowse}
           onRemove={handleRemove}
