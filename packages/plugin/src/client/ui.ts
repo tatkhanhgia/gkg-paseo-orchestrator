@@ -83,6 +83,39 @@ export interface TerminalViewProps {
  */
 export declare const TerminalView: ComponentType<TerminalViewProps>;
 
+/** A file on the plugin's host: `path` is relative to `directory`, which must be absolute. */
+export interface HostFile {
+  directory: string;
+  path: string;
+}
+
+/** A file the user picked on this device, now stored on the plugin's host. */
+export interface DeviceUpload {
+  /** Pass `{ id, fileName }` to your server code and resolve it with `resolveDeviceUpload`. */
+  id: string;
+  fileName: string;
+  size: number;
+}
+
+export interface DeviceFiles {
+  /**
+   * Saves a host file to the device viewing Paseo: the browser's download on web and desktop, the
+   * share sheet on iOS and Android. Progress shows in Paseo's download toast. Rejects when the
+   * download fails.
+   */
+  save(file: HostFile): Promise<void>;
+  /**
+   * Opens the device's file picker and uploads the chosen file to the host. Resolves `null` when
+   * the user cancels. Files are read into memory, so the app caps their size.
+   */
+  pick(): Promise<DeviceUpload | null>;
+}
+/**
+ * Moves files between the plugin's host and the device viewing Paseo, without a workspace.
+ * Absent on older apps; check `useDeviceFiles === undefined` before calling it.
+ */
+export declare function useDeviceFiles(): DeviceFiles;
+
 export type { PluginIconProps } from "../icons.js";
 
 /** React Native scrolling with the host's sheet gestures when rendered inside a sheet. */

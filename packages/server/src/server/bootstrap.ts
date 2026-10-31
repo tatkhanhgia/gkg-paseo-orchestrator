@@ -215,6 +215,7 @@ import { wrapSessionMessage, type SessionOutboundMessage } from "./messages.js";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
 import { createConfiguredTerminalManager } from "../terminal/terminal-manager-factory.js";
 import { killOwnedTerminals } from "../terminal/owned-terminals.js";
+import { resolveUploadsDirectory } from "./file-upload/index.js";
 import { createPluginClientId } from "./plugins/plugin-session-identity.js";
 import { applyTerminalAgentHookSetting } from "../terminal/agent-hooks/terminal-agent-hook-setting.js";
 import { loadOrCreateDaemonKeyPair } from "./daemon-keypair.js";
@@ -758,6 +759,7 @@ export async function createPaseoDaemon(
     }),
     builtinPlugins: resolveBuiltinPluginLoader(dependencies),
     settingsDirectory: path.join(config.paseoHome, "plugin-settings"),
+    uploadsDirectory: resolveUploadsDirectory(config.paseoHome),
   });
 
   const serverId = getOrCreateServerId(config.paseoHome, { logger });

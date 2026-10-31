@@ -27,5 +27,6 @@ export { copyText } from "./clipboard";
 export { useToast } from "./toast";
 export { StreamedText } from "./streamed-text";
 export { TerminalView } from "./terminal-view";
+export { useDeviceFiles } from "./device-files";
 
 export { Markdown } from "./markdown";

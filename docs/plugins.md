@@ -392,7 +392,17 @@ the subprocess session does the same, and a plugin only passes `owned: true`. `T
 `plugins/react-native/terminal-view.tsx` renders `TerminalPane` in its `embedded` mode, which drops the
 workspace-only swipes, file links, and focused-terminal report, and reads the host from
 `usePluginServerId()`. APIs borrowed through `getPaseoClient` carry no owner; they target other
-hosts, where `TerminalView` could not render the terminal anyway.
+hosts, where `TerminalView` could not render the terminal anyway. Only the subprocess API
+(`workspacelessOwnedTerminals` in `plugin-process.ts`) may create an owned terminal without a
+workspace, and `PluginService` ends a plugin's owned terminals whenever it stops or starts.
+
+Device file transfer reuses the app's existing paths and adds no protocol. `useDeviceFiles()` in
+`plugins/react-native/device-files.ts` saves through the download store (HTTP token download on a
+direct connection, session read otherwise) with an arbitrary host directory as the token's `cwd`, and
+picks through `useFilePicker` and `uploadFile`, which lands under `$PASEO_HOME/uploads`. The runtime
+passes that directory in the subprocess `initialize` message, and `device-uploads.ts` backs
+`server.resolveDeviceUpload`: the id must have the upload store's shape, the name must be one segment,
+and neither the upload directory nor the file may be a link.
 
 Each subprocess gets an exclusively owned `plugin:<id>` session. That identity is reserved from
 normal clients, never resumes another session, and is cleaned immediately on exit without reconnect

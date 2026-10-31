@@ -59,7 +59,7 @@ interface DownloadState {
     /** Reads the whole file over the session socket; used when no direct HTTP endpoint is active. */
     readFile: (path: string, maxBytes: number) => Promise<{ bytes: Uint8Array; size: number }>;
     saveFile?: typeof saveDownloadedBytes;
-  }) => Promise<void>;
+  }) => Promise<string>;
 
   updateProgress: (id: string, progress: DownloadProgress) => void;
   completeDownload: (id: string) => void;
@@ -138,7 +138,7 @@ export const useDownloadStore = create<DownloadState>()((set, get) => ({
         if (savedUri !== null) {
           await shareSavedFile(savedUri, tokenResponse.mimeType, resolvedFileName);
         }
-        return;
+        return id;
       }
       if (!downloadTarget.baseUrl) {
         throw new Error(i18n.t("downloads.hostUnavailable"));
@@ -153,7 +153,7 @@ export const useDownloadStore = create<DownloadState>()((set, get) => ({
       if (isWeb) {
         triggerBrowserDownload(downloadUrl, resolvedFileName);
         get().completeDownload(id);
-        return;
+        return id;
       }
 
       const downloadStartTime = Date.now();
@@ -201,10 +201,11 @@ export const useDownloadStore = create<DownloadState>()((set, get) => ({
       if (isWeb) {
         console.warn("[DownloadStore] Download failed:", message);
         get().failDownload(id, message);
-        return;
+        return id;
       }
       get().failDownload(id, message);
     }
+    return id;
   },
 
   updateProgress: (id, progress) => {
