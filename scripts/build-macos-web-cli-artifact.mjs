@@ -297,7 +297,7 @@ DEFAULT_LABEL="com.paseo.web-cli"
 PREFIX="\${PASEO_INSTALL_PREFIX:-$HOME/.local/share/paseo-web-cli}"
 BIN_DIR="\${PASEO_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 LISTEN="127.0.0.1:6767"
-LABEL="$DEFAULT_LABEL"
+LABEL="\${PASEO_LAUNCHD_LABEL:-$DEFAULT_LABEL}"
 START=1
 INSTALL_FOUNDATION=1
 
@@ -311,7 +311,7 @@ Options:
   --prefix PATH          Release root (default: ~/.local/share/paseo-web-cli)
   --bin-dir PATH         CLI symlink directory (default: ~/.local/bin)
   --listen HOST:PORT     Daemon listen address (default: 127.0.0.1:6767)
-  --label LABEL          launchd label (default: com.paseo.web-cli)
+  --label LABEL          launchd label (default: $PASEO_LAUNCHD_LABEL, else com.paseo.web-cli)
   --no-start             Install files and plist without loading launchd
   --skip-foundation      Do not install/update the bundled Foundation distribution
   -h, --help             Show this help without changing the machine
@@ -355,7 +355,18 @@ if [ -f "$PLIST" ]; then PLIST_EXISTED=1; fi
 INSTALL_CONFIG="$PREFIX/install-config.json"
 INSTALL_CONFIG_EXISTED=0
 if [ -f "$INSTALL_CONFIG" ]; then INSTALL_CONFIG_EXISTED=1; fi
-UPDATE_STATUS_DIR="\${PASEO_HOME:-$HOME/.paseo}/updates"
+DAEMON_HOME="\${PASEO_HOME:-$HOME/.paseo}"
+UPDATE_STATUS_DIR="$DAEMON_HOME/updates"
+# The launcher and daemon config are rewritten during the transaction. Their pre-install bytes are
+# kept here so a rollback hands the previous release a launcher and config it can still read.
+LAUNCHER_BACKUP_DIR="$PREFIX/launcher-backups/$VERSION"
+# The first launcher this installer migrates is also kept once, outside any version, so a manual
+# rollback to a release older than \`daemon run\` still has the launcher that release can run.
+PRE_DAEMON_RUN_BACKUP_DIR="$PREFIX/launcher-backups/pre-daemon-run"
+CONFIG_FILE="$DAEMON_HOME/config.json"
+PLIST_BACKED_UP=0
+CONFIG_BACKED_UP=0
+CONFIG_TOUCHED=0
 write_update_status() {
   mkdir -p "$UPDATE_STATUS_DIR" || return 1
   updated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -477,6 +488,19 @@ rollback_install() {
   if [ "$ROLLBACK_ARMED" -eq 1 ] && [ "$exit_code" -ne 0 ]; then
     echo "Update failed; restoring the previous Paseo release." >&2
     launchctl bootout "gui/$USER_ID/$LABEL" >/dev/null 2>&1 || true
+    # Restore the launcher and config before the previous release is bootstrapped: its CLI predates
+    # \`daemon run\`, so a migrated launcher would leave it with no daemon.
+    if [ "$PLIST_BACKED_UP" -eq 1 ]; then
+      cp -p "$LAUNCHER_BACKUP_DIR/$LABEL.plist" "$PLIST" || echo "Could not restore $PLIST from $LAUNCHER_BACKUP_DIR." >&2
+    fi
+    if [ "$CONFIG_BACKED_UP" -eq 1 ]; then
+      cp -p "$LAUNCHER_BACKUP_DIR/config.json" "$CONFIG_FILE" || echo "Could not restore $CONFIG_FILE from $LAUNCHER_BACKUP_DIR." >&2
+    elif [ "$CONFIG_TOUCHED" -eq 1 ]; then
+      rm -f "$CONFIG_FILE"
+    fi
+    # A launcher this install wrote has nothing to hand back; drop it before the restart below so
+    # the previous release is never bootstrapped from a plist it cannot run.
+    if [ "$PLIST_EXISTED" -eq 0 ]; then rm -f "$PLIST"; fi
     if [ -n "$PREVIOUS_RELEASE" ]; then
       ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
       if [ "$START" -eq 1 ] && [ -f "$PLIST" ]; then
@@ -507,7 +531,6 @@ rollback_install() {
     else
       rm -f "$CURRENT_LINK"
     fi
-    if [ "$PLIST_EXISTED" -eq 0 ]; then rm -f "$PLIST"; fi
     if [ "$INSTALL_CONFIG_EXISTED" -eq 0 ]; then rm -f "$INSTALL_CONFIG"; fi
     rm -rf "$RELEASE_DIR"
   fi
@@ -547,11 +570,33 @@ DAEMON_NODE_XML=$(escape_xml "$DAEMON_NODE")
 DAEMON_ENTRY_XML=$(escape_xml "$DAEMON_ENTRY")
 BEADS_CENTRAL_SIDECAR_XML=$(escape_xml "$CURRENT_LINK/components/beads-central/beads-central")
 BEADS_CENTRAL_BD_XML=$(escape_xml "$CURRENT_LINK/components/beads-central/bin/bd")
-LISTEN_XML=$(escape_xml "$LISTEN")
+DAEMON_HOME_XML=$(escape_xml "$DAEMON_HOME")
 PATH_XML=$(escape_xml "$BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 LOG_DIR="$HOME/Library/Logs/Paseo"
 mkdir -p "$LOG_DIR"
 LOG_XML=$(escape_xml "$LOG_DIR/daemon.log")
+LAUNCHER_HELPER="$CURRENT_LINK/installer-launcher.mjs"
+BUNDLED_NODE="$CURRENT_LINK/runtime/bin/node"
+mkdir -p "$LAUNCHER_BACKUP_DIR"
+if [ -f "$PLIST" ]; then
+  # The launcher may name its own daemon home (--home or PASEO_HOME). Migration writes config there,
+  # so that is the config to back up and, on failure, to restore.
+  if MIGRATION_HOME=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" home --kind plist --file "$PLIST" --home "$DAEMON_HOME"); then
+    CONFIG_FILE="$MIGRATION_HOME/config.json"
+  fi
+  cp -p "$PLIST" "$LAUNCHER_BACKUP_DIR/$LABEL.plist"
+  PLIST_BACKED_UP=1
+  LEGACY_LAUNCHER=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" needs-migration --kind plist --file "$PLIST" --home "$DAEMON_HOME" 2>/dev/null || echo yes)
+  if [ "$LEGACY_LAUNCHER" = yes ] && [ ! -e "$PRE_DAEMON_RUN_BACKUP_DIR/$LABEL.plist" ]; then
+    mkdir -p "$PRE_DAEMON_RUN_BACKUP_DIR"
+    cp -p "$PLIST" "$PRE_DAEMON_RUN_BACKUP_DIR/$LABEL.plist"
+  fi
+fi
+if [ -f "$CONFIG_FILE" ]; then
+  cp -p "$CONFIG_FILE" "$LAUNCHER_BACKUP_DIR/config.json"
+  CONFIG_BACKED_UP=1
+fi
+CONFIG_TOUCHED=1
 if [ ! -f "$PLIST" ]; then
 cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -560,9 +605,8 @@ cat > "$PLIST" <<PLIST
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key><array>
     <string>$DAEMON_NODE_XML</string><string>$DAEMON_ENTRY_XML</string>
-    <string>daemon</string><string>start</string>
-    <string>--foreground</string><string>--listen</string><string>$LISTEN_XML</string>
-    <string>--web-ui</string><string>--no-relay</string>
+    <string>daemon</string><string>run</string>
+    <string>--home</string><string>$DAEMON_HOME_XML</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>HOME</key><string>$(escape_xml "$HOME")</string>
@@ -581,14 +625,18 @@ cat > "$PLIST" <<PLIST
 </dict></plist>
 PLIST
   plutil -lint "$PLIST" >/dev/null
+  "$BUNDLED_NODE" "$LAUNCHER_HELPER" seed --home "$DAEMON_HOME" --node "$BUNDLED_NODE" --cli "$DAEMON_ENTRY" --listen "$LISTEN"
 else
-  # An existing plist keeps the operator's --listen, --relay/--no-relay, node, and PATH choices.
-  # Releases that predate the bundled Beads Central sidecar wrote a plist without these two
-  # variables, so patch them in; the daemon refuses to start its tracker without them.
+  # An existing plist keeps the operator's node, PATH, and env choices. Releases that predate the
+  # bundled Beads Central sidecar wrote a plist without these two variables, so patch them in; the
+  # daemon refuses to start its tracker without them.
   plutil -extract EnvironmentVariables xml1 -o /dev/null "$PLIST" >/dev/null 2>&1 ||
     plutil -insert EnvironmentVariables -dictionary "$PLIST"
   plutil -replace EnvironmentVariables.PASEO_BEADS_CENTRAL_SIDECAR -string "$CURRENT_LINK/components/beads-central/beads-central" "$PLIST"
   plutil -replace EnvironmentVariables.PASEO_BEADS_CENTRAL_BD_BIN -string "$CURRENT_LINK/components/beads-central/bin/bd" "$PLIST"
+  # A launcher still passing the launch flags the current CLI removed is moved to \`daemon run\`;
+  # their values go to config only where the operator has not set the key.
+  "$BUNDLED_NODE" "$LAUNCHER_HELPER" migrate --kind plist --file "$PLIST" --home "$DAEMON_HOME" --node "$BUNDLED_NODE" --cli "$DAEMON_ENTRY"
   plutil -lint "$PLIST" >/dev/null
 fi
 
@@ -659,6 +707,7 @@ fi
 ROLLBACK_ARMED=0
 write_update_status idle || true
 printf 'Installed Paseo WebUI + CLI %s at %s\\n' "$VERSION" "$RELEASE_DIR"
+if [ "$PLIST_BACKED_UP" -eq 1 ]; then printf 'Previous launcher saved at %s\\n' "$LAUNCHER_BACKUP_DIR"; fi
 printf 'CLI: %s\\n' "$BIN_DIR/paseo"
 printf 'WebUI: http://%s\\n' "$LISTEN"
 ACTIVE_PASEO=$(command -v paseo 2>/dev/null || true)
@@ -676,7 +725,7 @@ VERSION=${shellQuote(VERSION)}
 PREFIX="\${PASEO_INSTALL_PREFIX:-\${XDG_DATA_HOME:-$HOME/.local/share}/paseo-web-cli}"
 BIN_DIR="\${PASEO_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 SERVICE_DIR="\${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-SERVICE_NAME="paseo-web-cli.service"
+SERVICE_NAME="\${PASEO_SYSTEMD_UNIT:-paseo-web-cli.service}"
 LISTEN="127.0.0.1:6767"
 START=1
 INSTALL_FOUNDATION=1
@@ -717,6 +766,11 @@ if [ "$PREFIX" = "/" ] || [ "$BIN_DIR" = "/" ]; then
   echo "Refusing to install into /" >&2
   exit 2
 fi
+case "$SERVICE_NAME" in
+  *[!A-Za-z0-9._@-]*|"") echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
+  *.service) ;;
+  *) echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
+esac
 if [ "$START" -eq 1 ] && ! systemctl --user show-environment >/dev/null 2>&1; then
   echo "A working user systemd session is required; use --no-start for a files-only install." >&2
   exit 1
@@ -735,7 +789,18 @@ DROPIN="$DROPIN_DIR/paseo-beads-central.conf"
 INSTALL_CONFIG="$PREFIX/install-config.json"
 INSTALL_CONFIG_EXISTED=0
 if [ -f "$INSTALL_CONFIG" ]; then INSTALL_CONFIG_EXISTED=1; fi
-UPDATE_STATUS_DIR="\${PASEO_HOME:-$HOME/.paseo}/updates"
+DAEMON_HOME="\${PASEO_HOME:-$HOME/.paseo}"
+UPDATE_STATUS_DIR="$DAEMON_HOME/updates"
+# The unit and daemon config are rewritten during the transaction. Their pre-install bytes are kept
+# here so a rollback hands the previous release a unit and config it can still read.
+LAUNCHER_BACKUP_DIR="$PREFIX/launcher-backups/$VERSION"
+# The first unit this installer migrates is also kept once, outside any version, so a manual
+# rollback to a release older than \`daemon run\` still has the unit that release can run.
+PRE_DAEMON_RUN_BACKUP_DIR="$PREFIX/launcher-backups/pre-daemon-run"
+CONFIG_FILE="$DAEMON_HOME/config.json"
+UNIT_BACKED_UP=0
+CONFIG_BACKED_UP=0
+CONFIG_TOUCHED=0
 write_update_status() {
   mkdir -p "$UPDATE_STATUS_DIR" || return 1
   updated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -830,9 +895,26 @@ rollback_install() {
   if [ "$ROLLBACK_ARMED" -eq 1 ] && [ "$exit_code" -ne 0 ]; then
     echo "Update failed; restoring the previous Paseo release." >&2
     systemctl --user stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    # Restore the unit and config before the previous release is started: its CLI predates
+    # \`daemon run\`, so a migrated unit would leave it with no daemon.
+    if [ "$UNIT_BACKED_UP" -eq 1 ]; then
+      cp -p "$LAUNCHER_BACKUP_DIR/$SERVICE_NAME" "$UNIT" || echo "Could not restore $UNIT from $LAUNCHER_BACKUP_DIR." >&2
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
+    if [ "$CONFIG_BACKED_UP" -eq 1 ]; then
+      cp -p "$LAUNCHER_BACKUP_DIR/config.json" "$CONFIG_FILE" || echo "Could not restore $CONFIG_FILE from $LAUNCHER_BACKUP_DIR." >&2
+    elif [ "$CONFIG_TOUCHED" -eq 1 ]; then
+      rm -f "$CONFIG_FILE"
+    fi
+    # A unit this install wrote has nothing to hand back; drop it before the restart below so the
+    # previous release is never started from a unit it cannot run.
+    if [ "$UNIT_EXISTED" -eq 0 ]; then
+      rm -f "$UNIT"
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
     if [ -n "$PREVIOUS_RELEASE" ]; then
       ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
-      if [ "$START" -eq 1 ]; then
+      if [ "$START" -eq 1 ] && [ -f "$UNIT" ]; then
         # Restart the restored release and prove it is running, mirroring the forward path. A single
         # best-effort start swallowed by \`|| true\` is what left the production daemon dead on a
         # failed upgrade; retry then read back, and fail loud if it never reports running.
@@ -854,10 +936,6 @@ rollback_install() {
       fi
     else
       rm -f "$CURRENT_LINK"
-    fi
-    if [ "$UNIT_EXISTED" -eq 0 ]; then
-      rm -f "$UNIT"
-      systemctl --user daemon-reload >/dev/null 2>&1 || true
     fi
     if [ "$INSTALL_CONFIG_EXISTED" -eq 0 ]; then rm -f "$INSTALL_CONFIG"; fi
     rm -rf "$RELEASE_DIR"
@@ -881,6 +959,29 @@ ROLLBACK_ARMED=1
 ln -sfn "$CURRENT_LINK/bin/paseo" "$BIN_DIR/paseo"
 ln -sfn "$CURRENT_LINK/bin/paseo-foundation" "$BIN_DIR/paseo-foundation"
 
+DAEMON_ENTRY="$CURRENT_LINK/app/node_modules/@getpaseo/cli/dist/index.js"
+LAUNCHER_HELPER="$CURRENT_LINK/installer-launcher.mjs"
+BUNDLED_NODE="$CURRENT_LINK/runtime/bin/node"
+mkdir -p "$LAUNCHER_BACKUP_DIR"
+if [ -f "$UNIT" ]; then
+  # The unit may name its own daemon home (--home or Environment=PASEO_HOME). Migration writes
+  # config there, so that is the config to back up and, on failure, to restore.
+  if MIGRATION_HOME=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" home --kind systemd --file "$UNIT" --home "$DAEMON_HOME"); then
+    CONFIG_FILE="$MIGRATION_HOME/config.json"
+  fi
+  cp -p "$UNIT" "$LAUNCHER_BACKUP_DIR/$SERVICE_NAME"
+  UNIT_BACKED_UP=1
+  LEGACY_LAUNCHER=$("$BUNDLED_NODE" "$LAUNCHER_HELPER" needs-migration --kind systemd --file "$UNIT" --home "$DAEMON_HOME" 2>/dev/null || echo yes)
+  if [ "$LEGACY_LAUNCHER" = yes ] && [ ! -e "$PRE_DAEMON_RUN_BACKUP_DIR/$SERVICE_NAME" ]; then
+    mkdir -p "$PRE_DAEMON_RUN_BACKUP_DIR"
+    cp -p "$UNIT" "$PRE_DAEMON_RUN_BACKUP_DIR/$SERVICE_NAME"
+  fi
+fi
+if [ -f "$CONFIG_FILE" ]; then
+  cp -p "$CONFIG_FILE" "$LAUNCHER_BACKUP_DIR/config.json"
+  CONFIG_BACKED_UP=1
+fi
+CONFIG_TOUCHED=1
 if [ ! -f "$UNIT" ]; then
 cat > "$UNIT" <<UNIT
 [Unit]
@@ -889,7 +990,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart="$CURRENT_LINK/runtime/bin/node" "$CURRENT_LINK/app/node_modules/@getpaseo/cli/dist/index.js" daemon start --foreground --listen "$LISTEN" --web-ui --no-relay
+ExecStart="$CURRENT_LINK/runtime/bin/node" "$CURRENT_LINK/app/node_modules/@getpaseo/cli/dist/index.js" daemon run --home "$DAEMON_HOME"
 Restart=on-failure
 RestartSec=3
 Environment="HOME=$HOME"
@@ -903,8 +1004,9 @@ Environment=PASEO_VOICE_MODE_ENABLED=0
 [Install]
 WantedBy=default.target
 UNIT
+  "$BUNDLED_NODE" "$LAUNCHER_HELPER" seed --home "$DAEMON_HOME" --node "$BUNDLED_NODE" --cli "$DAEMON_ENTRY" --listen "$LISTEN"
 else
-  # An existing unit keeps the operator's ExecStart (--listen/--relay), PATH, and Restart choices.
+  # An existing unit keeps the operator's PATH and Restart choices.
   # Releases that predate the bundled Beads Central sidecar wrote a unit without these two
   # variables, so inject them through a drop-in; the daemon refuses to start its tracker without
   # them. The paths resolve through $CURRENT_LINK so a later rollback repoints them automatically.
@@ -914,6 +1016,9 @@ cat > "$DROPIN" <<DROPIN
 Environment="PASEO_BEADS_CENTRAL_SIDECAR=$CURRENT_LINK/components/beads-central/beads-central"
 Environment="PASEO_BEADS_CENTRAL_BD_BIN=$CURRENT_LINK/components/beads-central/bin/bd"
 DROPIN
+  # An ExecStart still passing the launch flags the current CLI removed is moved to \`daemon run\`;
+  # their values go to config only where the operator has not set the key.
+  "$BUNDLED_NODE" "$LAUNCHER_HELPER" migrate --kind systemd --file "$UNIT" --home "$DAEMON_HOME" --node "$BUNDLED_NODE" --cli "$DAEMON_ENTRY"
 fi
 
 if [ "$START" -eq 1 ]; then
@@ -966,6 +1071,7 @@ fi
 ROLLBACK_ARMED=0
 write_update_status idle || true
 printf 'Installed Paseo WebUI + CLI %s at %s\n' "$VERSION" "$RELEASE_DIR"
+if [ "$UNIT_BACKED_UP" -eq 1 ]; then printf 'Previous unit saved at %s\n' "$LAUNCHER_BACKUP_DIR"; fi
 printf 'CLI: %s\nWebUI: http://%s\n' "$BIN_DIR/paseo" "$LISTEN"
 `;
 }
@@ -976,13 +1082,18 @@ set -eu
 PREFIX="\${PASEO_INSTALL_PREFIX:-\${XDG_DATA_HOME:-$HOME/.local/share}/paseo-web-cli}"
 BIN_DIR="\${PASEO_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 SERVICE_DIR="\${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-SERVICE_NAME="paseo-web-cli.service"
+SERVICE_NAME="\${PASEO_SYSTEMD_UNIT:-paseo-web-cli.service}"
 PURGE_FOUNDATION=0
 case "\${1:-}" in
   "") ;;
   --purge-foundation) PURGE_FOUNDATION=1 ;;
   -h|--help) echo 'Usage: uninstall.sh [--purge-foundation]'; exit 0 ;;
   *) echo "Unknown option: $1" >&2; exit 2 ;;
+esac
+case "$SERVICE_NAME" in
+  *[!A-Za-z0-9._@-]*|"") echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
+  *.service) ;;
+  *) echo "Invalid systemd unit name: $SERVICE_NAME" >&2; exit 2 ;;
 esac
 systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
 rm -f "$SERVICE_DIR/$SERVICE_NAME"
@@ -998,7 +1109,7 @@ for name in paseo paseo-foundation; do
     case "$resolved" in "$PREFIX"/*) rm -f "$target" ;; esac
   fi
 done
-rm -rf "$PREFIX/releases" "$PREFIX/current" "$PREFIX/foundation-install-plan.json"
+rm -rf "$PREFIX/releases" "$PREFIX/current" "$PREFIX/launcher-backups" "$PREFIX/foundation-install-plan.json"
 rm -f "$PREFIX/install-config.json"
 rm -f "$PREFIX/uninstall.sh"
 printf 'Removed Paseo WebUI + CLI. Preserved ~/.paseo and user workspaces.\n'
@@ -1062,7 +1173,7 @@ for name in paseo paseo-foundation; do
   fi
 done
 
-rm -rf "$PREFIX/releases" "$PREFIX/current" "$PREFIX/foundation-install-plan.json"
+rm -rf "$PREFIX/releases" "$PREFIX/current" "$PREFIX/launcher-backups" "$PREFIX/foundation-install-plan.json"
 rm -f "$PREFIX/install-config.json"
 rm -f "$PREFIX/uninstall.sh"
 printf 'Removed Paseo WebUI + CLI. Preserved ~/.paseo and user workspaces.\\n'
@@ -1134,6 +1245,16 @@ $FoundationCmd = Join-Path $BinDir "paseo-foundation.cmd"
 $PaseoCmdExisted = Test-Path $PaseoCmd
 $FoundationCmdExisted = Test-Path $FoundationCmd
 $Staging = Join-Path $ReleasesDir ".install-$Version-$PID"
+# The launcher and daemon config are rewritten during the transaction. Their pre-install bytes are
+# kept here so a rollback hands the previous release a launcher and config it can still read.
+$LauncherBackupDir = Join-Path $Prefix "launcher-backups\\$Version"
+# The first launcher this installer migrates is also kept once, outside any version, so a manual
+# rollback to a release older than \`daemon run\` still has the launcher that release can run.
+$PreDaemonRunBackupDir = Join-Path $Prefix "launcher-backups\\pre-daemon-run"
+$ConfigFile = Join-Path $UpdateHome "config.json"
+$RunDaemonBackedUp = $false
+$ConfigBackedUp = $false
+$ConfigTouched = $false
 $Switched = $false
 try {
 $ExistingPaseo = Get-Command paseo -ErrorAction SilentlyContinue
@@ -1199,6 +1320,27 @@ $env:Path = "$BinDir;$env:Path"
 $LogDir = Join-Path $env:LOCALAPPDATA "Paseo\\Logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $DaemonLog = Join-Path $LogDir "daemon.log"
+$LauncherHelper = Join-Path $Current "installer-launcher.mjs"
+New-Item -ItemType Directory -Force -Path $LauncherBackupDir | Out-Null
+if ($RunDaemonExisted) {
+  # The launcher may name its own daemon home (--home or $env:PASEO_HOME). Migration writes config
+  # there, so that is the config to back up and, on failure, to restore.
+  $MigrationHome = (& $Node $LauncherHelper home --kind powershell --file $RunDaemon --home $UpdateHome)
+  if ($LASTEXITCODE -eq 0 -and "$MigrationHome".Trim()) { $ConfigFile = Join-Path ("$MigrationHome".Trim()) "config.json" }
+  Copy-Item -Force $RunDaemon (Join-Path $LauncherBackupDir "run-daemon.ps1")
+  $RunDaemonBackedUp = $true
+  $LegacyLauncher = (& $Node $LauncherHelper needs-migration --kind powershell --file $RunDaemon --home $UpdateHome)
+  $PreDaemonRunBackup = Join-Path $PreDaemonRunBackupDir "run-daemon.ps1"
+  if (($LASTEXITCODE -ne 0 -or "$LegacyLauncher".Trim() -eq "yes") -and -not (Test-Path $PreDaemonRunBackup)) {
+    New-Item -ItemType Directory -Force -Path $PreDaemonRunBackupDir | Out-Null
+    Copy-Item $RunDaemon $PreDaemonRunBackup
+  }
+}
+if (Test-Path $ConfigFile) {
+  Copy-Item -Force $ConfigFile (Join-Path $LauncherBackupDir "config.json")
+  $ConfigBackedUp = $true
+}
+$ConfigTouched = $true
 if (-not $RunDaemonExisted) {
   $DaemonScript = @(
     "\`$env:PASEO_BEADS_CENTRAL_SIDECAR = \`"$BeadsSidecar\`""
@@ -1206,13 +1348,14 @@ if (-not $RunDaemonExisted) {
     '$env:PASEO_DICTATION_ENABLED = "0"'
     '$env:PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD = "0"'
     '$env:PASEO_VOICE_MODE_ENABLED = "0"'
-    "& \`"$Node\`" \`"$PaseoEntry\`" daemon start --foreground --listen \`"$Listen\`" --web-ui --no-relay *>> \`"$DaemonLog\`""
+    "& \`"$Node\`" \`"$PaseoEntry\`" daemon run --home \`"$UpdateHome\`" *>> \`"$DaemonLog\`""
     'exit $LASTEXITCODE'
   )
   Set-Content -Encoding UTF8 -Path $RunDaemon -Value $DaemonScript
+  & $Node $LauncherHelper seed --home $UpdateHome --node $Node --cli $PaseoEntry --listen $Listen
+  if ($LASTEXITCODE -ne 0) { throw "Persisting the daemon configuration failed." }
 } else {
-  # An existing run-daemon.ps1 keeps the operator's --listen/--relay choice baked into its launch
-  # line. Releases that predate the bundled Beads Central sidecar wrote it without these two
+  # Releases that predate the bundled Beads Central sidecar wrote run-daemon.ps1 without these two
   # variables, so splice them in ahead of the launch; the daemon refuses to start its tracker
   # without them. The paths resolve through $Current so a later rollback repoints them.
   $RunDaemonContent = Get-Content -Raw -Path $RunDaemon
@@ -1223,6 +1366,10 @@ if (-not $RunDaemonExisted) {
     )
     Set-Content -Encoding UTF8 -Path $RunDaemon -Value ($DaemonEnvInjection + @(Get-Content -Path $RunDaemon))
   }
+  # A launch line still passing the flags the current CLI removed is moved to \`daemon run\`; their
+  # values go to config only where the operator has not set the key.
+  & $Node $LauncherHelper migrate --kind powershell --file $RunDaemon --home $UpdateHome --node $Node --cli $PaseoEntry
+  if ($LASTEXITCODE -ne 0) { throw "Migrating run-daemon.ps1 failed." }
 }
 
 if (-not $NoStart) {
@@ -1283,6 +1430,7 @@ if (-not $SkipFoundation) {
 
 try { Write-UpdateStatus "idle" } catch {}
 Write-Output "Installed Paseo WebUI + CLI $Version at $ReleaseDir"
+if ($RunDaemonBackedUp) { Write-Output "Previous launcher saved at $LauncherBackupDir" }
 Write-Output "CLI: $PaseoCmd"
 Write-Output "WebUI: http://$Listen"
 } catch {
@@ -1291,6 +1439,16 @@ Write-Output "WebUI: http://$Listen"
   if ($Switched) {
     Write-Warning "Update failed; restoring the previous Paseo release."
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    # Restore the launcher and config before the previous release is started: its CLI predates
+    # \`daemon run\`, so a migrated launcher would leave it with no daemon.
+    if ($RunDaemonBackedUp) {
+      try { Copy-Item -Force (Join-Path $LauncherBackupDir "run-daemon.ps1") $RunDaemon } catch { Write-Warning "Could not restore $RunDaemon from $LauncherBackupDir." }
+    }
+    if ($ConfigBackedUp) {
+      try { Copy-Item -Force (Join-Path $LauncherBackupDir "config.json") $ConfigFile } catch { Write-Warning "Could not restore $ConfigFile from $LauncherBackupDir." }
+    } elseif ($ConfigTouched) {
+      Remove-Item -Force $ConfigFile -ErrorAction SilentlyContinue
+    }
     if (Test-Path $Current) { [IO.Directory]::Delete($Current) }
     if ($PreviousRelease) {
       New-Item -ItemType Junction -Path $Current -Target $PreviousRelease | Out-Null
@@ -1342,7 +1500,7 @@ if ($PurgeFoundation -and (Test-Path $Foundation)) { & $Foundation uninstall }
 Remove-Item -Force (Join-Path $BinDir "paseo.cmd"), (Join-Path $BinDir "paseo-foundation.cmd") -ErrorAction SilentlyContinue
 $Current = Join-Path $Prefix "current"
 if (Test-Path $Current) { [IO.Directory]::Delete($Current) }
-Remove-Item -Recurse -Force (Join-Path $Prefix "releases") -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force (Join-Path $Prefix "releases"), (Join-Path $Prefix "launcher-backups") -ErrorAction SilentlyContinue
 Remove-Item -Force (Join-Path $Prefix "foundation-install-plan.json"), (Join-Path $Prefix "install-config.json"), (Join-Path $Prefix "run-daemon.ps1"), (Join-Path $Prefix "uninstall.ps1") -ErrorAction SilentlyContinue
 Write-Output "Removed Paseo WebUI + CLI. Preserved ~/.paseo and user workspaces."
 `;
@@ -1353,6 +1511,10 @@ function shellQuote(value) {
 }
 
 function createInstallScripts() {
+  copyFileSync(
+    path.join(SCRIPT_DIR, "installer-launcher.mjs"),
+    path.join(STAGING_ROOT, "installer-launcher.mjs"),
+  );
   if (PLATFORM === "win32") {
     writeFileSync(path.join(STAGING_ROOT, "install.ps1"), windowsInstallerScript());
     writeFileSync(path.join(STAGING_ROOT, "uninstall.ps1"), windowsUninstallerScript());

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -21,6 +23,15 @@ import {
   linuxInstallerScript,
   windowsInstallerScript,
 } from "./build-macos-web-cli-artifact.mjs";
+import {
+  LauncherError,
+  launcherNeedsMigration,
+  migrateLauncher,
+  planLaunchMigration,
+  resolveLauncherHome,
+  seedConfig,
+  tokenizeCommandLine,
+} from "./installer-launcher.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const installer = path.join(scriptDir, "install-macos.sh");
@@ -34,6 +45,78 @@ function writeExecutable(file, source) {
   chmodSync(file, 0o755);
 }
 
+// Installer tests execute the real generated scripts, whose launchctl/systemctl calls address the
+// service by the real UID and a well-known name. Every fixture therefore (1) puts fail-closed
+// launchctl/systemctl stubs first on PATH, (2) points the installer at a throwaway label and unit via
+// PASEO_LAUNCHD_LABEL / PASEO_SYSTEMD_UNIT, and (3) fails the test when a stub refused a call, even if
+// the installer swallowed the non-zero exit with `|| true`. A stub refuses any call that is not
+// scripted for it or that names a service other than the throwaway one.
+function serviceStubSource(body) {
+  return `#!/bin/sh
+printf '%s %s\\n' "$(basename "$0")" "$*" >> "$SERVICE_TEST_CALLS"
+refuse() {
+  printf '%s %s\\n' "$(basename "$0")" "$*" >> "$SERVICE_TEST_REJECTED"
+  echo "$(basename "$0") stub refused: $*" >&2
+  exit 97
+}
+[ -n "$SERVICE_TEST_LABEL" ] && [ -n "$SERVICE_TEST_UNIT" ] || refuse "missing isolation env"
+for arg in "$@"; do
+  case "$arg" in
+    gui/*/"$SERVICE_TEST_LABEL") ;;
+    gui/*/*) refuse "$@" ;;
+    */"$SERVICE_TEST_LABEL".plist) ;;
+    *.plist) refuse "$@" ;;
+    "$SERVICE_TEST_UNIT") ;;
+    *.service) refuse "$@" ;;
+  esac
+done
+${body}
+`;
+}
+
+const UNSCRIPTED_SERVICE_CALL = 'refuse "$@"';
+
+function writeServiceStub(service, tool, body) {
+  writeExecutable(path.join(service.binDir, tool), serviceStubSource(body));
+}
+
+function createServiceIsolation(root, binDir) {
+  const suffix = randomUUID().slice(0, 8);
+  const service = {
+    binDir,
+    label: `com.paseo.web-cli.test-${suffix}`,
+    unit: `paseo-web-cli-test-${suffix}.service`,
+    calls: path.join(root, "service-calls.log"),
+    rejected: path.join(root, "service-calls-rejected.log"),
+  };
+  writeServiceStub(service, "launchctl", UNSCRIPTED_SERVICE_CALL);
+  writeServiceStub(service, "systemctl", UNSCRIPTED_SERVICE_CALL);
+  return service;
+}
+
+function serviceEnv(service) {
+  return {
+    PASEO_LAUNCHD_LABEL: service.label,
+    PASEO_SYSTEMD_UNIT: service.unit,
+    SERVICE_TEST_LABEL: service.label,
+    SERVICE_TEST_UNIT: service.unit,
+    SERVICE_TEST_CALLS: service.calls,
+    SERVICE_TEST_REJECTED: service.rejected,
+  };
+}
+
+function serviceCalls(service) {
+  return existsSync(service.calls) ? readFileSync(service.calls, "utf8").trim().split("\n") : [];
+}
+
+function assertNoRefusedServiceCalls(service) {
+  if (existsSync(service.rejected)) {
+    throw new Error(
+      `installer reached a service manager call the test did not script:\n${readFileSync(service.rejected, "utf8")}`,
+    );
+  }
+}
+
 function createFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "paseo-bootstrap-test-"));
   const fixtures = path.join(root, "fixtures");
@@ -43,6 +126,7 @@ function createFixture() {
   mkdirSync(fixtures);
   mkdirSync(fakeBin);
   mkdirSync(bundle);
+  const service = createServiceIsolation(root, fakeBin);
   writeExecutable(
     path.join(bundle, "install.sh"),
     `#!/bin/sh\nprintf '%s\\n' "$*" > "$INSTALL_RESULT"\n`,
@@ -89,11 +173,11 @@ esac
 if [ -n "$output" ]; then cp "$source" "$output"; else cat "$source"; fi
 `,
   );
-  return { root, fixtures, fakeBin, archive };
+  return { root, fixtures, fakeBin, archive, service };
 }
 
 function runFixture(fixture, args = [], extraEnv = {}, script = installer) {
-  return spawnSync("/bin/sh", [script, ...args], {
+  const result = spawnSync("/bin/sh", [script, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -104,9 +188,41 @@ function runFixture(fixture, args = [], extraEnv = {}, script = installer) {
       PASEO_DOWNSTREAM_DOWNLOAD_ROOT: "https://fixture.invalid/download",
       TMPDIR: fixture.root,
       ...extraEnv,
+      ...serviceEnv(fixture.service),
     },
   });
+  assertNoRefusedServiceCalls(fixture.service);
+  return result;
 }
+
+// Stands in for `paseo daemon config get|set` of the bundled CLI. Like the real CLI, `get --json`
+// reports `set` for a key present in <home>/config.json, and the first `set` against a home without
+// config.json materializes the defaults. Every invocation is appended to $FAKE_CLI_LOG.
+const FAKE_CONFIG_CLI = `import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+const argv = process.argv.slice(2);
+const [group, subgroup, action, key] = argv;
+const home = argv[argv.indexOf("--home") + 1];
+const file = path.join(home, "config.json");
+if (process.env.FAKE_CLI_LOG) appendFileSync(process.env.FAKE_CLI_LOG, argv.join(" ") + "\\n");
+if (group !== "daemon" || subgroup !== "config") process.exit(2);
+const read = () => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {});
+if (action === "get") {
+  const value = key.split(".").reduce((node, part) => (node && typeof node === "object" ? node[part] : undefined), read());
+  console.log(JSON.stringify({ source: "configured", path: key, set: value !== undefined, ...(value === undefined ? {} : { value }) }));
+} else if (action === "set") {
+  const config = existsSync(file) ? read() : { version: 1, daemon: { listen: "127.0.0.1:6767", relay: { enabled: false } } };
+  const parts = key.split(".");
+  let target = config;
+  for (const part of parts.slice(0, -1)) target = target[part] ??= {};
+  target[parts.at(-1)] = JSON.parse(argv[4]);
+  mkdirSync(home, { recursive: true });
+  writeFileSync(file, JSON.stringify(config, null, 2) + "\\n");
+  console.log(JSON.stringify({ action: "saved", applied: false }));
+} else {
+  process.exit(2);
+}
+`;
 
 function createArtifactFixture(existingPaseoSource) {
   const root = mkdtempSync(path.join(os.tmpdir(), "paseo-artifact-installer-test-"));
@@ -115,6 +231,9 @@ function createArtifactFixture(existingPaseoSource) {
   mkdirSync(path.join(bundle, "bin"), { recursive: true });
   mkdirSync(path.join(bundle, "runtime", "bin"), { recursive: true });
   mkdirSync(oldBin);
+  const serviceBin = path.join(root, "service-bin");
+  mkdirSync(serviceBin);
+  const service = createServiceIsolation(root, serviceBin);
   writeExecutable(path.join(bundle, "install.sh"), renderArtifactInstaller());
   writeExecutable(path.join(bundle, "uninstall.sh"), "#!/bin/sh\nexit 0\n");
   writeExecutable(
@@ -130,34 +249,56 @@ exit 0
     path.join(bundle, "bin", "paseo-foundation"),
     '#!/bin/sh\n[ "${1:-}" != inspect ] || echo \'{"status":"inactive"}\'\nexit 0\n',
   );
+  // Inline `-e` probes stay no-ops; script arguments (the launcher helper) run on real Node.
   writeExecutable(
     path.join(bundle, "runtime", "bin", "node"),
-    '#!/bin/sh\ncase "$*" in *process.stdout.write*) printf "127.0.0.1:6767" ;; esac\nexit 0\n',
+    `#!/bin/sh\ncase "$1" in -e) case "$*" in *process.stdout.write*) printf "127.0.0.1:6767" ;; esac; exit 0 ;; esac\nexec "${process.execPath}" "$@"\n`,
   );
+  copyFileSync(
+    path.join(scriptDir, "installer-launcher.mjs"),
+    path.join(bundle, "installer-launcher.mjs"),
+  );
+  const cliPackage = path.join(bundle, "app", "node_modules", "@getpaseo", "cli");
+  mkdirSync(path.join(cliPackage, "dist"), { recursive: true });
+  writeFileSync(path.join(cliPackage, "package.json"), '{"type":"module"}\n');
+  writeFileSync(path.join(cliPackage, "dist", "index.js"), FAKE_CONFIG_CLI);
   writeExecutable(path.join(oldBin, "paseo"), existingPaseoSource);
   return {
     root,
     bundle,
     oldBin,
+    service,
     home: path.join(root, "home"),
     prefix: path.join(root, "install"),
     binDir: path.join(root, "installed-bin"),
     marker: path.join(root, "existing-paseo.log"),
+    cliLog: path.join(root, "config-cli.log"),
+    paseoHome: path.join(root, "home", ".paseo"),
   };
+}
+
+// The installer keeps its launcher under the throwaway label, so fixtures and assertions must too.
+function launcherPlistPath(fixture) {
+  return path.join(fixture.home, "Library", "LaunchAgents", `${fixture.service.label}.plist`);
 }
 
 function runArtifactFixture(fixture, args, extraEnv = {}) {
   mkdirSync(fixture.home, { recursive: true });
-  return spawnSync("/bin/sh", [path.join(fixture.bundle, "install.sh"), ...args], {
+  const result = spawnSync("/bin/sh", [path.join(fixture.bundle, "install.sh"), ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
       HOME: fixture.home,
-      PATH: `${fixture.oldBin}:/usr/bin:/bin`,
+      PASEO_HOME: fixture.paseoHome,
+      FAKE_CLI_LOG: fixture.cliLog,
+      PATH: `${fixture.service.binDir}:${fixture.oldBin}:/usr/bin:/bin`,
       EXISTING_PASEO_MARKER: fixture.marker,
       ...extraEnv,
+      ...serviceEnv(fixture.service),
     },
   });
+  assertNoRefusedServiceCalls(fixture.service);
+  return result;
 }
 
 test("selects the newest downstream release, verifies it, and forwards options", () => {
@@ -257,6 +398,12 @@ case "$1 $2" in
   *) exit 2 ;;
 esac
 `);
+  // The preflight asks launchd whether the service is loaded before it reads agent state.
+  writeServiceStub(
+    fixture.service,
+    "launchctl",
+    `case "$1" in print) exit 1 ;; *) ${UNSCRIPTED_SERVICE_CALL} ;; esac`,
+  );
   try {
     const result = runArtifactFixture(fixture, [
       "--prefix",
@@ -267,6 +414,9 @@ esac
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /agent is running or starting/);
     assert.equal(existsSync(fixture.prefix), false);
+    assert.deepEqual(serviceCalls(fixture.service), [
+      `launchctl print gui/${process.getuid()}/${fixture.service.label}`,
+    ]);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -318,6 +468,12 @@ esac
 exit 0
 `,
   );
+  // Rollback unloads the launchd job even for a --no-start install; it must hit the throwaway label.
+  writeServiceStub(
+    fixture.service,
+    "launchctl",
+    `case "$1" in bootout) exit 0 ;; *) ${UNSCRIPTED_SERVICE_CALL} ;; esac`,
+  );
   try {
     const result = runArtifactFixture(fixture, [
       "--prefix",
@@ -328,6 +484,9 @@ exit 0
     ]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /restoring the previous Paseo release/);
+    assert.deepEqual(serviceCalls(fixture.service), [
+      `launchctl bootout gui/${process.getuid()}/${fixture.service.label}`,
+    ]);
     assert.equal(readlinkSync(path.join(fixture.prefix, "current")), previous);
     assert.equal(existsSync(path.join(fixture.prefix, "releases", "0.5.0-paseo.41")), false);
     assert.equal(existsSync(path.join(previous, "install.sh")), true);
@@ -361,9 +520,8 @@ exit 0
     path.join(fixture.bundle, "bin", "paseo-foundation"),
     '#!/bin/sh\ncase "${1:-}" in inspect) echo \'{"status":"inactive"}\' ;; install) exit 17 ;; esac\nexit 0\n',
   );
-  const launchAgents = path.join(fixture.home, "Library", "LaunchAgents");
-  mkdirSync(launchAgents, { recursive: true });
-  const plistPath = path.join(launchAgents, "com.paseo.web-cli.plist");
+  const plistPath = launcherPlistPath(fixture);
+  mkdirSync(path.dirname(plistPath), { recursive: true });
   writeFileSync(plistPath, LEGACY_RELAY_PLIST);
   // The restored release carries its own working CLI so the rollback readback can probe it.
   const previous = path.join(fixture.prefix, "releases", "0.5.0-paseo.37");
@@ -377,9 +535,27 @@ exit 0
   symlinkSync(previous, path.join(fixture.prefix, "current"));
   const launchctlLog = path.join(fixture.root, "launchctl.log");
   const bootedOut = path.join(fixture.root, "launchd-booted-out");
-  writeExecutable(
-    path.join(fixture.oldBin, "launchctl"),
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$LAUNCHCTL_LOG"\ncase "$1" in print) exit 0 ;; bootout) : > "$LAUNCHD_BOOTED_OUT"; exit 0 ;; bootstrap|kickstart) exit 0 ;; *) exit 2 ;; esac\n`,
+  // Each bootstrap copies the launcher it loads and the daemon config next to it, so a test can see
+  // what the service manager was handed at that moment, not only that the call happened.
+  const snapshots = path.join(fixture.root, "bootstrap-snapshots");
+  mkdirSync(snapshots);
+  writeServiceStub(
+    fixture.service,
+    "launchctl",
+    `printf '%s\\n' "$*" >> "$LAUNCHCTL_LOG"
+case "$1" in
+  print) exit 0 ;;
+  bootout) : > "$LAUNCHD_BOOTED_OUT"; exit 0 ;;
+  bootstrap)
+    n=$(($(cat "$BOOTSTRAP_SNAPSHOTS/count" 2>/dev/null || echo 0) + 1))
+    echo "$n" > "$BOOTSTRAP_SNAPSHOTS/count"
+    cp "$3" "$BOOTSTRAP_SNAPSHOTS/$n.plist"
+    cp "$PASEO_HOME/config.json" "$BOOTSTRAP_SNAPSHOTS/$n.config.json" 2>/dev/null
+    exit 0 ;;
+  kickstart) exit 0 ;;
+  *) ${UNSCRIPTED_SERVICE_CALL} ;;
+esac
+`,
   );
   // A fast sleep keeps the fail-loud readback loop from waiting real seconds.
   writeExecutable(path.join(fixture.oldBin, "sleep"), "#!/bin/sh\nexit 0\n");
@@ -389,7 +565,8 @@ exit 0
     plistPath,
     rollbackMarker,
     launchctlLog,
-    env: { LAUNCHD_BOOTED_OUT: bootedOut },
+    snapshots,
+    env: { LAUNCHD_BOOTED_OUT: bootedOut, BOOTSTRAP_SNAPSHOTS: snapshots },
   };
 }
 
@@ -448,6 +625,10 @@ test("all generated platform installers preserve service config and gate the tra
 
   assert.match(macos, /if \[ ! -f "\$PLIST" \]/);
   assert.match(linux, /if \[ ! -f "\$UNIT" \]/);
+  // Service names come from env with the production defaults, so tests can target a throwaway one.
+  assert.match(macos, /LABEL="\$\{PASEO_LAUNCHD_LABEL:-\$DEFAULT_LABEL\}"/);
+  assert.match(macos, /DEFAULT_LABEL="com\.paseo\.web-cli"/);
+  assert.match(linux, /SERVICE_NAME="\$\{PASEO_SYSTEMD_UNIT:-paseo-web-cli\.service\}"/);
   assert.match(windows, /if \(-not \$RunDaemonExisted\)/);
   assert.match(windows, /if \(-not \$TaskExisted\)/);
   for (const source of [macos, linux, windows]) {
@@ -523,10 +704,7 @@ esac
       "--skip-foundation",
     ]);
     assert.equal(result.status, 0, result.stderr);
-    const plist = readFileSync(
-      path.join(fixture.home, "Library", "LaunchAgents", "com.paseo.web-cli.plist"),
-      "utf8",
-    );
+    const plist = readFileSync(launcherPlistPath(fixture), "utf8");
     assert.match(plist, new RegExp(`<string>${hostNode}</string>`));
     assert.match(
       plist,
@@ -571,23 +749,32 @@ const LEGACY_RELAY_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 </dict></plist>
 `;
 
+// The version directory the installer wrote under launcher-backups, next to the one-time
+// `pre-daemon-run` directory.
+function installedVersion(fixture) {
+  const versions = readdirSync(path.join(fixture.prefix, "launcher-backups"));
+  assert.equal(versions.includes("pre-daemon-run") ? versions.length - 1 : versions.length, 1);
+  return versions.find((name) => name !== "pre-daemon-run");
+}
+
+const LEGACY_INSTALL_ARGS = (fixture) => [
+  "--prefix",
+  fixture.prefix,
+  "--bin-dir",
+  fixture.binDir,
+  "--no-start",
+  "--skip-foundation",
+];
+
 function installOverLegacyPlist(fixture, legacyPlist) {
-  const launchAgents = path.join(fixture.home, "Library", "LaunchAgents");
-  mkdirSync(launchAgents, { recursive: true });
-  const plistPath = path.join(launchAgents, "com.paseo.web-cli.plist");
+  const plistPath = launcherPlistPath(fixture);
+  mkdirSync(path.dirname(plistPath), { recursive: true });
   writeFileSync(plistPath, legacyPlist);
-  const result = runArtifactFixture(fixture, [
-    "--prefix",
-    fixture.prefix,
-    "--bin-dir",
-    fixture.binDir,
-    "--no-start",
-    "--skip-foundation",
-  ]);
+  const result = runArtifactFixture(fixture, LEGACY_INSTALL_ARGS(fixture));
   return { result, plistPath };
 }
 
-test("artifact installer adds Beads Central sidecar env to a legacy plist and keeps relay and listen", () => {
+test("artifact installer adds Beads Central sidecar env to a legacy plist and moves relay and listen into config", () => {
   const fixture = createArtifactFixture("#!/bin/sh\nexit 99\n");
   const bundledNode = path.join(fixture.bundle, "runtime", "bin", "node");
   rmSync(bundledNode);
@@ -596,9 +783,11 @@ test("artifact installer adds Beads Central sidecar env to a legacy plist and ke
     const { result, plistPath } = installOverLegacyPlist(fixture, LEGACY_RELAY_PLIST);
     assert.equal(result.status, 0, result.stderr);
     const plist = readFileSync(plistPath, "utf8");
-    assert.match(plist, /<string>--relay<\/string>/);
-    assert.doesNotMatch(plist, /--no-relay/);
-    assert.match(plist, /<string>127\.0\.0\.1:7777<\/string>/);
+    assert.match(plist, /<string>run<\/string>/);
+    assert.doesNotMatch(plist, /--relay|--no-relay|--listen/);
+    const config = JSON.parse(readFileSync(path.join(fixture.paseoHome, "config.json"), "utf8"));
+    assert.equal(config.daemon.relay.enabled, true);
+    assert.equal(config.daemon.listen, "127.0.0.1:7777");
     assert.match(plist, /<string>\/legacy\/current\/app\/node_modules/);
     assert.match(plist, /<string>\/legacy\/bin:\/usr\/bin<\/string>/);
     const sidecarDir = `${fixture.prefix}/current/components/beads-central`;
@@ -648,7 +837,7 @@ test("artifact installer repoints stale sidecar env and creates a missing env di
     const rebuilt = readFileSync(second.plistPath, "utf8");
     assert.match(rebuilt, /PASEO_BEADS_CENTRAL_SIDECAR/);
     assert.match(rebuilt, /PASEO_BEADS_CENTRAL_BD_BIN/);
-    assert.match(rebuilt, /<string>--relay<\/string>/);
+    assert.match(rebuilt, /<string>run<\/string>/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -674,10 +863,10 @@ esac
   const launchctlLog = path.join(fixture.root, "launchctl.log");
   const bootstrapFailed = path.join(fixture.root, "bootstrap-failed");
   const launchdBootedOut = path.join(fixture.root, "launchd-booted-out");
-  writeExecutable(
-    path.join(fixture.oldBin, "launchctl"),
-    `#!/bin/sh
-printf '%s\\n' "$*" >> "$LAUNCHCTL_LOG"
+  writeServiceStub(
+    fixture.service,
+    "launchctl",
+    `printf '%s\\n' "$*" >> "$LAUNCHCTL_LOG"
 case "$1" in
   print) exit 0 ;;
   bootout) : > "$LAUNCHD_BOOTED_OUT"; exit 0 ;;
@@ -689,7 +878,7 @@ case "$1" in
     fi
     exit 0
     ;;
-  *) exit 2 ;;
+  *) ${UNSCRIPTED_SERVICE_CALL} ;;
 esac
 `,
   );
@@ -742,14 +931,14 @@ case "$1 $2" in
 esac
 `);
   const launchctlLog = path.join(fixture.root, "launchctl.log");
-  writeExecutable(
-    path.join(fixture.oldBin, "launchctl"),
-    `#!/bin/sh
-printf '%s\\n' "$*" >> "$LAUNCHCTL_LOG"
+  writeServiceStub(
+    fixture.service,
+    "launchctl",
+    `printf '%s\\n' "$*" >> "$LAUNCHCTL_LOG"
 case "$1" in
   print) exit 1 ;;
   bootout|bootstrap|kickstart) exit 0 ;;
-  *) exit 2 ;;
+  *) ${UNSCRIPTED_SERVICE_CALL} ;;
 esac
 `,
   );
@@ -785,3 +974,396 @@ function readFileNames(root) {
   visit(root);
   return output.sort();
 }
+
+const LEGACY_ARGS = [
+  "daemon",
+  "start",
+  "--foreground",
+  "--listen",
+  "127.0.0.1:7777",
+  "--web-ui",
+  "--relay",
+];
+
+test("launcher plan moves removed launch flags to config keys and daemon run", () => {
+  const plan = planLaunchMigration(LEGACY_ARGS, { home: "/h/.paseo" });
+  assert.deepEqual(plan.args, ["daemon", "run", "--home", "/h/.paseo"]);
+  assert.deepEqual(plan.config, [
+    { key: "daemon.listen", value: "127.0.0.1:7777" },
+    { key: "features.webUi.enabled", value: true },
+    { key: "daemon.relay.enabled", value: true },
+  ]);
+
+  const noRelay = planLaunchMigration(
+    ["daemon", "start", "--foreground", "--port=7000", "--no-relay", "--home", "/other"],
+    { home: "/h/.paseo" },
+  );
+  assert.equal(noRelay.home, "/other");
+  assert.deepEqual(noRelay.config, [
+    { key: "daemon.listen", value: "127.0.0.1:7000" },
+    { key: "daemon.relay.enabled", value: false },
+  ]);
+});
+
+test("launcher plan leaves a current launcher alone and refuses what it cannot translate", () => {
+  assert.equal(planLaunchMigration(["daemon", "run", "--home", "/h"], { home: "/h" }), null);
+  assert.equal(planLaunchMigration(["daemon", "start", "--home", "/h"], { home: "/h" }), null);
+  assert.throws(
+    () => planLaunchMigration(["daemon", "start", "--mystery"], { home: "/h" }),
+    LauncherError,
+  );
+  assert.throws(
+    () =>
+      planLaunchMigration(["daemon", "start", "--listen", "a:1", "--port", "2"], { home: "/h" }),
+    /--listen and --port together/u,
+  );
+  assert.throws(
+    () => planLaunchMigration(["daemon", "start", "--listen"], { home: "/h" }),
+    /no value/u,
+  );
+});
+
+test("command-line tokenizer keeps quoted values whole with source offsets", () => {
+  const line = `ExecStart="/opt/my node" cli.js daemon start --home "/a b"`;
+  const tokens = tokenizeCommandLine(line.slice("ExecStart=".length), { escape: "\\" });
+  assert.deepEqual(
+    tokens.map((token) => token.value),
+    ["/opt/my node", "cli.js", "daemon", "start", "--home", "/a b"],
+  );
+  assert.equal(tokens[2].start, line.slice("ExecStart=".length).indexOf("daemon"));
+  assert.throws(() => tokenizeCommandLine('a "b', { escape: "\\" }), LauncherError);
+});
+
+function createLauncherFixture() {
+  const root = mkdtempSync(path.join(os.tmpdir(), "paseo-launcher-test-"));
+  const cli = path.join(root, "cli.mjs");
+  writeFileSync(cli, FAKE_CONFIG_CLI);
+  return { root, cli, home: path.join(root, ".paseo"), node: process.execPath };
+}
+
+test("seeding writes install defaults only where the operator has not set the key", () => {
+  const fixture = createLauncherFixture();
+  try {
+    mkdirSync(fixture.home, { recursive: true });
+    writeFileSync(
+      path.join(fixture.home, "config.json"),
+      `${JSON.stringify({ version: 1, daemon: { relay: { enabled: true } } })}\n`,
+    );
+    const seeded = seedConfig({ ...fixture, listen: "127.0.0.1:6767" });
+    assert.deepEqual(seeded.kept, ["daemon.relay.enabled"]);
+    assert.deepEqual(seeded.written, ["daemon.listen", "features.webUi.enabled"]);
+    const config = JSON.parse(readFileSync(path.join(fixture.home, "config.json"), "utf8"));
+    assert.equal(config.daemon.relay.enabled, true);
+    assert.equal(config.daemon.listen, "127.0.0.1:6767");
+    assert.equal(config.features.webUi.enabled, true);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("seeding a fresh home keeps every default despite the first write materializing config", () => {
+  const fixture = createLauncherFixture();
+  try {
+    const seeded = seedConfig({ ...fixture, listen: "127.0.0.1:7777" });
+    assert.deepEqual(seeded.kept, []);
+    assert.equal(seeded.written.length, 3);
+    const config = JSON.parse(readFileSync(path.join(fixture.home, "config.json"), "utf8"));
+    assert.equal(config.daemon.listen, "127.0.0.1:7777");
+    assert.equal(config.daemon.relay.enabled, false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("migrating a plist keeps the operator's configured keys and rewrites only the arguments", () => {
+  const fixture = createLauncherFixture();
+  try {
+    const plist = path.join(fixture.root, "launcher.plist");
+    writeFileSync(plist, LEGACY_RELAY_PLIST);
+    mkdirSync(fixture.home, { recursive: true });
+    writeFileSync(
+      path.join(fixture.home, "config.json"),
+      `${JSON.stringify({ version: 1, daemon: { listen: "127.0.0.1:9999" } })}\n`,
+    );
+    const migrated = migrateLauncher({ kind: "plist", file: plist, ...fixture });
+    assert.equal(migrated.status, "migrated");
+    assert.deepEqual(migrated.kept, ["daemon.listen"]);
+    const args = JSON.parse(
+      execFileSync("/usr/bin/plutil", ["-extract", "ProgramArguments", "json", "-o", "-", plist], {
+        encoding: "utf8",
+      }),
+    );
+    assert.deepEqual(args.slice(2), ["daemon", "run", "--home", fixture.home]);
+    const config = JSON.parse(readFileSync(path.join(fixture.home, "config.json"), "utf8"));
+    assert.equal(config.daemon.listen, "127.0.0.1:9999");
+    assert.equal(config.daemon.relay.enabled, true);
+    assert.equal(migrateLauncher({ kind: "plist", file: plist, ...fixture }).status, "current");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a failed config write leaves the launcher untouched", () => {
+  const fixture = createLauncherFixture();
+  try {
+    const plist = path.join(fixture.root, "launcher.plist");
+    writeFileSync(plist, LEGACY_RELAY_PLIST);
+    writeFileSync(fixture.cli, "process.exit(1);\n");
+    assert.throws(() => migrateLauncher({ kind: "plist", file: plist, ...fixture }), LauncherError);
+    assert.equal(readFileSync(plist, "utf8"), LEGACY_RELAY_PLIST);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("artifact installer migrates a legacy plist to daemon run and keeps a restorable backup", () => {
+  const fixture = createArtifactFixture("#!/bin/sh\nexit 99\n");
+  try {
+    const { result, plistPath } = installOverLegacyPlist(fixture, LEGACY_RELAY_PLIST);
+    assert.equal(result.status, 0, result.stderr);
+    const plist = readFileSync(plistPath, "utf8");
+    assert.doesNotMatch(plist, /--relay|--foreground|--listen/u);
+    assert.match(plist, /<string>run<\/string>/u);
+    assert.match(plist, new RegExp(`<string>${fixture.paseoHome}</string>`, "u"));
+    const config = JSON.parse(readFileSync(path.join(fixture.paseoHome, "config.json"), "utf8"));
+    assert.equal(config.daemon.listen, "127.0.0.1:7777");
+    assert.equal(config.daemon.relay.enabled, true);
+    const backup = readFileSync(
+      path.join(
+        fixture.prefix,
+        "launcher-backups",
+        installedVersion(fixture),
+        `${fixture.service.label}.plist`,
+      ),
+      "utf8",
+    );
+    assert.equal(backup, LEGACY_RELAY_PLIST);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+const RUNNING_STATUS = '{"localDaemon":"running","connectedDaemon":"reachable"}';
+const ROLLBACK_ARGS = (fixture) => ["--prefix", fixture.prefix, "--bin-dir", fixture.binDir];
+
+test("a failed install hands the previous release its original launcher and config before restarting it", () => {
+  const originalConfig = '{\n    "version": 1,\n    "daemon": { "listen": "127.0.0.1:9999" }\n}';
+  const { fixture, plistPath, snapshots, rollbackMarker, launchctlLog, env } =
+    setupRollbackRestartFixture(RUNNING_STATUS);
+  const configPath = path.join(fixture.paseoHome, "config.json");
+  mkdirSync(fixture.paseoHome, { recursive: true });
+  writeFileSync(configPath, originalConfig);
+  try {
+    const result = runArtifactFixture(fixture, ROLLBACK_ARGS(fixture), {
+      ROLLBACK_PASEO_MARKER: rollbackMarker,
+      LAUNCHCTL_LOG: launchctlLog,
+      ...env,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /restoring the previous Paseo release/);
+    // The migration ran against the operator's config before the install failed.
+    assert.match(
+      readFileSync(fixture.cliLog, "utf8"),
+      /^daemon config set daemon\.relay\.enabled true /mu,
+    );
+
+    const snapshot = (n, name) => readFileSync(path.join(snapshots, `${n}.${name}`), "utf8");
+    const bootstraps = Number(readFileSync(path.join(snapshots, "count"), "utf8"));
+    assert.equal(bootstraps, 2);
+    // First bootstrap: the migrated launcher and the config the migration wrote.
+    assert.match(snapshot(1, "plist"), /<string>run<\/string>/u);
+    assert.notEqual(snapshot(1, "config.json"), originalConfig);
+    // Second bootstrap restarts the previous release: it must already see the original bytes.
+    assert.equal(snapshot(2, "plist"), LEGACY_RELAY_PLIST);
+    assert.equal(snapshot(2, "config.json"), originalConfig);
+    assert.equal(readFileSync(plistPath, "utf8"), LEGACY_RELAY_PLIST);
+    assert.equal(readFileSync(configPath, "utf8"), originalConfig);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("migration writes config to the home the launcher exports and a failed install restores that config", () => {
+  const { fixture, plistPath, rollbackMarker, launchctlLog, env } =
+    setupRollbackRestartFixture(RUNNING_STATUS);
+  const launcherHome = path.join(fixture.root, "launcher-home");
+  const launcherConfig = path.join(launcherHome, "config.json");
+  const originalConfig = '{"version":1,"daemon":{"listen":"127.0.0.1:9999"}}';
+  mkdirSync(launcherHome);
+  writeFileSync(launcherConfig, originalConfig);
+  writeFileSync(
+    plistPath,
+    LEGACY_RELAY_PLIST.replace(
+      "<key>HOME</key>",
+      `<key>PASEO_HOME</key><string>${launcherHome}</string>\n    <key>HOME</key>`,
+    ),
+  );
+  try {
+    const result = runArtifactFixture(fixture, ROLLBACK_ARGS(fixture), {
+      ROLLBACK_PASEO_MARKER: rollbackMarker,
+      LAUNCHCTL_LOG: launchctlLog,
+      ...env,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /restoring the previous Paseo release/);
+    const cliCalls = readFileSync(fixture.cliLog, "utf8");
+    assert.match(
+      cliCalls,
+      new RegExp(`^daemon config set daemon\\.relay\\.enabled true --home ${launcherHome} `, "mu"),
+    );
+    assert.equal(cliCalls.includes(`--home ${fixture.paseoHome}`), false);
+    // The config the migration rewrote is the launcher's, and it is the one handed back.
+    assert.equal(readFileSync(launcherConfig, "utf8"), originalConfig);
+    assert.equal(
+      readFileSync(
+        path.join(fixture.prefix, "launcher-backups", installedVersion(fixture), "config.json"),
+        "utf8",
+      ),
+      originalConfig,
+    );
+    assert.equal(existsSync(path.join(fixture.paseoHome, "config.json")), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a rollback never restarts the previous release from a launcher this install wrote", () => {
+  const { fixture, plistPath, previous, rollbackMarker, launchctlLog, env } =
+    setupRollbackRestartFixture(RUNNING_STATUS);
+  // No launcher existed before this install, and persisting its config fails after it is written.
+  rmSync(plistPath);
+  writeFileSync(
+    path.join(fixture.bundle, "app", "node_modules", "@getpaseo", "cli", "dist", "index.js"),
+    "process.exit(1);\n",
+  );
+  try {
+    const result = runArtifactFixture(fixture, ROLLBACK_ARGS(fixture), {
+      ROLLBACK_PASEO_MARKER: rollbackMarker,
+      LAUNCHCTL_LOG: launchctlLog,
+      ...env,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /restoring the previous Paseo release/);
+    assert.equal(readlinkSync(path.join(fixture.prefix, "current")), previous);
+    assert.equal(existsSync(plistPath), false);
+    const launchctlCalls = readFileSync(launchctlLog, "utf8").trim().split("\n");
+    assert.deepEqual(
+      launchctlCalls.filter((line) => /^(bootstrap|kickstart) /u.test(line)),
+      [],
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("the first launcher that needs migrating is kept once and later reinstalls never replace it", () => {
+  const fixture = createArtifactFixture("#!/bin/sh\nexit 99\n");
+  const backups = path.join(fixture.prefix, "launcher-backups");
+  const preMigration = path.join(backups, "pre-daemon-run", `${fixture.service.label}.plist`);
+  const reinstall = () => {
+    rmSync(path.join(fixture.prefix, "current"), { force: true });
+    rmSync(path.join(fixture.prefix, "releases"), { recursive: true, force: true });
+    return runArtifactFixture(fixture, LEGACY_INSTALL_ARGS(fixture));
+  };
+  try {
+    const first = installOverLegacyPlist(fixture, LEGACY_RELAY_PLIST);
+    assert.equal(first.result.status, 0, first.result.stderr);
+    assert.equal(readFileSync(preMigration, "utf8"), LEGACY_RELAY_PLIST);
+
+    const second = reinstall();
+    assert.equal(second.status, 0, second.stderr);
+    // The per-version backup is rewritten with the launcher the reinstall found, which is already
+    // migrated; the one-time copy keeps the launcher an older release can run.
+    assert.match(
+      readFileSync(
+        path.join(backups, installedVersion(fixture), `${fixture.service.label}.plist`),
+        "utf8",
+      ),
+      /<string>run<\/string>/u,
+    );
+    assert.equal(readFileSync(preMigration, "utf8"), LEGACY_RELAY_PLIST);
+
+    // A launcher that is already `daemon run` is not a pre-migration launcher: it is never saved as one.
+    rmSync(path.join(backups, "pre-daemon-run"), { recursive: true });
+    const third = reinstall();
+    assert.equal(third.status, 0, third.stderr);
+    assert.equal(existsSync(preMigration), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a launcher's own daemon home wins over the installer's, per launcher format", () => {
+  const fixture = createLauncherFixture();
+  const installerHome = fixture.home;
+  const legacyExec = '"/n/node" /c/index.js daemon start --foreground --listen 127.0.0.1:7777';
+  try {
+    const systemd = path.join(fixture.root, "paseo.service");
+    const writeUnit = (exec, environment) =>
+      writeFileSync(systemd, `[Service]\nExecStart=${exec}\n${environment}\n`);
+    const resolveSystemd = () =>
+      resolveLauncherHome({ kind: "systemd", file: systemd, home: installerHome });
+    writeUnit(legacyExec, 'Environment="PASEO_HOME=/srv/paseo 100%%"');
+    assert.equal(resolveSystemd(), "/srv/paseo 100%");
+    writeUnit(`${legacyExec} --home /explicit/home`, 'Environment="PASEO_HOME=/srv/paseo"');
+    assert.equal(resolveSystemd(), "/explicit/home");
+    writeUnit(legacyExec, "Environment=PASEO_DICTATION_ENABLED=0");
+    assert.equal(resolveSystemd(), installerHome);
+
+    const powershell = path.join(fixture.root, "run-daemon.ps1");
+    writeFileSync(
+      powershell,
+      `$env:PASEO_HOME = "C:\\paseo home"\n& "C:\\n\\node.exe" "C:\\c\\index.js" daemon start --foreground --listen 127.0.0.1:7777 *>> "C:\\log"\n`,
+    );
+    assert.equal(
+      resolveLauncherHome({ kind: "powershell", file: powershell, home: installerHome }),
+      "C:\\paseo home",
+    );
+
+    const plist = path.join(fixture.root, "launcher.plist");
+    writeFileSync(
+      plist,
+      LEGACY_RELAY_PLIST.replace(
+        "<key>HOME</key>",
+        "<key>PASEO_HOME</key><string>/plist/home</string>\n    <key>HOME</key>",
+      ),
+    );
+    assert.equal(
+      resolveLauncherHome({ kind: "plist", file: plist, home: installerHome }),
+      "/plist/home",
+    );
+    writeFileSync(plist, LEGACY_RELAY_PLIST);
+    assert.equal(
+      resolveLauncherHome({ kind: "plist", file: plist, home: installerHome }),
+      installerHome,
+    );
+
+    // The migration itself writes to that home and leaves the installer's alone.
+    const unitHome = path.join(fixture.root, "unit-home");
+    writeUnit(legacyExec, `Environment="PASEO_HOME=${unitHome}"`);
+    const migrated = migrateLauncher({ kind: "systemd", file: systemd, ...fixture });
+    assert.deepEqual(migrated.written, ["daemon.listen"]);
+    assert.equal(
+      JSON.parse(readFileSync(path.join(unitHome, "config.json"), "utf8")).daemon.listen,
+      "127.0.0.1:7777",
+    );
+    assert.equal(existsSync(path.join(installerHome, "config.json")), false);
+    assert.match(readFileSync(systemd, "utf8"), new RegExp(`daemon run --home "${unitHome}"`, "u"));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a launcher needs migration only while it still passes removed launch flags", () => {
+  const fixture = createLauncherFixture();
+  try {
+    const plist = path.join(fixture.root, "launcher.plist");
+    const needs = () => launcherNeedsMigration({ kind: "plist", file: plist, home: fixture.home });
+    writeFileSync(plist, LEGACY_RELAY_PLIST);
+    assert.equal(needs(), true);
+    migrateLauncher({ kind: "plist", file: plist, ...fixture });
+    assert.equal(needs(), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

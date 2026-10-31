@@ -113,6 +113,18 @@ Installer chạy lại idle gate ngay trước switch, giữ service config hi�
 Beads Central, rồi mới commit Foundation. Failure sau switch trả `current` về local release cũ. Mỗi
 release updater-enabled giữ installer của chính nó để `rollback` không phụ thuộc GitHub.
 
+Launcher còn flag cũ (`daemon start --foreground --listen … --web-ui --relay`) được chuyển sang
+`daemon run --home <home>`; giá trị flag vào `config.json` của home mà launcher thật sự dùng (`--home`,
+rồi `PASEO_HOME` launcher export, rồi home của installer). Launcher và config đó được backup ở
+`launcher-backups/<version>/` và khôi phục nguyên byte trước khi release cũ khởi động lại.
+Rollback thủ công về release trước `daemon run` (ví dụ `0.8.x`) phải chép bản `launcher-backups/pre-daemon-run/<label>.plist`
+(Linux `<unit>.service`, Windows `run-daemon.ps1`; chỉ ghi một lần, reinstall không ghi đè) về
+`~/Library/LaunchAgents/<label>.plist` (`~/.config/systemd/user/`, `<prefix>\run-daemon.ps1`), rồi `launchctl bootout gui/$(id -u)/<label>`
+và `launchctl bootstrap gui/$(id -u) <plist>` (Linux `systemctl --user daemon-reload && systemctl --user restart <unit>`).
+Rủi ro còn lại: (N5) override `ExecStart` trong drop-in systemd không được migrate; (N6) `PASEO_LAUNCHD_LABEL` /
+`PASEO_SYSTEMD_UNIT` lạc trong môi trường sẽ cài một job song song, hai biến này chỉ dành cho test;
+(N7) smoke script chỉ cô lập theo label.
+
 `0.5.0-paseo.41` là bootstrap boundary: release cũ hơn chưa có protocol updater nên cần chạy portable
 installer downstream một lần. Từ release này trở đi WebUI/CLI dùng update flow ở trên. Electron updater
 upstream bị ẩn tới khi downstream publish đủ Electron metadata riêng.
