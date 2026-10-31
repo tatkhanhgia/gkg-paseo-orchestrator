@@ -191,7 +191,9 @@ function readPlistEnv(plutil, file, name) {
       ["-extract", `EnvironmentVariables.${name}`, "raw", "-o", "-", file],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     );
-    return value === "" ? undefined : value;
+    // `plutil -extract … raw` terminates its output with a newline that is not part of the value.
+    const text = value.replace(/\r?\n$/u, "");
+    return text === "" ? undefined : text;
   } catch {
     return undefined;
   }
