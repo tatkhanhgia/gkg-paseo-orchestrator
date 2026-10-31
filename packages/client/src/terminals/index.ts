@@ -76,10 +76,17 @@ export interface PaseoTerminalHandle {
   kill(requestId?: string): Promise<void>;
 }
 
+export interface PaseoTerminalCapabilities {
+  /** True when `create({ owned: true, cwd })` may omit the workspace: a plugin's server code. */
+  workspacelessOwned: boolean;
+}
+
 export interface PaseoTerminalActions {
   create(options: PaseoTerminalCreateOptions): Promise<PaseoTerminalHandle>;
   list(options?: PaseoTerminalListOptions): Promise<PaseoTerminalListResult>;
   ref(terminal: string | PaseoTerminal): PaseoTerminalHandle;
+  /** What this API can do. Absent on hosts older than workspace-less plugin terminals. */
+  readonly capabilities?: PaseoTerminalCapabilities;
 }
 
 export interface PaseoWorkspaceTerminalActions {
@@ -192,6 +199,7 @@ export function createTerminalActions(
     },
     list,
     ref,
+    capabilities: { workspacelessOwned: actionOptions.workspacelessOwned === true },
   };
 }
 

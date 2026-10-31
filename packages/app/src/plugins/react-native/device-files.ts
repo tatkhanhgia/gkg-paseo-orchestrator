@@ -53,12 +53,14 @@ export function useDeviceFiles(): DeviceFiles {
       const connected = requireClient();
       const file = (await pickFiles({ multiple: false }))?.[0];
       if (!file) return null;
-      const bytes = await file.readBytes();
-      if (bytes.byteLength > FILE_UPLOAD_MAX_BYTES) {
-        throw new Error(
+      const tooLarge = () =>
+        new Error(
           i18n.t("composer.errors.fileTooLarge", { size: "50MB", fileName: file.fileName }),
         );
-      }
+      // Refuse before reading when the picker knows the size; the desktop dialog does not.
+      if (file.size !== undefined && file.size > FILE_UPLOAD_MAX_BYTES) throw tooLarge();
+      const bytes = await file.readBytes();
+      if (bytes.byteLength > FILE_UPLOAD_MAX_BYTES) throw tooLarge();
       const response = await connected.uploadFile({
         fileName: file.fileName,
         mimeType: file.mimeType,

@@ -120,6 +120,8 @@ test("only a plugin subprocess API creates an owned terminal without a workspace
     );
 
   const plugin = make(true);
+  expect(plugin.capabilities).toEqual({ workspacelessOwned: true });
+  expect(make(false).capabilities).toEqual({ workspacelessOwned: false });
   const created = await plugin.create({ cwd: "/home/u", owned: true, command: "ssh" });
   expect(created.current()).toMatchObject({ workspaceId: "plugin:ssh", owner: "plugin:ssh" });
   expect(createTerminal).toHaveBeenCalledWith("/home/u", undefined, undefined, {

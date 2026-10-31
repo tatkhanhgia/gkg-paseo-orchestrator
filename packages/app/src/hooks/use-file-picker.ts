@@ -57,6 +57,7 @@ function pickFilesWithWebInput(multiple: boolean): Promise<SelectedFile[] | null
         result.push({
           fileName: file.name,
           mimeType: file.type || getMimeTypeFromPath(file.name),
+          size: file.size,
           readBytes: async () => new Uint8Array(await file.arrayBuffer()),
         });
       }
@@ -90,6 +91,7 @@ async function pickFilesWithDocumentPicker(multiple: boolean): Promise<SelectedF
   return result.assets.map((asset) => ({
     fileName: asset.name,
     mimeType: asset.mimeType ?? getMimeTypeFromPath(asset.name),
+    size: asset.size,
     readBytes: () => new File(asset.uri).bytes(),
   }));
 }

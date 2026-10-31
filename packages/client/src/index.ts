@@ -44,6 +44,7 @@ import {
 export type {
   PaseoTerminal,
   PaseoTerminalActions,
+  PaseoTerminalCapabilities,
   PaseoTerminalHandle,
   PaseoTerminalCreateOptions,
   PaseoTerminalListOptions,
