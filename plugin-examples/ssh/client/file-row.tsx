@@ -1,4 +1,4 @@
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { useCallback, useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { FileEntry } from "../shared/contracts";

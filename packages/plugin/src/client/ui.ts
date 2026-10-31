@@ -69,6 +69,20 @@ export interface StreamedTextProps extends Omit<TextProps, "children"> {
 /** Plain assistant text with host-owned streaming pacing and typography. */
 export declare const StreamedText: ComponentType<StreamedTextProps>;
 
+export interface TerminalViewProps {
+  /** A terminal on this plugin's host, e.g. a `PaseoTerminal` from `paseo.terminals`. */
+  terminal: { id: string; cwd: string };
+  style?: StyleProp<ViewStyle>;
+  /** Runs when the terminal's process ends. Owned terminals emit no push events, so use this. */
+  onExit?(): void;
+}
+/**
+ * An interactive terminal rendered inside your screen or panel: keystrokes, password entry,
+ * resize, colors, copy/paste, and the mobile key bar. It fills its parent, so give it a bounded
+ * height. Absent on older apps; check `TerminalView === undefined` before rendering it.
+ */
+export declare const TerminalView: ComponentType<TerminalViewProps>;
+
 export type { PluginIconProps } from "../icons.js";
 
 /** React Native scrolling with the host's sheet gestures when rendered inside a sheet. */

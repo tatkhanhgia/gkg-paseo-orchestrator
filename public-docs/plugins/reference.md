@@ -2409,6 +2409,20 @@ function PullRequestAction({ theme }: PluginSurfaceProps) {
 
 The returned API covers projects, workspaces, agents, terminals, providers, and daemon config. See the [SDK API reference](/docs/sdk/reference) for its methods. Connection lifecycle methods are intentionally absent because Paseo owns the connection.
 
+### Show a terminal in your plugin
+
+Create an [owned terminal](/docs/sdk/reference#owned-terminals) with `paseo.terminals.create({ workspaceId, command, args, owned: true })` and render it with `TerminalView` from `@getpaseo/plugin/client/ui`. The terminal stays out of the workspace's terminal tabs; your screen or panel is its only view.
+
+| Prop       | Required | Meaning                                                                                                  |
+| ---------- | -------- | -------------------------------------------------------------------------------------------------------- |
+| `terminal` | Yes      | `{ id, cwd }`, which a `PaseoTerminal` from `paseo.terminals` satisfies. It runs on the plugin's host.   |
+| `style`    | No       | Style for the wrapping view. The terminal fills its parent, so give it a bounded height.                 |
+| `onExit`   | No       | Called when the terminal's process ends. Owned terminals emit no push events, so refresh your list here. |
+
+`TerminalView` takes keystrokes, password entry, resize, colors, copy and paste, find, and the mobile key bar. It leaves out what only a workspace tab needs: swiping to the mobile agent list or file explorer, and opening workspace file links. Closing your screen does not end the process. `list({ workspaceId, owned: true })` finds it again later, so a plugin can reattach after a reload; `ref(id).kill()` ends it.
+
+`TerminalView` exists in apps from the release that added owned terminals; an older app's `@getpaseo/plugin/client/ui` has no such export, and `requirements.paseo` cannot block it. Read it as `import * as ui` and show a message when `ui.TerminalView` is `undefined`. The [SSH plugin](https://github.com/getpaseo/paseo/tree/main/plugin-examples/ssh) is a complete example.
+
 ### Discover hosts and target another host
 
 Use `useHosts()` to display configured hosts and `getPaseoClient(serverId)` in an action callback

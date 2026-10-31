@@ -4,7 +4,7 @@ import { SshScreen } from "./ssh-screen";
 import type { TargetWorkspace } from "./types";
 
 /** The workspace-tab panel: the workspace it sits in is the target, so there is no picker. */
-export function HostsPanel({ theme, layout, workspaceId }: PluginWorkspacePanelProps) {
+export function HostsPanel({ theme, layout, workspaceId, revision }: PluginWorkspacePanelProps) {
   const workspace = useMemo<TargetWorkspace>(() => ({ id: workspaceId }), [workspaceId]);
-  return <SshScreen theme={theme} layout={layout} workspace={workspace} />;
+  return <SshScreen theme={theme} layout={layout} workspace={workspace} refreshToken={revision} />;
 }
