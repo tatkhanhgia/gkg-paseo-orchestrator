@@ -128,8 +128,11 @@ export class PluginService {
       this.removeProviderRegistrations(pluginId);
       this.removeUsageSources(pluginId);
       if (error) this.errors.set(pluginId, error);
-      // An error here means the plugin process died: its resources die with it.
-      if (error) void this.releaseResources(pluginId);
+      // The process is gone, cleanly or not: its resources go with it. The runtime reports every
+      // exit of a published plugin here, so release on "not running" rather than on the message.
+      if (!this.runtime.catalog().some((plugin) => plugin.id === pluginId)) {
+        void this.releaseResources(pluginId);
+      }
       this.notify(pluginId);
     });
   }

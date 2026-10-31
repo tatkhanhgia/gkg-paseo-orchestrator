@@ -1269,7 +1269,7 @@ export default function contribute(plugin: unknown) {
     await service.stopAllPlugins();
   });
 
-  it("releases a plugin's daemon resources before each start, after each stop, and when its process dies", async () => {
+  it("releases a plugin's daemon resources before each start, after each stop, and whenever its process exits", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
     roots.push(home);
     const directory = await createPlugin(
@@ -1315,6 +1315,13 @@ export default function contribute(plugin: unknown) {
     emitRuntimeEvent("owner-test", "Plugin process exited: owner-test");
     await new Promise((resolve) => setImmediate(resolve));
     await service.reloadPlugin("owner-test");
+    // An event while the plugin still runs releases nothing.
+    emitRuntimeEvent("owner-test");
+    // A clean exit, reported without an error, releases like a crash.
+    running.delete("owner-test");
+    emitRuntimeEvent("owner-test");
+    await new Promise((resolve) => setImmediate(resolve));
+    await service.reloadPlugin("owner-test");
     await service.stopAllPlugins();
 
     expect(events).toEqual([
@@ -1329,6 +1336,13 @@ export default function contribute(plugin: unknown) {
       // the process died
       "release:owner-test",
       // reload after the crash
+      "stop:owner-test",
+      "release:owner-test",
+      "release:owner-test",
+      "start:owner-test",
+      // the process exited cleanly
+      "release:owner-test",
+      // reload after the clean exit
       "stop:owner-test",
       "release:owner-test",
       "release:owner-test",

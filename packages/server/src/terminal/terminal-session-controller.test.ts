@@ -499,11 +499,12 @@ describe("terminal-session-controller workspace-less plugin terminals", () => {
       listTerminalWorkspaceRefs: async () => [{ workspaceId: "ws-1", cwd: "/work/repo" }],
       pluginTerminalOwner,
     });
-    async function create(input: { cwd: string; owner?: string }) {
+    async function create(input: { cwd: string; owner?: string; workspaceId?: string }) {
       await controller.dispatch({
         type: "create_terminal_request",
         cwd: input.cwd,
         ...(input.owner === undefined ? {} : { owner: input.owner }),
+        ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
         requestId: "req-create",
       });
       const response = outboundMessages.find(
@@ -535,7 +536,6 @@ describe("terminal-session-controller workspace-less plugin terminals", () => {
 
   test.each([
     { label: "an app session", pluginTerminalOwner: undefined, owner: "plugin:ssh" },
-    { label: "another plugin's session", pluginTerminalOwner: "plugin:other", owner: "plugin:ssh" },
     {
       label: "the plugin session without an owner",
       pluginTerminalOwner: "plugin:ssh",
@@ -550,6 +550,47 @@ describe("terminal-session-controller workspace-less plugin terminals", () => {
     const inside = setup(pluginTerminalOwner);
     const bound = await inside.create({ cwd: "/work/repo", owner });
     expect(bound.terminal).toMatchObject({ workspaceId: "ws-1" });
+  });
+
+  test.each([
+    {
+      label: "an app session naming a plugin: workspace",
+      pluginTerminalOwner: undefined,
+      request: { cwd: "/home/user", workspaceId: "plugin:ssh", owner: "plugin:ssh" },
+      error: "Workspace ids starting with plugin: are reserved",
+    },
+    {
+      label: "a plugin session naming a plugin: workspace",
+      pluginTerminalOwner: "plugin:ssh",
+      request: { cwd: "/home/user", workspaceId: "plugin:ssh", owner: "plugin:ssh" },
+      error: "Workspace ids starting with plugin: are reserved",
+    },
+    {
+      label: "a plugin session using another plugin's owner without a workspace",
+      pluginTerminalOwner: "plugin:other",
+      request: { cwd: "/home/user", owner: "plugin:ssh" },
+      error: "A plugin can only create terminals it owns",
+    },
+    {
+      label: "a plugin session using another plugin's owner in a workspace",
+      pluginTerminalOwner: "plugin:other",
+      request: { cwd: "/work/repo", workspaceId: "ws-1", owner: "plugin:ssh" },
+      error: "A plugin can only create terminals it owns",
+    },
+  ])("refuses $label", async ({ pluginTerminalOwner, request, error }) => {
+    const session = setup(pluginTerminalOwner);
+    await expect(session.create(request)).resolves.toMatchObject({ terminal: null, error });
+    expect(session.createTerminal).not.toHaveBeenCalled();
+  });
+
+  test("still lets the app's plugin API create a plugin-owned terminal in a real workspace", async () => {
+    const app = setup(undefined);
+    const response = await app.create({
+      cwd: "/work/repo",
+      workspaceId: "ws-1",
+      owner: "plugin:ssh",
+    });
+    expect(response.terminal).toMatchObject({ workspaceId: "ws-1", owner: "plugin:ssh" });
   });
 });
 
