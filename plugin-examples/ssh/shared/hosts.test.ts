@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { findHostEntries, parseNewUserHost, toHostEntries } from "./hosts";
+import {
+  filterHostEntries,
+  findHostEntries,
+  hostForSession,
+  parseNewUserHost,
+  toHostEntries,
+} from "./hosts";
 
 const blank = { label: "", host: "", user: "", port: "", identityFile: "" };
 
@@ -44,5 +50,28 @@ describe("host entries", () => {
       "config:Prod",
     ]);
     expect(findHostEntries("staging", entries)).toEqual([]);
+  });
+});
+
+describe("host search and session lookup", () => {
+  const entries = toHostEntries(
+    [{ alias: "pccompany", hostName: "pccompany.gtk.example", user: "user", port: 22 }],
+    [
+      { id: "1", label: "Server PRD", host: "192.168.2.4", user: "root" },
+      { id: "2", label: "myLaptop", host: "100.108.172.2", user: "admin", port: 2222 },
+    ],
+  );
+
+  it("keeps hosts that match every word in the label or the address, ignoring case", () => {
+    expect(filterHostEntries("  ", entries)).toHaveLength(3);
+    expect(filterHostEntries("prd root", entries).map((entry) => entry.key)).toEqual(["user:1"]);
+    expect(filterHostEntries("ADMIN@100", entries).map((entry) => entry.key)).toEqual(["user:2"]);
+    expect(filterHostEntries("laptop 9999", entries)).toEqual([]);
+  });
+
+  it("finds the host a terminal was named for, and none for a foreign terminal", () => {
+    expect(hostForSession("ssh Server PRD", entries)?.key).toBe("user:1");
+    expect(hostForSession("ssh pccompany", entries)?.key).toBe("config:pccompany");
+    expect(hostForSession("zsh", entries)).toBeNull();
   });
 });

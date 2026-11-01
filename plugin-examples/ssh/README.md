@@ -1,7 +1,8 @@
 # SSH session manager
 
-A minimal MobaXterm-style screen. **Connect** runs `ssh` and shows an interactive terminal inside
-the plugin's own screen, and **Files** browses the host's file tree, downloads files to the phone or
+A MobaXterm-style screen: a sidebar of hosts or files beside session tabs and a terminal. Connecting
+runs `ssh` and shows an interactive terminal inside the plugin's own screen, and the SFTP view
+browses the host's file tree, downloads files to the phone or
 browser you are using, and uploads files from it. Nothing here uses or touches a workspace.
 
 Install with `paseo plugin install /absolute/path/to/plugin-examples/ssh`, then reload after edits
@@ -18,26 +19,36 @@ with `paseo plugin reload ssh`.
 
 ## Use it
 
-- **Screen layout.** Hosts on the left on wide layouts, and on the right a pane that switches
-  between **Files** and the running sessions (one chip each, with an × to close it). On compact
-  layouts (phones) the session or the file browser replaces the host list while it is open, and
-  the back arrow or **Hosts** returns. The panel and the sidebar screen are the same component.
+- **Screen layout.** On wide layouts a sidebar (about 280 points) has a **Sessions | SFTP**
+  switch. **Sessions** lists the hosts, grouped as _Saved hosts_ and _From ~/.ssh/config_, with a
+  search field and a **+** to add a host. **SFTP** browses the files of the active session's host.
+  Beside the sidebar are the open sessions as tabs (icon, label, ×, and a **+** that returns to the
+  host list) over the terminal, or **Pick a host to connect** with quick-connect hosts when no
+  session is open. Running transfers dock at the bottom of the sidebar, and a status bar under the
+  screen shows the active host, its connection state, and a transfer summary. On compact layouts
+  (phones) a **Sessions | Terminal | SFTP** switch across the top shows one full-width view at a
+  time; rows are 44 points tall and their buttons are always visible. The panel and the sidebar
+  screen are the same component.
 - **Hosts.** Both screens list user-added hosts and the hosts in the daemon user's `~/.ssh/config`.
-  **Connect** asks the daemon to start `ssh` in a terminal named `ssh <label>` that the plugin owns,
+  A click selects a host; a double-click, a tap on a phone, or Enter in the search field connects.
+  Hover or select a row for its buttons: connect, browse files, and (for saved hosts) edit and
+  remove. Connecting asks the daemon to start `ssh` in a terminal named `ssh <label>` that the plugin owns,
   starting in the daemon user's home directory, and shows it in the pane. Typing, a password or
   passphrase, resize, colors, copy and paste, find, and the mobile key bar all work there.
-  **Connect** stays on the screen.
+  Connecting stays on the screen.
 - **Sessions.** Every screen lists the same running sessions (all of this plugin's terminals on the
   host) and shows the newest, so reopening the screen reattaches to ssh that is still running. Pick
-  a chip to switch sessions; × ends one. When ssh exits, its chip goes away. Closing the screen
+  a tab to switch sessions; × ends one. When ssh exits, its tab goes away. Closing the screen
   keeps ssh running, and so does archiving any workspace. Reloading, disabling, or removing the
   plugin, or restarting the daemon, ends every session.
 - **Slash command.** `/ssh <host>` in a workspace composer connects to the host whose label (user
   hosts, ignoring case) or alias (config hosts, exact) matches, then opens the **SSH hosts** panel,
   which shows the newest session.
-- **Files.** **Files** on a host opens a remote file tree that starts at the remote home, with
-  **Up**, **Home**, and **Refresh**, and shows each entry's name, type, size, and modified time.
-  Tap a folder to enter it. **Download** (the arrow icon on a file) copies the remote file to a
+- **Files.** The folder button on a host (or the **SFTP** view, which follows the active session's
+  host) opens a remote file tree that starts at the remote home, with **Up**, **Home**, and
+  **Refresh** buttons and a clickable breadcrumb, and shows each entry's name, size, and modified
+  time. Press a folder to enter it and a file to select it. **Download** (the arrow icon on a file,
+  or **Download selected**) copies the remote file to a
   private staging folder on the daemon host, then saves it to this device: the browser's download on
   web and desktop, the share sheet on iOS and Android. The staged copy is deleted 90 seconds after
   the save, or 15 minutes after the copy if the screen was closed before it could save. **Upload from
