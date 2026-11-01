@@ -1,233 +1,274 @@
-import { useQuery } from "@tanstack/react-query";
-import { useRpc, useSettings } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/ui";
+import { Icon, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { hostsSettings, listConfigHostsRpc, type SshUserHost } from "../shared/contracts";
-import { toHostEntries, type SshHostEntry } from "../shared/hosts";
-import { AddHostForm } from "./add-host-form";
-import { MIN_TOUCH_TARGET } from "./file-row";
+import { filterHostEntries, type SshHostEntry } from "../shared/hosts";
+import { HostForm } from "./host-form";
+import { HostRow, type HostStatus } from "./host-row";
 import type { Layout, Theme } from "./types";
+import type { HostEntries } from "./use-host-entries";
+import {
+  FONT_SIZE,
+  IconButton,
+  MIN_TOUCH_TARGET,
+  ROW_HEIGHT,
+  SectionHeader,
+  SPACE,
+} from "./ui-kit";
 
-const NO_HOSTS: SshUserHost[] = [];
-const SELECTED = { selected: true };
-const NOT_SELECTED = { selected: false };
+/** What the form above the list is doing. */
+type FormState = { kind: "closed" } | { kind: "add" } | { kind: "edit"; id: string };
 
-interface HostRowProps {
-  entry: SshHostEntry;
-  theme: Theme;
-  busy: boolean;
-  selected: boolean;
-  onConnect(entry: SshHostEntry): void;
-  onBrowse(entry: SshHostEntry): void;
-  onRemove(entry: SshHostEntry): void;
-}
-
-function HostRow({ entry, theme, busy, selected, onConnect, onBrowse, onRemove }: HostRowProps) {
-  const styles = useMemo(
-    () => ({
-      row: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        gap: 12,
-        paddingVertical: 10,
-        borderBottomWidth: 1,
-        borderColor: theme.colors.border,
-      },
-      text: { flex: 1, minWidth: 0 },
-      label: {
-        color: theme.colors.foreground,
-        fontWeight: selected ? ("600" as const) : undefined,
-      },
-      detail: { color: theme.colors.foregroundMuted },
-      connect: {
-        minHeight: MIN_TOUCH_TARGET,
-        justifyContent: "center" as const,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        backgroundColor: theme.colors.accent,
-      },
-      connectText: { color: theme.colors.accentForeground },
-      files: {
-        minHeight: MIN_TOUCH_TARGET,
-        justifyContent: "center" as const,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: selected ? theme.colors.accent : theme.colors.border,
-      },
-      filesText: { color: theme.colors.foreground },
-      remove: {
-        minWidth: MIN_TOUCH_TARGET,
-        minHeight: MIN_TOUCH_TARGET,
-        alignItems: "center" as const,
-        justifyContent: "center" as const,
-      },
-    }),
-    [theme, selected],
-  );
-  const handleConnect = useCallback(() => onConnect(entry), [entry, onConnect]);
-  const handleBrowse = useCallback(() => onBrowse(entry), [entry, onBrowse]);
-  const handleRemove = useCallback(() => onRemove(entry), [entry, onRemove]);
-  return (
-    <View style={styles.row}>
-      <View style={styles.text}>
-        <Text style={styles.label} numberOfLines={1}>
-          {entry.label}
-        </Text>
-        <Text style={styles.detail} numberOfLines={1}>
-          {entry.detail}
-        </Text>
-      </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Connect to ${entry.label}`}
-        onPress={handleConnect}
-        style={styles.connect}
-      >
-        <Text style={styles.connectText}>Connect</Text>
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Browse files on ${entry.label}`}
-        accessibilityState={selected ? SELECTED : NOT_SELECTED}
-        onPress={handleBrowse}
-        style={styles.files}
-      >
-        <Text style={styles.filesText}>Files</Text>
-      </Pressable>
-      {entry.source === "user" ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Remove ${entry.label}`}
-          disabled={busy}
-          onPress={handleRemove}
-          style={styles.remove}
-        >
-          <Icon name="Trash2" size={18} color={theme.colors.foregroundMuted} />
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
+const CLOSED: FormState = { kind: "closed" };
+const ADDING: FormState = { kind: "add" };
 
 interface HostsListProps {
   theme: Theme;
   layout: Layout;
-  /** The host whose files are open, so its row can show it. */
-  selectedKey: string | null;
+  hosts: HostEntries;
+  /** Keys of hosts that have a running session. */
+  connectedKeys: ReadonlySet<string>;
+  /** The host a session is being started for. */
+  connectingKey: string | null;
   onConnect(entry: SshHostEntry): void;
   onBrowse(entry: SshHostEntry): void;
 }
 
-/** User-added and ssh-config hosts, with add and remove. Owns the host settings and config reads. */
-export function HostsList({ theme, layout, selectedKey, onConnect, onBrowse }: HostsListProps) {
-  const settings = useSettings(hostsSettings);
-  const listConfigHosts = useRpc(listConfigHostsRpc);
-  const config = useQuery({
-    queryKey: ["ssh", "config-hosts"],
-    queryFn: () => listConfigHosts({}),
-  });
-  const [adding, setAdding] = useState(false);
+/**
+ * The sidebar's Sessions view: a search field and a "+" for a new host above the saved hosts and
+ * the hosts from `~/.ssh/config`. A click selects a host, a double-click (or a tap on a phone, or
+ * Enter in the search field) connects.
+ */
+export function HostsList({
+  theme,
+  layout,
+  hosts,
+  connectedKeys,
+  connectingKey,
+  onConnect,
+  onBrowse,
+}: HostsListProps) {
+  const compact = layout.compact;
+  const [query, setQuery] = useState("");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [form, setForm] = useState<FormState>(CLOSED);
+  const height = compact ? MIN_TOUCH_TARGET : ROW_HEIGHT;
   const styles = useMemo(
     () => ({
-      list: { gap: 12 },
-      title: { color: theme.colors.foreground, fontSize: layout.compact ? 18 : 20 },
-      muted: { color: theme.colors.foregroundMuted },
-      error: { color: theme.colors.statusDanger },
-      add: {
-        minHeight: MIN_TOUCH_TARGET,
-        justifyContent: "center" as const,
-        paddingHorizontal: 12,
-        borderRadius: 8,
+      root: { flex: 1, minHeight: 0 },
+      header: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: SPACE.xs,
+        padding: SPACE.sm,
+      },
+      search: {
+        flex: 1,
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: SPACE.sm,
+        minHeight: height,
+        paddingHorizontal: SPACE.sm + 2,
+        borderRadius: 6,
         borderWidth: 1,
         borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface0,
       },
-      addText: { color: theme.colors.foreground },
+      searchInput: {
+        flex: 1,
+        minWidth: 0,
+        color: theme.colors.foreground,
+        fontSize: FONT_SIZE.body,
+        paddingVertical: 0,
+      },
+      list: { flex: 1, minHeight: 0 },
+      listContent: { paddingHorizontal: SPACE.xs, paddingBottom: SPACE.lg },
+      message: {
+        color: theme.colors.foregroundMuted,
+        fontSize: FONT_SIZE.small,
+        paddingHorizontal: SPACE.sm,
+        paddingVertical: SPACE.sm,
+      },
+      error: {
+        color: theme.colors.statusDanger,
+        fontSize: FONT_SIZE.small,
+        paddingHorizontal: SPACE.sm,
+        paddingVertical: SPACE.xs,
+      },
+      clear: { padding: SPACE.xs },
     }),
-    [theme, layout.compact],
-  );
-  const userHosts = settings.status === "ready" ? settings.values.hosts : NO_HOSTS;
-  const configHosts = config.data?.hosts;
-  const entries = useMemo(
-    () => toHostEntries(configHosts ?? [], userHosts),
-    [configHosts, userHosts],
+    [theme, height],
   );
 
-  const handleRemove = useCallback(
+  const filtered = useMemo(() => filterHostEntries(query, hosts.entries), [query, hosts.entries]);
+  const savedHosts = useMemo(() => filtered.filter((entry) => entry.source === "user"), [filtered]);
+  const fromConfig = useMemo(
+    () => filtered.filter((entry) => entry.source === "config"),
+    [filtered],
+  );
+
+  const handleSelect = useCallback((entry: SshHostEntry) => setSelectedKey(entry.key), []);
+  const handleConnect = useCallback(
     (entry: SshHostEntry) => {
-      if (settings.status !== "ready") return;
-      const id = entry.key.slice("user:".length);
-      void settings.save(
-        { hosts: settings.values.hosts.filter((host) => host.id !== id) },
-        settings.revision,
-      );
+      setSelectedKey(entry.key);
+      onConnect(entry);
     },
-    [settings],
+    [onConnect],
   );
-  const handleAdd = useCallback(
-    async (host: Omit<SshUserHost, "id">) => {
-      if (settings.status !== "ready") return false;
-      const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const saved = await settings.save(
-        { hosts: [...settings.values.hosts, { ...host, id }] },
-        settings.revision,
-      );
-      if (saved) setAdding(false);
-      return saved;
+  const handleBrowse = useCallback(
+    (entry: SshHostEntry) => {
+      setSelectedKey(entry.key);
+      onBrowse(entry);
     },
-    [settings],
+    [onBrowse],
   );
-  const showForm = useCallback(() => setAdding(true), []);
-  const hideForm = useCallback(() => setAdding(false), []);
+  const handleEdit = useCallback((entry: SshHostEntry) => {
+    setForm({ kind: "edit", id: entry.key.slice("user:".length) });
+  }, []);
+  const handleSubmitSearch = useCallback(() => {
+    const target = filtered.find((entry) => entry.key === selectedKey) ?? filtered[0];
+    if (target) handleConnect(target);
+  }, [filtered, selectedKey, handleConnect]);
+  const clearSearch = useCallback(() => setQuery(""), []);
+  const toggleAdd = useCallback(() => {
+    setForm((current) => (current.kind === "add" ? CLOSED : ADDING));
+  }, []);
+  const closeForm = useCallback(() => setForm(CLOSED), []);
 
+  const editing = form.kind === "edit" ? form.id : null;
+  const editedHost = editing ? hosts.userHosts.find((host) => host.id === editing) : undefined;
+  const { add, update, remove } = hosts;
+  const handleAdd = useCallback(
+    async (host: Parameters<typeof add>[0]) => {
+      const done = await add(host);
+      if (done) setForm(CLOSED);
+      return done;
+    },
+    [add],
+  );
+  const handleUpdate = useCallback(
+    async (host: Parameters<typeof add>[0]) => {
+      if (!editing) return false;
+      const done = await update(editing, host);
+      if (done) setForm(CLOSED);
+      return done;
+    },
+    [editing, update],
+  );
+  const handleDeleteEdited = useCallback(() => {
+    const entry = hosts.entries.find((candidate) => candidate.key === `user:${editing}`);
+    if (entry) remove(entry);
+    setForm(CLOSED);
+  }, [hosts.entries, editing, remove]);
+
+  const rowFor = (entry: SshHostEntry) => {
+    let status: HostStatus = "idle";
+    if (connectedKeys.has(entry.key)) status = "connected";
+    if (connectingKey === entry.key) status = "connecting";
+    return (
+      <HostRow
+        key={entry.key}
+        entry={entry}
+        theme={theme}
+        compact={compact}
+        busy={hosts.saving}
+        selected={entry.key === selectedKey}
+        status={status}
+        onSelect={handleSelect}
+        onConnect={handleConnect}
+        onBrowse={handleBrowse}
+        onEdit={handleEdit}
+        onRemove={remove}
+      />
+    );
+  };
+
+  const searching = query.trim().length > 0;
   return (
-    <View style={styles.list}>
-      <Text style={styles.title}>SSH hosts</Text>
-      {settings.status === "loading" ? <Text style={styles.muted}>Loading hosts…</Text> : null}
-      {settings.status === "error" || settings.status === "invalid" ? (
-        <Text style={styles.error}>{settings.error}</Text>
-      ) : null}
-      {settings.saveError ? <Text style={styles.error}>{settings.saveError}</Text> : null}
-      {config.data?.error ? (
-        <Text style={styles.error}>
-          Could not read {config.data.configPath}: {config.data.error}
-        </Text>
-      ) : null}
-      {entries.map((entry) => (
-        <HostRow
-          key={entry.key}
-          entry={entry}
+    <View style={styles.root}>
+      <View style={styles.header}>
+        <View style={styles.search}>
+          <Icon name="Search" size={14} color={theme.colors.foregroundMuted} />
+          <TextInput
+            accessibilityLabel="Search hosts"
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Search hosts"
+            placeholderTextColor={theme.colors.foregroundMuted}
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={handleSubmitSearch}
+            returnKeyType="go"
+            style={styles.searchInput}
+          />
+          {searching ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+              onPress={clearSearch}
+              style={styles.clear}
+            >
+              <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
+            </Pressable>
+          ) : null}
+        </View>
+        <IconButton
           theme={theme}
-          busy={settings.saving}
-          selected={entry.key === selectedKey}
-          onConnect={onConnect}
-          onBrowse={onBrowse}
-          onRemove={handleRemove}
+          compact={compact}
+          icon="Plus"
+          label="Add host"
+          active={form.kind === "add"}
+          onPress={toggleAdd}
         />
-      ))}
-      {entries.length === 0 && !config.isPending && settings.status === "ready" ? (
-        <Text style={styles.muted}>
-          No hosts yet. Add one, or define Host entries in ~/.ssh/config.
-        </Text>
-      ) : null}
-      {adding ? (
-        <AddHostForm
-          theme={theme}
-          disabled={settings.saving || settings.status !== "ready"}
-          onAdd={handleAdd}
-          onCancel={hideForm}
-        />
-      ) : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add host"
-          onPress={showForm}
-          style={styles.add}
-        >
-          <Text style={styles.addText}>Add host</Text>
-        </Pressable>
-      )}
+      </View>
+      <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+        {form.kind === "add" ? (
+          <HostForm
+            theme={theme}
+            compact={compact}
+            disabled={hosts.saving || !hosts.ready}
+            onSubmit={handleAdd}
+            onCancel={closeForm}
+          />
+        ) : null}
+        {editedHost ? (
+          <HostForm
+            key={editedHost.id}
+            theme={theme}
+            compact={compact}
+            disabled={hosts.saving || !hosts.ready}
+            initial={editedHost}
+            onSubmit={handleUpdate}
+            onCancel={closeForm}
+            onDelete={handleDeleteEdited}
+          />
+        ) : null}
+        {hosts.loading ? <Text style={styles.message}>Loading hosts…</Text> : null}
+        {hosts.errors.map((message) => (
+          <Text key={message} style={styles.error}>
+            {message}
+          </Text>
+        ))}
+        {savedHosts.length > 0 ? (
+          <>
+            <SectionHeader theme={theme} title="Saved hosts" count={savedHosts.length} />
+            {savedHosts.map(rowFor)}
+          </>
+        ) : null}
+        {fromConfig.length > 0 ? (
+          <>
+            <SectionHeader theme={theme} title="From ~/.ssh/config" count={fromConfig.length} />
+            {fromConfig.map(rowFor)}
+          </>
+        ) : null}
+        {hosts.empty ? (
+          <Text style={styles.message}>
+            No hosts yet. Add one with +, or define Host entries in ~/.ssh/config.
+          </Text>
+        ) : null}
+        {searching && filtered.length === 0 && !hosts.empty ? (
+          <Text style={styles.message}>No hosts match “{query.trim()}”.</Text>
+        ) : null}
+      </ScrollView>
     </View>
   );
 }
