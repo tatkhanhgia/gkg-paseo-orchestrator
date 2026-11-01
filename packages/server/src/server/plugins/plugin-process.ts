@@ -23,6 +23,7 @@ import { createPluginClientId } from "./plugin-session-identity.js";
 
 import { PluginSettingsStore } from "./settings/index.js";
 import { readPluginProviderIcon } from "./provider-icon.js";
+import { resolveDeviceUpload, type DeviceUploadHandle } from "./device-uploads.js";
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -276,13 +277,18 @@ export function createPluginWorker(options: {
       reconnect: { enabled: true },
       transportFactory,
     });
-    paseo = createPaseoApi(daemonClient, { terminalOwner: `plugin:${message.pluginId}` });
+    paseo = createPaseoApi(daemonClient, {
+      terminalOwner: `plugin:${message.pluginId}`,
+      // The daemon accepts a workspace-less terminal only from this session, as its owner.
+      workspacelessOwnedTerminals: true,
+    });
     await daemonClient.connect();
     settingsStore = message.settingsDirectory
       ? new PluginSettingsStore(message.settingsDirectory, (settingsId) =>
           send({ type: "settings.changed", settingsId }),
         )
       : null;
+    const uploadsDirectory = message.uploadsDirectory;
     const contributedCleanup = contribute({
       handle: (contract, handler) =>
         register(contract, (input, context) => handler(contract.input.parse(input), context)),
@@ -291,6 +297,12 @@ export function createPluginWorker(options: {
       registerSettings,
       on: hooks.on,
       before: hooks.before,
+      ...(uploadsDirectory
+        ? {
+            resolveDeviceUpload: (upload: DeviceUploadHandle) =>
+              resolveDeviceUpload(uploadsDirectory, upload),
+          }
+        : {}),
     });
     if (typeof contributedCleanup !== "function") {
       throw new Error("Plugin contribution must return a cleanup function");

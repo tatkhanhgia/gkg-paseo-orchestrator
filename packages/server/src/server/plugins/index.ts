@@ -64,6 +64,8 @@ interface PluginRuntimePort {
 interface PluginServiceDependencies {
   usageAgents?: AgentUsageLookup;
   settingsDirectory?: string;
+  /** Lets plugin server code resolve files a user uploaded from their device. */
+  uploadsDirectory?: string;
   runtime?: PluginRuntimePort;
   managedSources?: ManagedPluginSources;
   builtinPlugins?: BuiltinPluginLoader;
@@ -95,6 +97,7 @@ export class PluginService {
   private globalStartsBlocked = true;
   private started = false;
   private readonly settingsListeners = new Set<(pluginId: string, settingsId: string) => void>();
+  private releasePluginResources: ((pluginId: string) => Promise<void>) | null = null;
 
   constructor(
     logger: pino.Logger,
@@ -113,6 +116,7 @@ export class PluginService {
       dependencies.runtime ??
       new PluginRuntime(logger, daemonVersion, {
         settingsDirectory: dependencies.settingsDirectory,
+        uploadsDirectory: dependencies.uploadsDirectory,
         onSettingsChanged: (pluginId, settingsId) => {
           for (const listener of this.settingsListeners) listener(pluginId, settingsId);
         },
@@ -124,6 +128,11 @@ export class PluginService {
       this.removeProviderRegistrations(pluginId);
       this.removeUsageSources(pluginId);
       if (error) this.errors.set(pluginId, error);
+      // The process is gone, cleanly or not: its resources go with it. The runtime reports every
+      // exit of a published plugin here, so release on "not running" rather than on the message.
+      if (!this.runtime.catalog().some((plugin) => plugin.id === pluginId)) {
+        void this.releaseResources(pluginId);
+      }
       this.notify(pluginId);
     });
   }
@@ -155,6 +164,23 @@ export class PluginService {
 
   bindPaseoSessionHost(sessionHost: Parameters<PluginRuntime["bindPaseoSessionHost"]>[0]): void {
     this.runtime.bindPaseoSessionHost(sessionHost);
+  }
+
+  /**
+   * Daemon resources a plugin owns (its terminals) that must not outlive it. `release` runs after
+   * the plugin stops, reloads, crashes, or is removed, and before it starts, which sweeps what an
+   * unclean stop left behind.
+   */
+  bindPluginResourceCleanup(release: (pluginId: string) => Promise<void>): void {
+    this.releasePluginResources = release;
+  }
+
+  private async releaseResources(pluginId: string): Promise<void> {
+    try {
+      await this.releasePluginResources?.(pluginId);
+    } catch (error) {
+      this.logger.warn({ err: error, pluginId }, "Failed to release plugin resources");
+    }
   }
 
   getProviderRegistrations(): readonly ProviderRegistration[] {
@@ -543,6 +569,7 @@ export class PluginService {
   }
 
   private async startPlugin(pluginId: string, sourcePath: string): Promise<void> {
+    await this.releaseResources(pluginId);
     await this.runtime.startPlugin(pluginId, sourcePath, () => this.canPublish(pluginId));
     try {
       await this.publishProviderRegistrations(pluginId, sourcePath);
@@ -558,10 +585,15 @@ export class PluginService {
     }
   }
 
-  private stopPlugin(pluginId: string): Promise<boolean> {
+  private async stopPlugin(pluginId: string): Promise<boolean> {
     this.removeProviderRegistrations(pluginId);
     this.removeUsageSources(pluginId);
-    return this.runtime.stopPluginById(pluginId);
+    try {
+      return await this.runtime.stopPluginById(pluginId);
+    } finally {
+      // After the process is gone, so its teardown cannot create a terminal nobody would end.
+      await this.releaseResources(pluginId);
+    }
   }
 
   private async stopConfiguredPlugins(): Promise<void> {
@@ -576,7 +608,12 @@ export class PluginService {
       this.removeProviderRegistrations(pluginId);
     }
     for (const pluginId of this.usageSourceIdsByPlugin.keys()) this.removeUsageSources(pluginId);
-    await this.runtime.stopAll();
+    const running = this.runtime.catalog().map((plugin) => plugin.id);
+    try {
+      await this.runtime.stopAll();
+    } finally {
+      await Promise.all(running.map((pluginId) => this.releaseResources(pluginId)));
+    }
   }
 
   private publishUsageSources(pluginId: string): void {

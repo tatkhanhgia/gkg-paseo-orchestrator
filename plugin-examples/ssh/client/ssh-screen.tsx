@@ -1,5 +1,5 @@
 import { useToast } from "@getpaseo/plugin/client/ui";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { SshHostEntry } from "../shared/hosts";
 import { resolveSelection, type SessionSelection } from "../shared/sessions";
 import { FilesBrowser, TransferList, useTransfers } from "./files-browser";
@@ -7,16 +7,12 @@ import { HostsList } from "./hosts-list";
 import { SessionChips } from "./session-chips";
 import { CompactSshLayout, WideSshLayout, type SshScreenParts } from "./ssh-layouts";
 import { SessionPane } from "./session-pane";
-import type { Layout, TargetWorkspace, Theme } from "./types";
+import type { Layout, Theme } from "./types";
 import { useSshSessions } from "./use-ssh-sessions";
 
 interface SshScreenProps {
   theme: Theme;
   layout: Layout;
-  /** Where sessions run and files go; `null` until the user has chosen one. */
-  workspace: TargetWorkspace | null;
-  /** Shown above the hosts and files, e.g. the workspace picker. */
-  children?: ReactNode;
   /** Changes when the host reopens the screen, e.g. after `/ssh`; the newest session shows again. */
   refreshToken?: number;
 }
@@ -24,20 +20,16 @@ interface SshScreenProps {
 /**
  * Hosts, a remote file browser with transfers, and the running ssh sessions. Wide layouts put the
  * hosts beside a pane that switches between the files and a session; compact ones show one at a
- * time. The same screen serves the sidebar surface and the workspace panel.
+ * time. The same screen serves the sidebar surface and the workspace panel, and neither uses a
+ * workspace: sessions are terminals the plugin owns, and files move between the remote host and
+ * this device.
  */
-export function SshScreen({
-  theme,
-  layout,
-  workspace,
-  children: header,
-  refreshToken = 0,
-}: SshScreenProps) {
+export function SshScreen({ theme, layout, refreshToken = 0 }: SshScreenProps) {
   const toast = useToast();
   const transfers = useTransfers();
   const [browsing, setBrowsing] = useState<SshHostEntry | null>(null);
   const [selection, setSelection] = useState<SessionSelection>({ kind: "auto" });
-  const sessions = useSshSessions(workspace?.id ?? null, refreshToken);
+  const sessions = useSshSessions(refreshToken);
   const { refresh } = sessions;
   const resolved = resolveSelection(selection, sessions.sessions);
   const active =
@@ -49,17 +41,13 @@ export function SshScreen({
 
   const handleConnect = useCallback(
     async (entry: SshHostEntry) => {
-      if (!workspace) {
-        toast.error("Choose a target workspace first.");
-        return;
-      }
       try {
         setSelection({ kind: "session", id: await sessions.open(entry) });
       } catch (error) {
         toast.error(error instanceof Error ? error.message : String(error));
       }
     },
-    [sessions, toast, workspace],
+    [sessions, toast],
   );
   const handleConnectPress = useCallback(
     (entry: SshHostEntry) => {
@@ -98,14 +86,12 @@ export function SshScreen({
     ) : null;
   const parts: SshScreenParts = {
     theme,
-    header,
     chips,
     hosts: (
       <HostsList
         theme={theme}
         layout={layout}
         selectedKey={browsing?.key ?? null}
-        connectDisabled={workspace === null}
         onConnect={handleConnectPress}
         onBrowse={handleBrowse}
       />
@@ -116,7 +102,6 @@ export function SshScreen({
         entry={browsing}
         theme={theme}
         layout={layout}
-        workspace={workspace}
         transfers={transfers}
         onClose={wide ? undefined : closeBrowser}
       />

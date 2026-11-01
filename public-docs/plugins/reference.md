@@ -2413,6 +2413,8 @@ The returned API covers projects, workspaces, agents, terminals, providers, and 
 
 Create an [owned terminal](/docs/sdk/reference#owned-terminals) with `paseo.terminals.create({ workspaceId, command, args, owned: true })` and render it with `TerminalView` from `@getpaseo/plugin/client/ui`. The terminal stays out of the workspace's terminal tabs; your screen or panel is its only view.
 
+A screen that has no workspace, such as a sidebar surface, creates the terminal from a server handler instead: `paseo.terminals.create({ cwd, command, args, owned: true })` with no `workspaceId`. That terminal belongs to the plugin alone: no workspace lists it, archiving a workspace leaves it running, and it ends when the plugin stops, reloads, or is removed, or the daemon restarts. Return its `{ id, cwd }` from the handler for `TerminalView`. The UI finds these terminals again with `list({ owned: true })`.
+
 | Prop       | Required | Meaning                                                                                                  |
 | ---------- | -------- | -------------------------------------------------------------------------------------------------------- |
 | `terminal` | Yes      | `{ id, cwd }`, which a `PaseoTerminal` from `paseo.terminals` satisfies. It runs on the plugin's host.   |
@@ -2422,6 +2424,19 @@ Create an [owned terminal](/docs/sdk/reference#owned-terminals) with `paseo.term
 `TerminalView` takes keystrokes, password entry, resize, colors, copy and paste, find, and the mobile key bar. It leaves out what only a workspace tab needs: swiping to the mobile agent list or file explorer, and opening workspace file links. Closing your screen does not end the process. `list({ workspaceId, owned: true })` finds it again later, so a plugin can reattach after a reload; `ref(id).kill()` ends it.
 
 `TerminalView` exists in apps from the release that added owned terminals; an older app's `@getpaseo/plugin/client/ui` has no such export, and `requirements.paseo` cannot block it. Read it as `import * as ui` and show a message when `ui.TerminalView` is `undefined`. The [SSH plugin](https://github.com/getpaseo/paseo/tree/main/plugin-examples/ssh) is a complete example.
+
+### Move files between the host and the device
+
+`useDeviceFiles()` from `@getpaseo/plugin/client/ui` moves files between the plugin's host and the phone, browser, or desktop viewing Paseo, without a workspace.
+
+| Method                      | What it does                                                                                                                                                                                                                                                                                               |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `save({ directory, path })` | Saves the host file `path` (relative to the absolute `directory`) to the device: the browser's download on web and desktop, the share sheet on iOS and Android. Progress shows in Paseo's download toast. Rejects when the download fails. Over a relay the file is read through the session, up to 64 MB. |
+| `pick()`                    | Opens the device's file picker, uploads the chosen file to the host, and resolves `{ id, fileName, size }`, or `null` when the user cancels. The file is read into memory, so it is capped at 50 MB.                                                                                                       |
+
+Hand `{ id, fileName }` from `pick()` to a server handler and call `server.resolveDeviceUpload(handle)` from your `contribute` function. It resolves to `{ path, size, remove() }` for an upload the daemon received, and rejects for anything else, so a value from the UI cannot name another file on the host. Call `remove()` when you are done with the file. To offer a host file for `save`, write it to a directory your plugin owns and delete it once the device has it.
+
+Both are absent on older apps and daemons, and `requirements.paseo` cannot block either: check `useDeviceFiles === undefined` in the UI and `server.resolveDeviceUpload === undefined` on the server, and ask the user to update.
 
 ### Discover hosts and target another host
 

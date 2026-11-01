@@ -6,6 +6,11 @@ import { FileTransferOpcode, type FileTransferFrame } from "@getpaseo/protocol/b
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
 import type { FileUploadRequest, FileUploadResponse } from "../messages.js";
 
+/** Every upload lands in `<uploads directory>/<upload id>/<file name>`. */
+export function resolveUploadsDirectory(paseoHome: string): string {
+  return join(paseoHome, "uploads");
+}
+
 interface FileUploadStoreOptions {
   paseoHome: string;
   staleUploadTimeoutMs?: number;
@@ -51,7 +56,7 @@ export class FileUploadStore {
     if (existingUpload) void this.cancel(existingUpload).catch(() => {});
     const fileName = sanitizeFileName(request.fileName);
     const id = `upload_${randomUUID()}`;
-    const uploadDir = join(this.paseoHome, "uploads", id);
+    const uploadDir = join(resolveUploadsDirectory(this.paseoHome), id);
     const upload: PendingUpload = {
       requestId: request.requestId,
       id,
@@ -123,7 +128,7 @@ export class FileUploadStore {
   }
 
   private async startWriting(upload: PendingUpload): Promise<void> {
-    await mkdir(join(this.paseoHome, "uploads", upload.id), { recursive: true });
+    await mkdir(join(resolveUploadsDirectory(this.paseoHome), upload.id), { recursive: true });
     await writeFile(upload.path, new Uint8Array());
     upload.started = true;
   }
@@ -196,7 +201,10 @@ export class FileUploadStore {
   }
 
   private async removeUploadDirectory(upload: PendingUpload): Promise<void> {
-    await rm(join(this.paseoHome, "uploads", upload.id), { recursive: true, force: true });
+    await rm(join(resolveUploadsDirectory(this.paseoHome), upload.id), {
+      recursive: true,
+      force: true,
+    });
   }
 }
 

@@ -2098,6 +2098,8 @@ function PullRequestAction({ theme }: PluginSurfaceProps) {
 
 用 `paseo.terminals.create({ workspaceId, command, args, owned: true })` 创建[受管终端](/docs/sdk/reference#owned-terminals)，再用 `@getpaseo/plugin/client/ui` 中的 `TerminalView` 渲染。该终端不会出现在工作区的终端标签页里；你的屏幕或面板是它唯一的视图。
 
+没有工作区的屏幕（例如侧边栏界面）改为在服务端处理器中创建终端：`paseo.terminals.create({ cwd, command, args, owned: true })`，不传 `workspaceId`。该终端只属于插件：没有工作区会列出它，归档工作区不会结束它；插件停止、重新加载或被移除，或守护进程重启时，它会结束。从处理器返回它的 `{ id, cwd }` 交给 `TerminalView`。UI 用 `list({ owned: true })` 重新找到这些终端。
+
 | 属性       | 必填 | 含义                                                                                     |
 | ---------- | ---- | ---------------------------------------------------------------------------------------- |
 | `terminal` | 是   | `{ id, cwd }`，`paseo.terminals` 返回的 `PaseoTerminal` 即满足。它运行在插件所在的主机。 |
@@ -2107,6 +2109,19 @@ function PullRequestAction({ theme }: PluginSurfaceProps) {
 `TerminalView` 支持键盘输入、密码输入、调整大小、颜色、复制粘贴、查找和移动端按键栏。它去掉了只有工作区标签页才需要的部分：滑动到移动端 Agent 列表或文件浏览器，以及打开工作区文件链接。关闭你的屏幕不会结束进程；之后可用 `list({ workspaceId, owned: true })` 重新找到它，因此插件重新加载后可以重新附加；`ref(id).kill()` 结束它。
 
 `TerminalView` 随加入受管终端的版本提供；更早的应用在 `@getpaseo/plugin/client/ui` 中没有这个导出，且 `requirements.paseo` 无法阻止它。请用 `import * as ui` 读取，并在 `ui.TerminalView` 为 `undefined` 时显示提示。[SSH 插件](https://github.com/getpaseo/paseo/tree/main/plugin-examples/ssh)是完整示例。
+
+### 在主机与设备之间传输文件 {#move-files-between-the-host-and-the-device}
+
+`@getpaseo/plugin/client/ui` 中的 `useDeviceFiles()` 在插件所在主机与正在查看 Paseo 的手机、浏览器或桌面之间传输文件，不需要工作区。
+
+| 方法                        | 作用                                                                                                                                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `save({ directory, path })` | 把主机文件 `path`（相对于绝对路径 `directory`）保存到设备：Web 和桌面端使用浏览器下载，iOS 和 Android 使用分享面板。进度显示在 Paseo 的下载提示中。下载失败时会 reject。通过中继连接时经由会话读取，最大 64 MB。 |
+| `pick()`                    | 打开设备的文件选择器，把所选文件上传到主机，并返回 `{ id, fileName, size }`；用户取消时返回 `null`。文件会读入内存，因此上限为 50 MB。                                                                           |
+
+把 `pick()` 返回的 `{ id, fileName }` 交给服务端处理器，并在 `contribute` 函数中调用 `server.resolveDeviceUpload(handle)`。对守护进程收到的上传，它返回 `{ path, size, remove() }`；其他任何值都会 reject，因此来自 UI 的值无法指向主机上的其他文件。用完文件后调用 `remove()`。要提供主机文件给 `save`，请把它写入插件自己拥有的目录，并在设备拿到后删除。
+
+更早的应用和守护进程没有这两个接口，且 `requirements.paseo` 无法阻止：在 UI 中检查 `useDeviceFiles === undefined`，在服务端检查 `server.resolveDeviceUpload === undefined`，并提示用户更新。
 
 ### 发现主机并指定另一台主机 {#discover-hosts-and-target-another-host}
 

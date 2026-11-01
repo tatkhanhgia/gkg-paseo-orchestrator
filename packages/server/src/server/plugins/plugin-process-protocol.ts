@@ -46,6 +46,8 @@ export type PluginProcessRequest =
       appVersion: string;
       pluginDirectory: string;
       settingsDirectory?: string;
+      /** Where the daemon stores files uploaded from a device: `$PASEO_HOME/uploads`. */
+      uploadsDirectory?: string;
     }
   | {
       type: "provider.catalog_key";
@@ -166,6 +168,7 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
         appVersion: z.string(),
         pluginDirectory: z.string(),
         settingsDirectory: z.string().optional(),
+        uploadsDirectory: z.string().optional(),
       })
       .strict(),
     z

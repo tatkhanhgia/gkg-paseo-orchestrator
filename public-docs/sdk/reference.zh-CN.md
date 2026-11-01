@@ -165,9 +165,11 @@ nav: API 参考
 
 ### 受管终端 {#owned-terminals}
 
-受管终端仍绑定在它的工作区，但不会出现在工作区展示的任何位置：终端列表和标签页、工作区状态、注意力通知以及 Agent MCP 的终端列表。它让集成能在自己的界面里渲染终端。归档工作区或重启 daemon 仍会结束它。
+受管终端不会出现在工作区展示的任何位置：终端列表和标签页、工作区状态、注意力通知以及 Agent MCP 的终端列表。它让集成能在自己的界面里渲染终端。它属于创建它的工作区，归档该工作区或重启 daemon 会结束它；唯一的例外是插件服务端代码可以创建完全不属于任何工作区的受管终端（见下文），它只属于该插件。
 
 用 `createPaseoApi(client, { terminalOwner })` 创建 `PaseoApi`，再向 `create` 和 `list` 传入 `owned: true`。所有者由 SDK 盖章，调用方从不传所有者字符串。`list({ owned: true })` 只返回该 API 的所有者创建的终端；单独的 `ref(id)` 无法刷新受管终端，请用这个列表重新找到它。按终端 ID 附加流、输入、调整大小、capture 和 `kill` 与普通终端相同。受管终端不发出推送事件，因此请轮询列表或监听流的退出。
+
+插件的服务端代码可以省略 `workspaceId` 并传入 `cwd`：`paseo.terminals.create({ cwd, command, args, owned: true })` 会创建只属于该插件的终端。没有任何工作区会列出或归档它；插件停止、重新加载、崩溃或被移除时，以及守护进程重启时，它会结束。插件的所有受管终端，无论是否属于工作区，都会随插件一起结束。只有插件服务端的 `paseo` 能这样做，并通过 `terminals.capabilities.workspacelessOwned` 表明；更早的主机没有 `capabilities`。插件 UI 得到的 API 仍需要工作区，但可以用 `list({ owned: true })` 和 `ref(id).kill()` 列出并结束这些终端。所有权不是访问控制：任何已登录的客户端都可以按 ID 列出、附加、输入并结束受管终端。
 
 没有 `terminalOwner` 时 SDK 会抛出明确的错误；`server_info.features` 未报告 `owned-terminals` 的主机会以 “Update the host to use owned terminals.” 失败。插件的 `terminalOwner` 已是 `plugin:<id>`，只需传 `owned: true`；要显示终端，见 [`TerminalView`](/docs/plugins/reference#show-a-terminal-in-your-plugin)。
 

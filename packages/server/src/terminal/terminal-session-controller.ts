@@ -42,6 +42,7 @@ import type { TerminalActivity } from "@getpaseo/protocol/terminal-activity";
 import { terminalSubscriptionKey } from "@getpaseo/protocol/terminal-subscription-key";
 
 const MAX_TERMINAL_STREAM_SLOTS = 256;
+const PLUGIN_NAMESPACE = "plugin:";
 
 interface TerminalDirectorySubscription {
   cwd: string;
@@ -99,6 +100,11 @@ export interface TerminalSessionControllerOptions {
   // Bytes queued on the client transport but not yet sent, or null when the
   // transport exposes no backpressure signal (e.g. the multiplexed relay socket).
   getClientBufferedAmount?: (source: object) => number | null;
+  /**
+   * `plugin:<id>` when this session is a plugin's own subprocess session, else undefined. Only
+   * that session may create a terminal it owns without a workspace.
+   */
+  pluginTerminalOwner?: string;
 }
 
 interface TerminalWorkspaceRef {
@@ -146,6 +152,7 @@ export class TerminalSessionController {
   private readonly listTerminalWorkspaceRoots: () => Promise<readonly string[]>;
   private readonly clientSupportsWrapReflow: (source: object) => boolean;
   private readonly getClientBufferedAmount: (source: object) => number | null;
+  private readonly pluginTerminalOwner: string | undefined;
 
   private readonly subscribedDirectories = new Map<string, TerminalDirectorySubscription>();
   private unsubscribeTerminalsChanged: (() => void) | null = null;
@@ -164,6 +171,7 @@ export class TerminalSessionController {
       (async () => (await this.listTerminalWorkspaceRefs()).map((workspace) => workspace.cwd));
     this.clientSupportsWrapReflow = options.clientSupportsWrapReflow ?? (() => false);
     this.getClientBufferedAmount = options.getClientBufferedAmount ?? (() => 0);
+    this.pluginTerminalOwner = options.pluginTerminalOwner;
   }
 
   start(): void {
@@ -559,6 +567,24 @@ export class TerminalSessionController {
         return;
       }
 
+      const reserved = this.reservedPluginNamespaceError(msg);
+      if (reserved) {
+        this.emit({
+          type: "create_terminal_response",
+          payload: { terminal: null, error: reserved, requestId: msg.requestId },
+        });
+        return;
+      }
+
+      // A plugin's own session may create a terminal it owns without a workspace. Its owner is the
+      // plugin, so the owner doubles as the workspace key: no workspace has that id, so no
+      // workspace lists, archives, or reports it. This runs before the legacy cwd fallback, which
+      // would otherwise bind the terminal to whatever workspace contains its cwd.
+      if (msg.workspaceId === undefined && this.isWorkspacelessPluginTerminal(msg.owner)) {
+        await this.createWorkspacelessPluginTerminal(msg, msg.owner);
+        return;
+      }
+
       const workspaceId = msg.workspaceId ?? (await this.resolveLegacyTerminalWorkspaceId(msg.cwd));
       if (!workspaceId) {
         this.emit({
@@ -587,22 +613,7 @@ export class TerminalSessionController {
         rows: msg.size?.rows,
         cols: msg.size?.cols,
       });
-      this.emit({
-        type: "create_terminal_response",
-        payload: {
-          terminal: {
-            id: session.id,
-            name: session.name,
-            cwd: session.cwd,
-            workspaceId: session.workspaceId,
-            ...(session.owner === undefined ? {} : { owner: session.owner }),
-            ...(session.getTitle() ? { title: session.getTitle() } : {}),
-            activity: session.getActivity(),
-          },
-          error: null,
-          requestId: msg.requestId,
-        },
-      });
+      this.emitCreatedTerminal(session, msg.requestId);
     } catch (error) {
       this.sessionLogger.error({ err: error, cwd: msg.cwd }, "Failed to create terminal");
       this.emit({
@@ -614,6 +625,66 @@ export class TerminalSessionController {
         },
       });
     }
+  }
+
+  /**
+   * `plugin:` names belong to plugins. No request may name a `plugin:` workspace, since a
+   * workspace-less plugin terminal stores its owner there, and a plugin session may only use its
+   * own owner. The app's plugin APIs still create `plugin:<id>` owned terminals in a real workspace.
+   */
+  private reservedPluginNamespaceError(msg: CreateTerminalRequest): string | null {
+    if (msg.workspaceId?.startsWith(PLUGIN_NAMESPACE)) {
+      return "Workspace ids starting with plugin: are reserved";
+    }
+    if (
+      this.pluginTerminalOwner !== undefined &&
+      msg.owner?.startsWith(PLUGIN_NAMESPACE) &&
+      msg.owner !== this.pluginTerminalOwner
+    ) {
+      return "A plugin can only create terminals it owns";
+    }
+    return null;
+  }
+
+  private isWorkspacelessPluginTerminal(owner: string | undefined): owner is string {
+    return owner !== undefined && owner === this.pluginTerminalOwner;
+  }
+
+  private async createWorkspacelessPluginTerminal(
+    msg: CreateTerminalRequest,
+    owner: string,
+  ): Promise<void> {
+    if (!this.terminalManager) throw new Error("Terminal manager not available");
+    const session = await this.terminalManager.createTerminal({
+      cwd: msg.cwd,
+      workspaceId: owner,
+      owner,
+      name: msg.name,
+      command: msg.command,
+      args: msg.args,
+      rows: msg.size?.rows,
+      cols: msg.size?.cols,
+    });
+    this.emitCreatedTerminal(session, msg.requestId);
+  }
+
+  private emitCreatedTerminal(session: TerminalSession, requestId: string): void {
+    this.emit({
+      type: "create_terminal_response",
+      payload: {
+        terminal: {
+          id: session.id,
+          name: session.name,
+          cwd: session.cwd,
+          workspaceId: session.workspaceId,
+          ...(session.owner === undefined ? {} : { owner: session.owner }),
+          ...(session.getTitle() ? { title: session.getTitle() } : {}),
+          activity: session.getActivity(),
+        },
+        error: null,
+        requestId,
+      },
+    });
   }
 
   private async resolveLegacyTerminalWorkspaceId(cwd: string): Promise<string | null> {

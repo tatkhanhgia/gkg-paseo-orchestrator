@@ -87,3 +87,53 @@ test("owned terminals send the API's owner and require both a scope owner and a 
   );
   expect(createTerminal).toHaveBeenCalledTimes(1);
 });
+
+test("only a plugin subprocess API creates an owned terminal without a workspace, and it needs a cwd", async () => {
+  const createTerminal = vi.fn(async () => ({
+    terminal: {
+      id: "t1",
+      workspaceId: "plugin:ssh",
+      cwd: "/home/u",
+      name: "ssh",
+      owner: "plugin:ssh",
+    },
+    error: null,
+    requestId: "r",
+  }));
+  const resolveWorkspaceDirectory = vi.fn(async () => "/w");
+  const make = (workspacelessOwned: boolean) =>
+    createTerminalActions(
+      {
+        ensureConnected: () => {},
+        getLastServerInfoMessage: () => ({
+          status: "server_info" as const,
+          serverId: "host",
+          hostname: null,
+          version: null,
+          features: { workspaceTerminals: true, "owned-terminals": true },
+        }),
+        createTerminal,
+      } as unknown as Parameters<typeof createTerminalActions>[0],
+      resolveWorkspaceDirectory,
+      "plugin:ssh",
+      { workspacelessOwned },
+    );
+
+  const plugin = make(true);
+  expect(plugin.capabilities).toEqual({ workspacelessOwned: true });
+  expect(make(false).capabilities).toEqual({ workspacelessOwned: false });
+  const created = await plugin.create({ cwd: "/home/u", owned: true, command: "ssh" });
+  expect(created.current()).toMatchObject({ workspaceId: "plugin:ssh", owner: "plugin:ssh" });
+  expect(createTerminal).toHaveBeenCalledWith("/home/u", undefined, undefined, {
+    command: "ssh",
+    owner: "plugin:ssh",
+  });
+
+  await expect(plugin.create({ owned: true })).rejects.toThrow("cwd is required");
+  await expect(plugin.create({ cwd: "/home/u" })).rejects.toThrow("workspaceId is required");
+  await expect(make(false).create({ cwd: "/home/u", owned: true })).rejects.toThrow(
+    "workspaceId is required",
+  );
+  expect(createTerminal).toHaveBeenCalledTimes(1);
+  expect(resolveWorkspaceDirectory).not.toHaveBeenCalled();
+});

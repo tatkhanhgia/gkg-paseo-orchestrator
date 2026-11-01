@@ -6,7 +6,9 @@ export type {
   UsageDetail,
 } from "./usage.js";
 export type {
+  PluginDeviceUpload,
   PluginHandlerContext,
+  PluginResolvedDeviceUpload,
   PluginServerContext,
   PluginServerContribution,
   PluginSettings,

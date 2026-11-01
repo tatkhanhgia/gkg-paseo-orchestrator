@@ -123,6 +123,7 @@ interface RemoteProviderConnection {
 
 interface PluginRuntimeDependencies {
   settingsDirectory?: string;
+  uploadsDirectory?: string;
   onSettingsChanged?: (pluginId: string, settingsId: string) => void;
   spawnChild?: () => PluginChild;
   sessionHost?: PluginPaseoSessionHost;
@@ -758,6 +759,7 @@ export class PluginRuntime {
             settingsDirectory: this.dependencies.settingsDirectory
               ? path.join(this.dependencies.settingsDirectory, pluginId)
               : undefined,
+            uploadsDirectory: this.dependencies.uploadsDirectory,
           }).catch(fail);
         },
       );

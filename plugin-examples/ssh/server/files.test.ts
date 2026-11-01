@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   chmod,
@@ -15,15 +15,17 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cancelTransfer,
   listRemoteFiles,
-  listWorkspaceFiles,
+  RELEASE_GRACE_MS,
+  releaseDownload,
   startDownload,
   startUpload,
   stopTransfers,
   transferStatus,
+  type ResolveDeviceUpload,
 } from "./files";
 import type { Transfer } from "../shared/contracts";
 import { MAX_FINISHED_TRANSFERS } from "./transfers";
@@ -86,19 +88,22 @@ process.stdin.on("data", (chunk) => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-type Context = Parameters<typeof startDownload>[1];
-
 async function waitFor(
   transferId: string,
   done: (transfer: Transfer) => boolean,
 ): Promise<Transfer> {
   for (let attempt = 0; attempt < 600; attempt += 1) {
-    const status = transferStatus({ transferId, workspaceId: "w1" });
+    const status = transferStatus({ transferId });
     if (status.ok && done(status.transfer)) return status.transfer;
     if (!status.ok) throw new Error(`transfer vanished: ${status.message}`);
     await sleep(25);
   }
   throw new Error("transfer did not reach the expected state");
+}
+
+/** Waits for a removal that runs in the background, such as a timer's. */
+async function waitForRemoval(target: string): Promise<void> {
+  for (let attempt = 0; attempt < 200 && existsSync(target); attempt += 1) await sleep(5);
 }
 
 const isEnded = (transfer: Transfer) => transfer.state !== "running";
@@ -111,18 +116,27 @@ const successes = <Result extends { ok: boolean }>(results: Result[]) =>
   results.filter((result) => result.ok);
 
 /** Starts a download and waits for it, flattening start and final errors into one result. */
-async function downloadAndWait(input: Parameters<typeof startDownload>[0], context: Context) {
-  const started = await startDownload(input, context);
+async function downloadAndWait(input: Parameters<typeof startDownload>[0]) {
+  const started = await startDownload(input);
   if (!started.ok) return started;
   const transfer = await waitFor(started.transferId, isEnded);
   if (transfer.state === "done") {
-    return { ok: true as const, fileName: transfer.fileName, size: transfer.bytesDone };
+    return {
+      ok: true as const,
+      transferId: started.transferId,
+      fileName: transfer.fileName,
+      size: transfer.bytesDone,
+      staged: transfer.staged!,
+    };
   }
   return { ok: false as const, ...transfer.error! };
 }
 
-async function uploadAndWait(input: Parameters<typeof startUpload>[0], context: Context) {
-  const started = await startUpload(input, context);
+async function uploadAndWait(
+  input: Parameters<typeof startUpload>[0],
+  resolveUpload: ResolveDeviceUpload,
+) {
+  const started = await startUpload(input, resolveUpload);
   if (!started.ok) return started;
   const transfer = await waitFor(started.transferId, isEnded);
   if (transfer.state === "done") {
@@ -147,23 +161,54 @@ const TARGET = { host: "build-box", user: "deploy", port: 2222 };
 
 // These tests run the real handlers. `ssh` on PATH is a script that records its argv and then
 // serves the real OpenSSH `sftp-server` over stdio, so the SFTP bytes, the spawn, and the file
-// systems on both sides are real. Only the network hop is replaced.
+// systems on both sides are real. Only the network hop is replaced. Downloads are staged under
+// the OS temp directory, which TMPDIR points into the sandbox.
 const listOnce = () => listRemoteFiles({ target: TARGET });
 
 describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing over sftp", () => {
   let sandbox: string;
   let remoteHome: string;
-  let workspace: string;
+  let uploads: string;
+  let temp: string;
   let argvLog: string;
   let savedPath: string | undefined;
+  let savedTmpdir: string | undefined;
   const big = randomBytes(700 * 1024);
 
-  const context = () =>
-    ({
-      paseo: {
-        workspaces: { ref: () => ({ refresh: async () => ({ workspaceDirectory: workspace }) }) },
-      },
-    }) as never;
+  /** A file the user picked on the device, as the daemon's upload store leaves it. */
+  async function pickedOnDevice(fileName: string, content: string | Buffer) {
+    const id = `upload_${randomUUID()}`;
+    await mkdir(path.join(uploads, id));
+    await writeFile(path.join(uploads, id, fileName), content);
+    return { id, fileName };
+  }
+
+  // Stands in for the daemon's `resolveDeviceUpload`, whose confinement is tested in the server.
+  const resolveUpload: ResolveDeviceUpload = async (handle) => {
+    const filePath = path.join(uploads, handle.id, handle.fileName);
+    const info = await stat(filePath).catch(() => {
+      throw new Error("The upload no longer exists.");
+    });
+    return {
+      path: filePath,
+      size: info.size,
+      remove: () => rm(path.join(uploads, handle.id), { recursive: true, force: true }),
+    };
+  };
+
+  const uploadExists = (handle: { id: string }) => existsSync(path.join(uploads, handle.id));
+
+  /** Every per-download directory currently staged under the sandbox temp directory. */
+  async function stagedDirectories(): Promise<string[]> {
+    const roots = (await readdir(temp)).filter((name) => name.startsWith("paseo-ssh-"));
+    const found: string[] = [];
+    for (const root of roots) {
+      for (const name of await readdir(path.join(temp, root))) {
+        if (name.startsWith("d-")) found.push(path.join(temp, root, name));
+      }
+    }
+    return found;
+  }
 
   async function installFakeSsh(): Promise<void> {
     const bin = path.join(sandbox, "bin");
@@ -192,10 +237,12 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
   beforeEach(async () => {
     sandbox = await realpath(await mkdtemp(path.join(tmpdir(), "ssh-files-")));
     remoteHome = path.join(sandbox, "remote");
-    workspace = path.join(sandbox, "workspace");
+    uploads = path.join(sandbox, "uploads");
+    temp = path.join(sandbox, "tmp");
     argvLog = path.join(sandbox, "argv.log");
     await mkdir(path.join(remoteHome, "docs"), { recursive: true });
-    await mkdir(path.join(workspace, "sub"), { recursive: true });
+    await mkdir(uploads);
+    await mkdir(temp);
     await writeFile(path.join(remoteHome, "big.bin"), big);
     await writeFile(path.join(remoteHome, "empty.txt"), "");
     await writeFile(path.join(remoteHome, HOSTILE_NAME), "hostile");
@@ -203,17 +250,21 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
     await symlink("docs", path.join(remoteHome, "link-dir"));
     await symlink("big.bin", path.join(remoteHome, "link-file"));
     await symlink("nope", path.join(remoteHome, "link-broken"));
-    await writeFile(path.join(workspace, "report.txt"), "report body");
-    await writeFile(path.join(workspace, "sub", "inner.txt"), "inner body");
-    await writeFile(path.join(workspace, "big-up.bin"), big);
     await installFakeSsh();
+    savedTmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = temp;
     process.env.FAKE_SSH_ARGV_LOG = argvLog;
     process.env.FAKE_SFTP_HOME = remoteHome;
     delete process.env.FAKE_SSH_STDERR;
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+    // Ends anything still running and removes this process's staging root before the sandbox goes.
+    await stopTransfers(15_000);
     process.env.PATH = savedPath;
+    if (savedTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = savedTmpdir;
     delete process.env.FAKE_SSH_ARGV_LOG;
     delete process.env.FAKE_SFTP_HOME;
     delete process.env.FAKE_SSH_STDERR;
@@ -227,11 +278,10 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
   }
 
   async function expectNoInjection(): Promise<void> {
-    for (const directory of [remoteHome, workspace, sandbox, process.cwd()]) {
+    for (const directory of [remoteHome, uploads, temp, sandbox, process.cwd()]) {
       expect(existsSync(path.join(directory, "PWNED"))).toBe(false);
     }
   }
-
   describe("ssh invocation", () => {
     it("runs batch-mode ssh with strict host keys, no shared connection, and the sftp subsystem", async () => {
       await listRemoteFiles({ target: TARGET });
@@ -343,29 +393,17 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
     });
   });
 
-  describe("workspace listing", () => {
-    it("lists the workspace directory the daemon resolves for the workspace id", async () => {
-      const result = await listWorkspaceFiles({ workspaceId: "w1" }, context());
-      expect(result).toMatchObject({ ok: true, root: workspace, directory: "", parent: null });
-      expect(entryNames(result)).toEqual(["sub", "big-up.bin", "report.txt"]);
-    });
-
-    it("refuses a directory outside the workspace", async () => {
-      await symlink(remoteHome, path.join(workspace, "escape"));
-      await expect(
-        listWorkspaceFiles({ workspaceId: "w1", directory: "escape" }, context()),
-      ).resolves.toMatchObject({ ok: false, code: "invalid" });
-    });
-  });
-
   describe("download", () => {
-    it("copies a multi-chunk file byte for byte into the workspace directory", async () => {
-      const result = await downloadAndWait(
-        { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/big.bin` },
-        context(),
-      );
-      expect(result).toEqual({ ok: true, fileName: "big.bin", size: big.length });
-      expect(Buffer.compare(await readFile(path.join(workspace, "big.bin")), big)).toBe(0);
+    it("copies a multi-chunk file byte for byte into a private staging directory", async () => {
+      const result = await downloadAndWait({ target: TARGET, remotePath: `${remoteHome}/big.bin` });
+      expect(result).toMatchObject({ ok: true, fileName: "big.bin", size: big.length });
+      if (!result.ok) return;
+      expect(result.staged.path).toBe("big.bin");
+      // Under the OS temp directory, never a workspace, and readable only by the daemon user.
+      expect(path.relative(temp, result.staged.directory).startsWith("paseo-ssh-")).toBe(true);
+      expect((await stat(result.staged.directory)).mode & 0o777).toBe(0o700);
+      const staged = path.join(result.staged.directory, result.staged.path);
+      expect(Buffer.compare(await readFile(staged), big)).toBe(0);
     });
 
     it("copies empty files, linked files, and files with hostile names", async () => {
@@ -374,78 +412,90 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
         ["link-file", "link-file", big],
         [HOSTILE_NAME, HOSTILE_NAME, Buffer.from("hostile")],
       ] as const) {
-        await expect(
-          downloadAndWait(
-            { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/${remote}` },
-            context(),
-          ),
-        ).resolves.toMatchObject({ ok: true, fileName });
-        expect(Buffer.compare(await readFile(path.join(workspace, fileName)), content)).toBe(0);
+        const result = await downloadAndWait({
+          target: TARGET,
+          remotePath: `${remoteHome}/${remote}`,
+        });
+        expect(result).toMatchObject({ ok: true, fileName });
+        if (!result.ok) continue;
+        const staged = path.join(result.staged.directory, result.staged.path);
+        expect(Buffer.compare(await readFile(staged), content)).toBe(0);
       }
       await expectNoInjection();
     });
 
-    it("never overwrites an existing workspace file and does not start ssh", async () => {
-      await writeFile(path.join(workspace, "big.bin"), "mine");
-      await expect(
-        downloadAndWait(
-          { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/big.bin` },
-          context(),
-        ),
-      ).resolves.toMatchObject({ ok: false, code: "exists" });
-      await expect(readFile(path.join(workspace, "big.bin"), "utf8")).resolves.toBe("mine");
-      expect(await spawnedArgv()).toEqual([]);
+    it("stages two downloads of the same name side by side without overwriting either", async () => {
+      const first = await downloadAndWait({ target: TARGET, remotePath: `${remoteHome}/big.bin` });
+      await writeFile(path.join(remoteHome, "big.bin"), "changed");
+      const third = await downloadAndWait({ target: TARGET, remotePath: `${remoteHome}/big.bin` });
+      if (!first.ok || !third.ok) throw new Error("downloads failed");
+      expect(first.staged.directory).not.toBe(third.staged.directory);
+      expect(
+        Buffer.compare(await readFile(path.join(first.staged.directory, "big.bin")), big),
+      ).toBe(0);
+      await expect(readFile(path.join(third.staged.directory, "big.bin"), "utf8")).resolves.toBe(
+        "changed",
+      );
     });
 
-    it("does not write through a link planted at the destination", async () => {
-      const victim = path.join(sandbox, "victim.txt");
-      await writeFile(victim, "victim");
-      await symlink(victim, path.join(workspace, "empty.txt"));
+    it("leaves nothing staged when the remote path is not a regular file", async () => {
       await expect(
-        downloadAndWait(
-          { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/empty.txt` },
-          context(),
-        ),
-      ).resolves.toMatchObject({ ok: false, code: "exists" });
-      await expect(readFile(victim, "utf8")).resolves.toBe("victim");
-    });
-
-    it("removes the empty local file when the remote path is not a regular file", async () => {
-      await expect(
-        downloadAndWait(
-          { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/docs` },
-          context(),
-        ),
+        downloadAndWait({ target: TARGET, remotePath: `${remoteHome}/docs` }),
       ).resolves.toMatchObject({ ok: false, code: "not-a-file" });
       await expect(
-        downloadAndWait(
-          { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/missing.txt` },
-          context(),
-        ),
+        downloadAndWait({ target: TARGET, remotePath: `${remoteHome}/missing.txt` }),
       ).resolves.toMatchObject({ ok: false, code: "not-found" });
-      expect((await readdir(workspace)).sort()).toEqual(["big-up.bin", "report.txt", "sub"]);
+      expect(await stagedDirectories()).toEqual([]);
     });
 
     it.each(["/", "/..", "/a/.."])(
       "refuses the remote path %j as a file name",
       async (remotePath) => {
-        await expect(
-          downloadAndWait({ target: TARGET, workspaceId: "w1", remotePath }, context()),
-        ).resolves.toMatchObject({ ok: false, code: "invalid" });
+        await expect(downloadAndWait({ target: TARGET, remotePath })).resolves.toMatchObject({
+          ok: false,
+          code: "invalid",
+        });
       },
     );
+
+    it("removes the staged copy a grace period after the device saved it", async () => {
+      const result = await downloadAndWait({
+        target: TARGET,
+        remotePath: `${remoteHome}/empty.txt`,
+      });
+      if (!result.ok) throw new Error(result.message);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      expect(releaseDownload({ transferId: result.transferId })).toEqual({ ok: true });
+      // The transfer no longer offers the copy, so nothing saves it twice.
+      expect(transferStatus({ transferId: result.transferId })).toMatchObject({
+        ok: true,
+        transfer: { state: "done" },
+      });
+      const status = transferStatus({ transferId: result.transferId });
+      expect(status.ok && status.transfer.staged).toBeFalsy();
+      vi.advanceTimersByTime(RELEASE_GRACE_MS - 1);
+      expect(existsSync(result.staged.directory)).toBe(true);
+      vi.advanceTimersByTime(1);
+      vi.useRealTimers();
+      await waitForRemoval(result.staged.directory);
+      expect(existsSync(result.staged.directory)).toBe(false);
+    });
+
+    it("answers a release for an unknown transfer with not-found", () => {
+      expect(releaseDownload({ transferId: "nope" })).toMatchObject({
+        ok: false,
+        code: "not-found",
+      });
+    });
   });
 
-  describe("upload", () => {
-    it("copies a workspace file to the remote directory", async () => {
+  describe("upload from the device", () => {
+    it("copies the picked file to the remote directory and deletes the upload", async () => {
+      const picked = await pickedOnDevice("inner.txt", "inner body");
       const result = await uploadAndWait(
-        {
-          target: TARGET,
-          workspaceId: "w1",
-          localPath: "sub/inner.txt",
-          remoteDirectory: `${remoteHome}/docs`,
-        },
-        context(),
+        { target: TARGET, upload: picked, remoteDirectory: `${remoteHome}/docs` },
+        resolveUpload,
       );
       expect(result).toEqual({
         ok: true,
@@ -455,72 +505,84 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
       await expect(readFile(path.join(remoteHome, "docs", "inner.txt"), "utf8")).resolves.toBe(
         "inner body",
       );
+      expect(uploadExists(picked)).toBe(false);
     });
 
     it("copies a multi-chunk file byte for byte", async () => {
+      const picked = await pickedOnDevice("big-up.bin", big);
       await uploadAndWait(
-        { target: TARGET, workspaceId: "w1", localPath: "big-up.bin", remoteDirectory: remoteHome },
-        context(),
+        { target: TARGET, upload: picked, remoteDirectory: remoteHome },
+        resolveUpload,
       );
       expect(Buffer.compare(await readFile(path.join(remoteHome, "big-up.bin")), big)).toBe(0);
     });
 
-    it("never overwrites an existing remote file", async () => {
+    it("never overwrites an existing remote file, and still deletes the upload", async () => {
       await writeFile(path.join(remoteHome, "report.txt"), "remote original");
+      const picked = await pickedOnDevice("report.txt", "report body");
       await expect(
         uploadAndWait(
-          {
-            target: TARGET,
-            workspaceId: "w1",
-            localPath: "report.txt",
-            remoteDirectory: remoteHome,
-          },
-          context(),
+          { target: TARGET, upload: picked, remoteDirectory: remoteHome },
+          resolveUpload,
         ),
       ).resolves.toMatchObject({ ok: false, code: "exists" });
       await expect(readFile(path.join(remoteHome, "report.txt"), "utf8")).resolves.toBe(
         "remote original",
       );
+      expect(uploadExists(picked)).toBe(false);
     });
 
-    it("refuses local paths that leave the workspace directory", async () => {
-      await symlink(path.join(remoteHome, "empty.txt"), path.join(workspace, "linked.txt"));
+    it("refuses a handle the daemon does not resolve, without starting ssh", async () => {
+      await expect(
+        startUpload(
+          {
+            target: TARGET,
+            upload: { id: "upload_unknown", fileName: "secret.txt" },
+            remoteDirectory: remoteHome,
+          },
+          resolveUpload,
+        ),
+      ).resolves.toMatchObject({ ok: false, code: "not-found" });
+      expect(await spawnedArgv()).toEqual([]);
+    });
+
+    it("refuses a resolved upload that is a link out of its folder", async () => {
       await writeFile(path.join(sandbox, "outside.txt"), "outside");
-      for (const localPath of ["linked.txt", "../outside.txt", path.join(sandbox, "outside.txt")]) {
-        await expect(
-          uploadAndWait(
-            { target: TARGET, workspaceId: "w1", localPath, remoteDirectory: remoteHome },
-            context(),
-          ),
-        ).resolves.toMatchObject({ ok: false, code: "invalid" });
-      }
-      expect(existsSync(path.join(remoteHome, "outside.txt"))).toBe(false);
+      const id = `upload_${randomUUID()}`;
+      await mkdir(path.join(uploads, id));
+      await symlink(path.join(sandbox, "outside.txt"), path.join(uploads, id, "linked.txt"));
+      await expect(
+        uploadAndWait(
+          { target: TARGET, upload: { id, fileName: "linked.txt" }, remoteDirectory: remoteHome },
+          resolveUpload,
+        ),
+      ).resolves.toMatchObject({ ok: false, code: "invalid" });
       expect(existsSync(path.join(remoteHome, "linked.txt"))).toBe(false);
+      expect(await spawnedArgv()).toEqual([]);
+    });
+
+    it("asks for a host update when the daemon cannot resolve device uploads", async () => {
+      const picked = await pickedOnDevice("report.txt", "report body");
+      await expect(
+        startUpload({ target: TARGET, upload: picked, remoteDirectory: remoteHome }, undefined),
+      ).resolves.toEqual({
+        ok: false,
+        code: "failed",
+        message: "Update the host to upload files from this device.",
+      });
     });
 
     it("refuses a remote destination that is a file or missing", async () => {
-      await expect(
-        uploadAndWait(
-          {
-            target: TARGET,
-            workspaceId: "w1",
-            localPath: "report.txt",
-            remoteDirectory: `${remoteHome}/big.bin`,
-          },
-          context(),
-        ),
-      ).resolves.toMatchObject({ ok: false, code: "not-a-directory" });
-      await expect(
-        uploadAndWait(
-          {
-            target: TARGET,
-            workspaceId: "w1",
-            localPath: "report.txt",
-            remoteDirectory: `${remoteHome}/missing`,
-          },
-          context(),
-        ),
-      ).resolves.toMatchObject({ ok: false, code: "not-found" });
+      for (const [remoteDirectory, code] of [
+        [`${remoteHome}/big.bin`, "not-a-directory"],
+        [`${remoteHome}/missing`, "not-found"],
+      ] as const) {
+        const picked = await pickedOnDevice("report.txt", "report body");
+        await expect(
+          uploadAndWait({ target: TARGET, upload: picked, remoteDirectory }, resolveUpload),
+        ).resolves.toMatchObject({ ok: false, code });
+        expect(uploadExists(picked)).toBe(false);
+      }
     });
   });
 
@@ -528,10 +590,7 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
     const GIB = 1024 ** 3;
 
     function download(remote: string) {
-      return startDownload(
-        { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/${remote}` },
-        context(),
-      );
+      return startDownload({ target: TARGET, remotePath: `${remoteHome}/${remote}` });
     }
 
     it("returns a transfer id at once and reports progress up to the full size", async () => {
@@ -539,7 +598,7 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
       const started = await download("big.bin");
       expect(started.ok).toBe(true);
       if (!started.ok) return;
-      const running = transferStatus({ transferId: started.transferId, workspaceId: "w1" });
+      const running = transferStatus({ transferId: started.transferId });
       expect(running).toMatchObject({ ok: true, transfer: { state: "running", kind: "download" } });
       const midway = await waitFor(started.transferId, progressOrEnded);
       expect(midway.total).toBe(big.length);
@@ -552,56 +611,42 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
       const started = await download("big.bin");
       if (!started.ok) throw new Error(started.message);
       await waitFor(started.transferId, hasProgress);
-      expect(cancelTransfer({ transferId: started.transferId, workspaceId: "w1" })).toEqual({
-        ok: true,
-      });
+      expect(cancelTransfer({ transferId: started.transferId })).toEqual({ ok: true });
       const ended = await waitFor(started.transferId, isEnded);
       expect(ended).toMatchObject({
         state: "cancelled",
         error: { code: "cancelled", message: "The transfer was cancelled." },
       });
       expect(ended.bytesDone).toBeLessThan(big.length);
-      expect(existsSync(path.join(workspace, "big.bin"))).toBe(false);
+      expect(ended.staged).toBeUndefined();
+      expect(await stagedDirectories()).toEqual([]);
     });
 
-    it("cancels an upload and removes the partial remote file", async () => {
+    it("cancels an upload, removes the partial remote file, and deletes the upload", async () => {
       process.env.FAKE_SSH_THROTTLE_MS = "100";
+      const picked = await pickedOnDevice("big-up.bin", big);
       const started = await startUpload(
-        { target: TARGET, workspaceId: "w1", localPath: "big-up.bin", remoteDirectory: remoteHome },
-        context(),
+        { target: TARGET, upload: picked, remoteDirectory: remoteHome },
+        resolveUpload,
       );
       if (!started.ok) throw new Error(started.message);
       await waitFor(started.transferId, hasProgress);
-      cancelTransfer({ transferId: started.transferId, workspaceId: "w1" });
+      cancelTransfer({ transferId: started.transferId });
       const ended = await waitFor(started.transferId, isEnded);
       expect(ended.state).toBe("cancelled");
       expect(existsSync(path.join(remoteHome, "big-up.bin"))).toBe(false);
+      expect(uploadExists(picked)).toBe(false);
     });
 
-    it("shows and cancels a transfer only for the workspace that started it", async () => {
-      process.env.FAKE_SSH_THROTTLE_MS = "60";
-      const started = await download("big.bin");
-      if (!started.ok) throw new Error(started.message);
-      const { transferId } = started;
-      expect(transferStatus({ transferId, workspaceId: "w2" })).toMatchObject({
-        ok: false,
-        code: "not-found",
-      });
-      expect(cancelTransfer({ transferId, workspaceId: "w2" })).toMatchObject({
-        ok: false,
-        code: "not-found",
-      });
-      // The refused cancel from another workspace did not stop it: it still finishes.
-      const finished = await waitFor(transferId, isEnded);
-      expect(finished).toMatchObject({ state: "done", bytesDone: big.length });
-    });
-
-    it("stops every running transfer on teardown and removes their partial files", async () => {
+    it("stops every running transfer on teardown and removes partial and staged files", async () => {
+      const done = await downloadAndWait({ target: TARGET, remotePath: `${remoteHome}/empty.txt` });
+      if (!done.ok) throw new Error(done.message);
       process.env.FAKE_SSH_THROTTLE_MS = "100";
       const downloading = await download("big.bin");
+      const picked = await pickedOnDevice("big-up.bin", big);
       const uploading = await startUpload(
-        { target: TARGET, workspaceId: "w1", localPath: "big-up.bin", remoteDirectory: remoteHome },
-        context(),
+        { target: TARGET, upload: picked, remoteDirectory: remoteHome },
+        resolveUpload,
       );
       if (!downloading.ok || !uploading.ok) throw new Error("transfers did not start");
       await waitFor(downloading.transferId, hasProgress);
@@ -610,11 +655,13 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
       await stopTransfers(15_000);
 
       for (const { transferId } of [downloading, uploading]) {
-        const status = transferStatus({ transferId, workspaceId: "w1" });
+        const status = transferStatus({ transferId });
         expect(status).toMatchObject({ ok: true, transfer: { state: "cancelled" } });
       }
-      expect(existsSync(path.join(workspace, "big.bin"))).toBe(false);
+      expect(existsSync(done.staged.directory)).toBe(false);
+      expect(await stagedDirectories()).toEqual([]);
       expect(existsSync(path.join(remoteHome, "big-up.bin"))).toBe(false);
+      expect(uploadExists(picked)).toBe(false);
     });
 
     it("returns at once from teardown when nothing is running", async () => {
@@ -624,52 +671,47 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
     });
 
     it("answers unknown transfer ids with not-found", () => {
-      expect(transferStatus({ transferId: "nope", workspaceId: "w1" })).toMatchObject({
+      expect(transferStatus({ transferId: "nope" })).toMatchObject({
         ok: false,
         code: "not-found",
       });
-      expect(cancelTransfer({ transferId: "nope", workspaceId: "w1" })).toMatchObject({
+      expect(cancelTransfer({ transferId: "nope" })).toMatchObject({
         ok: false,
         code: "not-found",
       });
     });
 
-    it("refuses a download over 2 GiB and leaves no local file", async () => {
+    it("refuses a download over 2 GiB and leaves nothing staged", async () => {
       const huge = path.join(remoteHome, "huge.bin");
       await writeFile(huge, "");
       await truncate(huge, 2 * GIB + 1);
-      await expect(
-        downloadAndWait({ target: TARGET, workspaceId: "w1", remotePath: huge }, context()),
-      ).resolves.toMatchObject({ ok: false, code: "too-large" });
-      expect(existsSync(path.join(workspace, "huge.bin"))).toBe(false);
+      await expect(downloadAndWait({ target: TARGET, remotePath: huge })).resolves.toMatchObject({
+        ok: false,
+        code: "too-large",
+      });
+      expect(await stagedDirectories()).toEqual([]);
     });
 
-    it("refuses an upload over 2 GiB before starting ssh", async () => {
-      const huge = path.join(workspace, "huge.bin");
-      await writeFile(huge, "");
-      await truncate(huge, 2 * GIB + 1);
+    it("refuses an upload over 2 GiB before starting ssh, and deletes the upload", async () => {
+      const picked = await pickedOnDevice("huge.bin", "");
+      await truncate(path.join(uploads, picked.id, "huge.bin"), 2 * GIB + 1);
       await expect(
-        startUpload(
-          { target: TARGET, workspaceId: "w1", localPath: "huge.bin", remoteDirectory: remoteHome },
-          context(),
-        ),
+        startUpload({ target: TARGET, upload: picked, remoteDirectory: remoteHome }, resolveUpload),
       ).resolves.toMatchObject({ ok: false, code: "too-large" });
       expect(await spawnedArgv()).toEqual([]);
+      expect(uploadExists(picked)).toBe(false);
     });
 
-    it("fails a download when the server reports no size, and removes the empty file", async () => {
+    it("fails a download when the server reports no size, and leaves nothing staged", async () => {
       process.env.FAKE_SSH_HOSTILE = path.join(sandbox, "bin", "hostile.js");
       await expect(
-        downloadAndWait(
-          { target: TARGET, workspaceId: "w1", remotePath: `${remoteHome}/empty.txt` },
-          context(),
-        ),
+        downloadAndWait({ target: TARGET, remotePath: `${remoteHome}/empty.txt` }),
       ).resolves.toMatchObject({
         ok: false,
         code: "failed",
         message: expect.stringContaining("size"),
       });
-      expect(existsSync(path.join(workspace, "empty.txt"))).toBe(false);
+      expect(await stagedDirectories()).toEqual([]);
     });
 
     it("allows four transfers at once and answers the fifth with busy", async () => {
@@ -696,13 +738,11 @@ describe.skipIf(!SFTP_SERVER || process.platform === "win32")("file browsing ove
         ids.push(started.transferId);
         await waitFor(started.transferId, isEnded);
       }
-      expect(transferStatus({ transferId: ids[0], workspaceId: "w1" })).toMatchObject({
+      expect(transferStatus({ transferId: ids[0] })).toMatchObject({
         ok: false,
         code: "not-found",
       });
-      expect(transferStatus({ transferId: ids.at(-1)!, workspaceId: "w1" })).toMatchObject({
-        ok: true,
-      });
+      expect(transferStatus({ transferId: ids.at(-1)! })).toMatchObject({ ok: true });
     });
   });
 });

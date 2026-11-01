@@ -9,7 +9,6 @@ const HOSTS_PANE_WIDTH = 360;
 /** The parts of the SSH screen, already built; a layout only arranges them. */
 export interface SshScreenParts {
   theme: Theme;
-  header: ReactNode;
   hosts: ReactNode;
   /** Files, or a hint, shown where no session is. */
   files: ReactNode;
@@ -27,7 +26,6 @@ function useLayoutStyles(theme: Theme, compact: boolean) {
     () => ({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
       content: { padding: compact ? 16 : 24, gap: 12 },
-      header: { paddingHorizontal: 24, paddingTop: 24 },
       split: { flex: 1, flexDirection: "row" as const },
       hostsPane: {
         width: HOSTS_PANE_WIDTH,
@@ -81,7 +79,6 @@ export function CompactSshLayout(parts: SshScreenParts) {
   }
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      {parts.header}
       {parts.chips}
       {parts.sessionsError ? <Text style={styles.error}>{parts.sessionsError}</Text> : null}
       {parts.transferList}
@@ -95,7 +92,6 @@ export function WideSshLayout(parts: SshScreenParts) {
   const styles = useLayoutStyles(parts.theme, false);
   return (
     <View style={styles.screen}>
-      {parts.header ? <View style={styles.header}>{parts.header}</View> : null}
       <View style={styles.split}>
         <ScrollView style={styles.hostsPane} contentContainerStyle={styles.content}>
           {parts.hosts}

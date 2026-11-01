@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { usePaseo } from "@getpaseo/plugin/client";
+import { usePaseo, useRpc } from "@getpaseo/plugin/client";
 import { useCallback } from "react";
+import { startSessionRpc } from "../shared/contracts";
 import type { SshHostEntry } from "../shared/hosts";
 import { openSshSession } from "./connect";
 
@@ -10,21 +11,18 @@ function describeError(error: unknown): string | null {
 }
 
 /**
- * The ssh sessions running in a workspace: the plugin's owned terminals. They outlive the screen,
- * so the list is read from the daemon each time. Owned terminals send no push events; callers
- * refresh when a session ends.
+ * The running ssh sessions: the plugin's owned terminals on this host, which belong to no
+ * workspace. They outlive the screen, so the list is read from the daemon each time. Owned
+ * terminals send no push events; callers refresh when a session ends.
  */
-export function useSshSessions(workspaceId: string | null, refreshToken = 0) {
+export function useSshSessions(refreshToken = 0) {
   const paseo = usePaseo();
+  const startSession = useRpc(startSessionRpc);
   const query = useQuery({
-    queryKey: ["ssh", "sessions", workspaceId, refreshToken],
-    enabled: workspaceId !== null,
+    queryKey: ["ssh", "sessions", refreshToken],
     retry: false,
     refetchOnWindowFocus: false,
-    queryFn: async () => {
-      if (workspaceId === null) return [];
-      return (await paseo.terminals.list({ workspaceId, owned: true })).entries;
-    },
+    queryFn: async () => (await paseo.terminals.list({ owned: true })).entries,
   });
   const { refetch } = query;
   const refresh = useCallback(async () => {
@@ -34,12 +32,11 @@ export function useSshSessions(workspaceId: string | null, refreshToken = 0) {
   /** Starts ssh to `entry` and returns the new session's id once it is listed. */
   const open = useCallback(
     async (entry: SshHostEntry): Promise<string> => {
-      if (workspaceId === null) throw new Error("Choose a target workspace first.");
-      const handle = await openSshSession(paseo, workspaceId, entry);
+      const session = await openSshSession(startSession, entry);
       await refetch();
-      return handle.id;
+      return session.id;
     },
-    [paseo, refetch, workspaceId],
+    [startSession, refetch],
   );
   const close = useCallback(
     async (id: string) => {

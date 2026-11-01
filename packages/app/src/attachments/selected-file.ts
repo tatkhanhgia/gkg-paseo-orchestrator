@@ -5,6 +5,8 @@ import { readDesktopFileBase64 } from "@/desktop/attachments/desktop-preview-url
 export interface SelectedFile {
   fileName: string;
   mimeType: string;
+  /** Bytes, when the picker reports it without reading the file. */
+  size?: number;
   readBytes(): Promise<Uint8Array>;
 }
 
