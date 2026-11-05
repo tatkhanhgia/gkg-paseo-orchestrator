@@ -1,4 +1,5 @@
 import type { SshConfigHost, SshUserHost } from "./contracts";
+import { sessionName } from "./sessions";
 import { describeUnsafePath, describeUnsafeValue, type SshConnectionTarget } from "./ssh-args";
 
 export interface SshHostEntry {
@@ -51,6 +52,27 @@ export function findHostEntries(query: string, entries: readonly SshHostEntry[])
   return entries.filter((entry) =>
     entry.source === "config" ? entry.label === wanted : entry.label.toLowerCase() === lowered,
   );
+}
+
+/** Entries whose label or address contain every word of `query`, ignoring case. A blank query keeps all. */
+export function filterHostEntries(
+  query: string,
+  entries: readonly SshHostEntry[],
+): readonly SshHostEntry[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return entries;
+  return entries.filter((entry) => {
+    const haystack = `${entry.label} ${entry.detail}`.toLowerCase();
+    return words.every((word) => haystack.includes(word));
+  });
+}
+
+/** The host a running session was started for, found by the terminal name `sessionName` gave it. */
+export function hostForSession(
+  terminalName: string,
+  entries: readonly SshHostEntry[],
+): SshHostEntry | null {
+  return entries.find((entry) => sessionName(entry.label) === terminalName) ?? null;
 }
 
 export type NewUserHostResult =

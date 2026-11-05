@@ -1,116 +1,129 @@
-import { Icon, ScrollView } from "@getpaseo/plugin/client/ui";
 import { useMemo, type ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
-import { MIN_TOUCH_TARGET } from "./file-row";
+import { Text, View } from "react-native";
 import type { Theme } from "./types";
+import { FONT_SIZE, SegmentedControl, SPACE } from "./ui-kit";
 
-const HOSTS_PANE_WIDTH = 360;
+const SIDEBAR_WIDTH = 280;
+
+/** Which view is on screen. Wide layouts have Sessions and SFTP in the sidebar; phones add Terminal. */
+export type SshView = "sessions" | "terminal" | "sftp";
+
+const WIDE_SEGMENTS = [
+  { value: "sessions", label: "Sessions", icon: "Server" },
+  { value: "sftp", label: "SFTP", icon: "FolderTree" },
+] as const;
+
+const COMPACT_SEGMENTS = [
+  { value: "sessions", label: "Sessions", icon: "Server" },
+  { value: "terminal", label: "Terminal", icon: "Terminal" },
+  { value: "sftp", label: "SFTP", icon: "FolderTree" },
+] as const;
 
 /** The parts of the SSH screen, already built; a layout only arranges them. */
 export interface SshScreenParts {
   theme: Theme;
+  view: SshView;
+  onViewChange(view: SshView): void;
+  /** The host list: the Sessions view. */
   hosts: ReactNode;
-  /** Files, or a hint, shown where no session is. */
+  /** The file browser, or a hint: the SFTP view. */
   files: ReactNode;
-  transferList: ReactNode;
-  chips: ReactNode;
+  /** The open sessions as tabs. */
+  tabs: ReactNode;
+  /** The shown session's terminal, or the empty state. */
+  terminal: ReactNode;
+  /** Running transfers, docked under whichever view is open so their polling never stops. */
+  transferDock: ReactNode;
+  statusBar: ReactNode;
   /** Why the session list could not be read, e.g. an old host. */
   sessionsError: string | null;
-  /** The shown session's terminal, or `null` while the files are shown. */
-  session: ReactNode;
-  onBackToHosts(): void;
 }
 
-function useLayoutStyles(theme: Theme, compact: boolean) {
+function useLayoutStyles(theme: Theme) {
   return useMemo(
     () => ({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
-      content: { padding: compact ? 16 : 24, gap: 12 },
-      split: { flex: 1, flexDirection: "row" as const },
-      hostsPane: {
-        width: HOSTS_PANE_WIDTH,
+      split: { flex: 1, minHeight: 0, flexDirection: "row" as const },
+      sidebar: {
+        width: SIDEBAR_WIDTH,
         flexGrow: 0,
         flexShrink: 0,
         borderRightWidth: 1,
         borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface1,
       },
-      rightPane: { flex: 1, minWidth: 0 },
-      toolbar: { padding: 24, paddingBottom: 12, gap: 8 },
-      compactToolbar: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        padding: 16,
-        paddingBottom: 12,
-        gap: 8,
+      switcher: { padding: SPACE.sm, paddingBottom: SPACE.xs },
+      fill: { flex: 1, minHeight: 0 },
+      main: { flex: 1, minWidth: 0, minHeight: 0, backgroundColor: theme.colors.surface0 },
+      error: {
+        color: theme.colors.statusDanger,
+        fontSize: FONT_SIZE.small,
+        padding: SPACE.sm,
       },
-      back: {
-        minHeight: MIN_TOUCH_TARGET,
-        minWidth: MIN_TOUCH_TARGET,
-        alignItems: "center" as const,
-        justifyContent: "center" as const,
-      },
-      muted: { color: theme.colors.foregroundMuted },
-      error: { color: theme.colors.statusDanger },
     }),
-    [theme, compact],
+    [theme],
   );
 }
 
-/** Phones: one thing at a time. A session fills the screen, with a way back to the hosts. */
+/** Phones: a switch across the top, and one view at a time at full width. */
 export function CompactSshLayout(parts: SshScreenParts) {
-  const styles = useLayoutStyles(parts.theme, true);
-  if (parts.session) {
-    return (
-      <View style={styles.screen}>
-        <View style={styles.compactToolbar}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back to hosts"
-            onPress={parts.onBackToHosts}
-            style={styles.back}
-          >
-            <Icon name="ChevronLeft" size={20} color={parts.theme.colors.foreground} />
-          </Pressable>
-          {parts.chips}
-        </View>
-        {parts.session}
-      </View>
+  const styles = useLayoutStyles(parts.theme);
+  let body: ReactNode = parts.hosts;
+  if (parts.view === "sftp") body = parts.files;
+  if (parts.view === "terminal") {
+    body = (
+      <>
+        {parts.tabs}
+        {parts.terminal}
+      </>
     );
   }
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      {parts.chips}
+    <View style={styles.screen}>
+      <View style={styles.switcher}>
+        <SegmentedControl
+          theme={parts.theme}
+          segments={COMPACT_SEGMENTS}
+          value={parts.view}
+          compact
+          onChange={parts.onViewChange}
+        />
+      </View>
       {parts.sessionsError ? <Text style={styles.error}>{parts.sessionsError}</Text> : null}
-      {parts.transferList}
-      {parts.files ?? parts.hosts}
-    </ScrollView>
+      <View style={styles.fill}>{body}</View>
+      {parts.transferDock}
+      {parts.statusBar}
+    </View>
   );
 }
 
-/** Wide: the hosts beside a pane that switches between the files and a session. */
+/** Wide: a sidebar of hosts or files beside the session tabs and terminal, a status bar below. */
 export function WideSshLayout(parts: SshScreenParts) {
-  const styles = useLayoutStyles(parts.theme, false);
+  const styles = useLayoutStyles(parts.theme);
+  const view = parts.view === "sftp" ? "sftp" : "sessions";
   return (
     <View style={styles.screen}>
       <View style={styles.split}>
-        <ScrollView style={styles.hostsPane} contentContainerStyle={styles.content}>
-          {parts.hosts}
-        </ScrollView>
-        <View style={styles.rightPane}>
-          <View style={styles.toolbar}>
-            {parts.chips}
-            {parts.sessionsError ? <Text style={styles.error}>{parts.sessionsError}</Text> : null}
+        <View style={styles.sidebar}>
+          <View style={styles.switcher}>
+            <SegmentedControl
+              theme={parts.theme}
+              segments={WIDE_SEGMENTS}
+              value={view}
+              compact={false}
+              onChange={parts.onViewChange}
+            />
           </View>
-          {parts.session ?? (
-            <ScrollView contentContainerStyle={styles.content}>
-              {parts.transferList}
-              {parts.files ?? (
-                <Text style={styles.muted}>Choose Files on a host to browse it.</Text>
-              )}
-            </ScrollView>
-          )}
+          <View style={styles.fill}>{view === "sftp" ? parts.files : parts.hosts}</View>
+          {parts.transferDock}
+        </View>
+        <View style={styles.main}>
+          {parts.sessionsError ? <Text style={styles.error}>{parts.sessionsError}</Text> : null}
+          {parts.tabs}
+          {parts.terminal}
         </View>
       </View>
+      {parts.statusBar}
     </View>
   );
 }

@@ -1,77 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useRpc } from "@getpaseo/plugin/client";
-import { Icon, useDeviceFiles, useToast, type DeviceFiles } from "@getpaseo/plugin/client/ui";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Icon, ScrollView } from "@getpaseo/plugin/client/ui";
+import { useCallback, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import type { z } from "zod";
-import {
-  cancelTransferRpc,
-  listRemoteFilesRpc,
-  releaseDownloadRpc,
-  startDownloadRpc,
-  startUploadRpc,
-  transferStatusRpc,
-  type FileEntry,
-  type FileFailure,
-  type Transfer,
-} from "../shared/contracts";
+import { listRemoteFilesRpc, type FileEntry, type FileFailure } from "../shared/contracts";
 import type { SshHostEntry } from "../shared/hosts";
 import { remoteJoin, remoteParent } from "../shared/remote-path";
-import { CANCELLED_MESSAGE } from "../shared/transfer-messages";
-import { FileRow, MIN_TOUCH_TARGET } from "./file-row";
-import { formatProgress } from "./format";
+import { FileRow } from "./file-row";
+import { REMOTE_KEY, UPDATE_APP_MESSAGE, type Transfers } from "./transfers";
 import type { Layout, Theme } from "./types";
-
-const REMOTE_KEY = ["ssh", "files", "remote"] as const;
-
-// An older app's ui module has no useDeviceFiles. The import is a property read, so it is
-// undefined there rather than a crash; the fallback is fixed per app, so hook order never changes.
-const hostDeviceFiles: typeof useDeviceFiles | undefined = useDeviceFiles;
-function noDeviceFiles(): DeviceFiles | null {
-  return null;
-}
-const useDeviceFilesIfAvailable: () => DeviceFiles | null = hostDeviceFiles ?? noDeviceFiles;
-const UPDATE_APP_MESSAGE = "Update the Paseo app to download or upload files here.";
-
-interface ToolbarButtonProps {
-  theme: Theme;
-  icon: string;
-  label: string;
-  disabled?: boolean;
-  onPress(): void;
-}
-
-function ToolbarButton({ theme, icon, label, disabled, onPress }: ToolbarButtonProps) {
-  const styles = useMemo(
-    () => ({
-      button: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        gap: 6,
-        minHeight: MIN_TOUCH_TARGET,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        opacity: disabled ? 0.5 : 1,
-      },
-      label: { color: theme.colors.foreground },
-    }),
-    [theme, disabled],
-  );
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      disabled={disabled}
-      onPress={onPress}
-      style={styles.button}
-    >
-      <Icon name={icon} size={16} color={theme.colors.foreground} />
-      <Text style={styles.label}>{label}</Text>
-    </Pressable>
-  );
-}
+import { FONT_SIZE, IconButton, SPACE } from "./ui-kit";
 
 function failureText(
   result: { ok: true } | FileFailure | undefined,
@@ -80,79 +18,6 @@ function failureText(
   if (error) return error instanceof Error ? error.message : String(error);
   if (result && !result.ok) return result.message;
   return null;
-}
-
-interface PaneProps {
-  theme: Theme;
-  title: string;
-  location: string;
-  toolbar: ReactNode;
-  failure: string | null;
-  /** Explains why a toolbar button is disabled, when it is. */
-  hint?: string | null;
-  loading: boolean;
-  entries: readonly FileEntry[] | null;
-  truncated: boolean;
-  actionLabel: string;
-  actionIcon: string;
-  busy: boolean;
-  onOpenDirectory(entry: FileEntry): void;
-  onAction(entry: FileEntry): void;
-}
-
-function Pane({
-  theme,
-  title,
-  location,
-  toolbar,
-  failure,
-  hint,
-  loading,
-  entries,
-  truncated,
-  actionLabel,
-  actionIcon,
-  busy,
-  onOpenDirectory,
-  onAction,
-}: PaneProps) {
-  const styles = useMemo(
-    () => ({
-      pane: { flex: 1, minWidth: 0, gap: 8 },
-      heading: { color: theme.colors.foreground, fontSize: 16 },
-      location: { color: theme.colors.foregroundMuted },
-      toolbar: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 8 },
-      muted: { color: theme.colors.foregroundMuted },
-      error: { color: theme.colors.statusDanger },
-    }),
-    [theme],
-  );
-  return (
-    <View style={styles.pane}>
-      <Text style={styles.heading}>{title}</Text>
-      <Text style={styles.location} numberOfLines={2}>
-        {location}
-      </Text>
-      <View style={styles.toolbar}>{toolbar}</View>
-      {hint ? <Text style={styles.muted}>{hint}</Text> : null}
-      {failure ? <Text style={styles.error}>{failure}</Text> : null}
-      {loading ? <Text style={styles.muted}>Loading…</Text> : null}
-      {entries?.map((entry) => (
-        <FileRow
-          key={entry.name}
-          entry={entry}
-          theme={theme}
-          actionLabel={actionLabel}
-          actionIcon={actionIcon}
-          disabled={busy}
-          onOpenDirectory={onOpenDirectory}
-          onAction={onAction}
-        />
-      ))}
-      {entries?.length === 0 ? <Text style={styles.muted}>This folder is empty.</Text> : null}
-      {truncated ? <Text style={styles.muted}>Only the first entries are shown.</Text> : null}
-    </View>
-  );
 }
 
 /** Why a toolbar button is disabled, or `null` when none is. */
@@ -194,319 +59,174 @@ function useRemoteListing(entry: SshHostEntry) {
     if (parent) setPath(parent);
   }, [parent]);
   const home = useCallback(() => setPath(undefined), []);
+  const goTo = useCallback((target: string) => setPath(target), []);
   const refresh = useCallback(() => void query.refetch(), [query]);
-  return { query, listing, parent, open, up, home, refresh };
+  return { query, listing, parent, open, up, home, goTo, refresh };
 }
 
-const POLL_INTERVAL_MS = 1000;
-/** After this many failed status calls in a row, polling stops and the row offers Retry. */
-const MAX_POLL_FAILURES = 3;
-
-/** Poll until the first reply, and then only while the transfer runs; an unknown id ends it. */
-function shouldPoll(data: { ok: true; transfer: Transfer } | FileFailure | undefined): boolean {
-  if (!data) return true;
-  return data.ok && data.transfer.state === "running";
-}
-
-function describeTransfer(transfer: Transfer | null): string {
-  if (!transfer) return "Checking…";
-  if (transfer.state === "running") return formatProgress(transfer.bytesDone, transfer.total);
-  if (transfer.state === "done") return "Done";
-  return transfer.state === "failed" ? "Failed" : "Cancelled";
-}
-
-/** What went wrong with a transfer, or `null`. A clean cancel is not a problem; one that left a partial file is. */
-function transferProblem(
-  transfer: Transfer | null,
-  data: { ok: true; transfer: Transfer } | FileFailure | undefined,
-  lostContact: boolean,
-): string | null {
-  if (lostContact) {
-    return "Lost contact with the daemon. The transfer may still be running; retry to check.";
-  }
-  if (data && !data.ok) return data.message;
-  if (transfer?.state === "failed") return transfer.error?.message ?? "The transfer failed.";
-  if (transfer?.state === "cancelled" && transfer.error?.message !== CANCELLED_MESSAGE) {
-    return transfer.error?.message ?? null;
-  }
-  return null;
-}
-
-/** Polls a transfer's status; polling stops on a final state, an unknown id, or repeated failures. */
-function useTransferStatus(transferId: string) {
-  const status = useRpc(transferStatusRpc);
-  const [failures, setFailures] = useState(0);
-  const query = useQuery({
-    queryKey: ["ssh", "files", "transfer", transferId],
-    queryFn: async () => {
-      try {
-        const result = await status({ transferId });
-        setFailures(0);
-        return result;
-      } catch (error) {
-        setFailures((count) => count + 1);
-        throw error;
-      }
-    },
-    retry: false,
-    refetchOnWindowFocus: false,
-    refetchInterval: (current) =>
-      failures < MAX_POLL_FAILURES && shouldPoll(current.state.data) ? POLL_INTERVAL_MS : false,
-  });
-  const retry = useCallback(() => {
-    setFailures(0);
-    void query.refetch();
-  }, [query]);
-  return { query, lostContact: failures >= MAX_POLL_FAILURES, retry };
-}
-
-interface TransferRowProps {
+interface CrumbProps {
   theme: Theme;
-  transfer: TransferRef;
-  onFinished(transfer: Transfer): void;
-  onDismiss(transferId: string): void;
+  label: string;
+  path: string;
+  last: boolean;
+  onGo(path: string): void;
 }
 
-/** One transfer: progress, Cancel while it runs, Dismiss after. Polling ends if the row unmounts. */
-function TransferRow({ theme, transfer: ref, onFinished, onDismiss }: TransferRowProps) {
-  const { id: transferId } = ref;
-  const toast = useToast();
-  const cancel = useRpc(cancelTransferRpc);
-  const { query, lostContact, retry } = useTransferStatus(transferId);
-  const transfer = query.data?.ok ? query.data.transfer : null;
-  const ended = transfer && transfer.state !== "running" ? transfer : null;
-  const reported = useRef(false);
-  useEffect(() => {
-    if (ended && !reported.current) {
-      reported.current = true;
-      onFinished(ended);
-    }
-  }, [ended, onFinished]);
-
-  const handleCancel = useCallback(() => {
-    cancel({ transferId }).catch((error: unknown) =>
-      toast.error(error instanceof Error ? error.message : String(error)),
-    );
-  }, [cancel, transferId, toast]);
-  const handleDismiss = useCallback(() => onDismiss(transferId), [onDismiss, transferId]);
-
+function Crumb({ theme, label, path, last, onGo }: CrumbProps) {
   const styles = useMemo(
     () => ({
-      row: { gap: 6, paddingVertical: 6, borderBottomWidth: 1, borderColor: theme.colors.border },
-      name: { color: theme.colors.foreground },
-      detail: { color: theme.colors.foregroundMuted },
-      error: { color: theme.colors.statusDanger },
-      actions: { flexDirection: "row" as const, gap: 8 },
+      crumb: { flexDirection: "row" as const, alignItems: "center" as const },
+      press: { paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xs },
+      text: {
+        color: last ? theme.colors.foreground : theme.colors.foregroundMuted,
+        fontSize: FONT_SIZE.small,
+        fontWeight: last ? ("600" as const) : ("400" as const),
+      },
     }),
-    [theme],
+    [theme, last],
   );
-  const problem = transferProblem(transfer, query.data, lostContact);
-  const verb = transfer?.kind === "upload" ? "Uploading" : "Downloading";
-  const running = transfer?.state === "running" && !lostContact;
+  const handlePress = useCallback(() => onGo(path), [onGo, path]);
   return (
-    <View style={styles.row}>
-      <Text style={styles.name} numberOfLines={1}>
-        {transfer ? `${verb} ${transfer.fileName}` : "Transfer"}
-      </Text>
-      {problem ? (
-        <Text style={styles.error}>{problem}</Text>
-      ) : (
-        <Text style={styles.detail}>{describeTransfer(transfer)}</Text>
-      )}
-      <View style={styles.actions}>
-        {lostContact ? (
-          <ToolbarButton theme={theme} icon="RefreshCw" label="Retry" onPress={retry} />
-        ) : null}
-        {running ? (
-          <ToolbarButton theme={theme} icon="X" label="Cancel" onPress={handleCancel} />
-        ) : (
-          <ToolbarButton theme={theme} icon="X" label="Dismiss" onPress={handleDismiss} />
-        )}
-      </View>
+    <View style={styles.crumb}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Go to ${path}`}
+        onPress={handlePress}
+        style={styles.press}
+      >
+        <Text style={styles.text}>{label}</Text>
+      </Pressable>
+      {last ? null : <Icon name="ChevronRight" size={12} color={theme.colors.foregroundMuted} />}
     </View>
   );
 }
 
-/** A started transfer. Its id is all the daemon needs to report on it. */
-interface TransferRef {
-  id: string;
-}
-
-/** Where an upload goes: the host and the remote folder. The file comes from the device picker. */
-type UploadTarget = Omit<z.input<(typeof startUploadRpc)["input"]>, "upload">;
-
-export function useTransfers() {
-  const toast = useToast();
-  const queryClient = useQueryClient();
-  const deviceFiles = useDeviceFilesIfAvailable();
-  const startDownload = useRpc(startDownloadRpc);
-  const startUpload = useRpc(startUploadRpc);
-  const releaseDownload = useRpc(releaseDownloadRpc);
-  const [refs, setRefs] = useState<TransferRef[]>([]);
-  const onStarted = useCallback(
-    (result: { ok: true; transferId: string } | FileFailure) => {
-      if (result.ok) setRefs((current) => [...current, { id: result.transferId }]);
-      else toast.error(result.message);
-    },
-    [toast],
-  );
-  const downloadMutation = useMutation({
-    mutationFn: (variables: Parameters<typeof startDownload>[0]) => startDownload(variables),
-    onSuccess: onStarted,
-    onError: (error) => toast.error(error.message),
-  });
-  const uploadMutation = useMutation({
-    mutationFn: (variables: Parameters<typeof startUpload>[0]) => startUpload(variables),
-    onSuccess: onStarted,
-    onError: (error) => toast.error(error.message),
-  });
-  const { mutate: mutateUpload } = uploadMutation;
-  /**
-   * Opens this device's file picker, uploads the chosen file to the daemon host, then copies it
-   * to the remote folder. Call it straight from a press: a browser opens its picker only then.
-   */
-  const uploadFromDevice = useCallback(
-    (target: UploadTarget) => {
-      if (!deviceFiles) {
-        toast.error(UPDATE_APP_MESSAGE);
-        return;
-      }
-      // The picker opens synchronously inside this call, before its first await.
-      const pickAndUpload = async () => {
-        const upload = await deviceFiles.pick();
-        if (upload)
-          mutateUpload({ ...target, upload: { id: upload.id, fileName: upload.fileName } });
-      };
-      pickAndUpload().catch((error: unknown) =>
-        toast.error(error instanceof Error ? error.message : String(error)),
-      );
-    },
-    [deviceFiles, mutateUpload, toast],
-  );
-  /** Hands a finished download to this device, then lets the daemon remove its staged copy. */
-  const saveToDevice = useCallback(
-    async (transfer: Transfer & { staged: NonNullable<Transfer["staged"]> }) => {
-      try {
-        if (!deviceFiles) throw new Error(UPDATE_APP_MESSAGE);
-        await deviceFiles.save(transfer.staged);
-        toast.show(`Saved "${transfer.fileName}" to this device.`, { variant: "success" });
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error));
-      } finally {
-        await releaseDownload({ transferId: transfer.id }).catch(() => undefined);
-      }
-    },
-    [deviceFiles, releaseDownload, toast],
-  );
-  const finished = useCallback(
-    (transfer: Transfer) => {
-      if (transfer.state === "done" && transfer.kind === "download") {
-        if (transfer.staged) void saveToDevice({ ...transfer, staged: transfer.staged });
-      } else if (transfer.state === "done") {
-        toast.show(`Uploaded to ${transfer.remotePath ?? "the remote host"}`, {
-          variant: "success",
-        });
-      } else if (transfer.state === "failed") {
-        toast.error(transfer.error?.message ?? "The transfer failed.");
-      } else if (transfer.error && transfer.error.message !== CANCELLED_MESSAGE) {
-        // Cancelled, but the partial file could not be removed: the message says where it is.
-        toast.error(transfer.error.message);
-      }
-      if (transfer.kind === "upload")
-        void queryClient.invalidateQueries({ queryKey: [...REMOTE_KEY] });
-    },
-    [toast, queryClient, saveToDevice],
-  );
-  const dismiss = useCallback(
-    (transferId: string) => setRefs((current) => current.filter((ref) => ref.id !== transferId)),
-    [],
-  );
-  return {
-    refs,
-    canTransfer: deviceFiles !== null,
-    starting: downloadMutation.isPending || uploadMutation.isPending,
-    download: downloadMutation.mutate,
-    uploadFromDevice,
-    finished,
-    dismiss,
-  };
-}
-
-export type Transfers = ReturnType<typeof useTransfers>;
-
-interface TransferListProps {
+interface BreadcrumbProps {
   theme: Theme;
-  transfers: Transfers;
+  path: string | null;
+  onGo(path: string): void;
 }
 
-/** Progress rows for started transfers. They poll only while mounted; the daemon runs them regardless. */
-export function TransferList({ theme, transfers }: TransferListProps) {
+/** The remote folder as clickable segments, the root first. */
+function Breadcrumb({ theme, path, onGo }: BreadcrumbProps) {
+  const styles = useMemo(
+    () => ({
+      bar: {
+        borderBottomWidth: 1,
+        borderColor: theme.colors.border,
+        flexGrow: 0,
+      },
+      content: {
+        alignItems: "center" as const,
+        paddingHorizontal: SPACE.sm,
+        paddingVertical: SPACE.xs,
+      },
+      home: {
+        color: theme.colors.foregroundMuted,
+        fontSize: FONT_SIZE.small,
+        paddingHorizontal: SPACE.sm,
+        paddingVertical: SPACE.xs,
+      },
+    }),
+    [theme],
+  );
+  if (path === null) {
+    return (
+      <View style={styles.bar}>
+        <Text style={styles.home}>Remote home</Text>
+      </View>
+    );
+  }
+  const names = path.split("/").filter(Boolean);
+  const crumbs = [
+    { label: "/", path: "/" },
+    ...names.map((name, index) => ({
+      label: name,
+      path: `/${names.slice(0, index + 1).join("/")}`,
+    })),
+  ];
   return (
-    <>
-      {transfers.refs.map((ref) => (
-        <TransferRow
-          key={ref.id}
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.bar}
+      contentContainerStyle={styles.content}
+    >
+      {crumbs.map((crumb, index) => (
+        <Crumb
+          key={crumb.path}
           theme={theme}
-          transfer={ref}
-          onFinished={transfers.finished}
-          onDismiss={transfers.dismiss}
+          label={crumb.label}
+          path={crumb.path}
+          last={index === crumbs.length - 1}
+          onGo={onGo}
         />
       ))}
-    </>
+    </ScrollView>
   );
 }
 
-type RemoteListing = ReturnType<typeof useRemoteListing>;
+const TRANSFER_NOTE =
+  "Download saves a file to this device; Upload from device sends a file from this device to the folder shown. Existing remote files are never overwritten. Transfers keep running on the daemon if you close this screen, but progress, cancel, and the save to this device happen only while it is open. Browsing needs a key or ssh-agent; the terminal still works for password logins.";
 
-interface RemotePaneProps {
+interface NoticesProps {
   theme: Theme;
-  remote: RemoteListing;
-  busy: boolean;
-  /** False on an app too old to move files to or from this device. */
-  canTransfer: boolean;
-  onUpload(): void;
-  onDownload(entry: FileEntry): void;
+  note: string | null;
+  hint: string | null;
+  failure: string | null;
+  loading: boolean;
 }
 
-function RemotePane({ theme, remote, busy, canTransfer, onUpload, onDownload }: RemotePaneProps) {
-  const listing = remote.listing;
-  const toolbar = (
-    <>
-      <ToolbarButton
-        theme={theme}
-        icon="ArrowUp"
-        label="Up"
-        disabled={!remote.parent}
-        onPress={remote.up}
-      />
-      <ToolbarButton theme={theme} icon="Home" label="Home" onPress={remote.home} />
-      <ToolbarButton theme={theme} icon="RefreshCw" label="Refresh" onPress={remote.refresh} />
-      <ToolbarButton
-        theme={theme}
-        icon="Upload"
-        label="Upload from device…"
-        disabled={!listing || !canTransfer || busy}
-        onPress={onUpload}
-      />
-    </>
+/** The short messages above the entries: the transfer note, why a button is off, an error. */
+function Notices({ theme, note, hint, failure, loading }: NoticesProps) {
+  const styles = useMemo(
+    () => ({
+      message: {
+        color: theme.colors.foregroundMuted,
+        fontSize: FONT_SIZE.small,
+        paddingHorizontal: SPACE.md,
+        paddingVertical: SPACE.xs,
+      },
+      error: {
+        color: theme.colors.statusDanger,
+        fontSize: FONT_SIZE.small,
+        paddingHorizontal: SPACE.md,
+        paddingVertical: SPACE.xs,
+      },
+    }),
+    [theme],
   );
   return (
-    <Pane
-      theme={theme}
-      title="Remote"
-      location={listing?.path ?? "Remote home"}
-      toolbar={toolbar}
-      failure={failureText(remote.query.data, remote.query.error)}
-      hint={remoteHint(canTransfer, listing !== null, remote.query.isFetching)}
-      loading={remote.query.isFetching && !remote.query.data}
-      entries={listing?.entries ?? null}
-      truncated={listing?.truncated ?? false}
-      actionLabel="Download"
-      actionIcon="Download"
-      busy={busy || !canTransfer}
-      onOpenDirectory={remote.open}
-      onAction={onDownload}
-    />
+    <>
+      {note ? <Text style={styles.message}>{note}</Text> : null}
+      {hint ? <Text style={styles.message}>{hint}</Text> : null}
+      {failure ? <Text style={styles.error}>{failure}</Text> : null}
+      {loading ? <Text style={styles.message}>Loading…</Text> : null}
+    </>
+  );
+}
+
+interface ListFooterProps {
+  theme: Theme;
+  empty: boolean;
+  truncated: boolean;
+}
+
+function ListFooter({ theme, empty, truncated }: ListFooterProps) {
+  const style = useMemo(
+    () => ({
+      color: theme.colors.foregroundMuted,
+      fontSize: FONT_SIZE.small,
+      paddingHorizontal: SPACE.md,
+      paddingVertical: SPACE.xs,
+    }),
+    [theme],
+  );
+  return (
+    <>
+      {empty ? <Text style={style}>This folder is empty.</Text> : null}
+      {truncated ? <Text style={style}>Only the first entries are shown.</Text> : null}
+    </>
   );
 }
 
@@ -515,62 +235,170 @@ interface FilesBrowserProps {
   theme: Theme;
   layout: Layout;
   transfers: Transfers;
-  /** Shows a back button when the host list is not on screen at the same time. */
-  onClose?(): void;
 }
 
-export function FilesBrowser({ entry, theme, transfers, onClose }: FilesBrowserProps) {
+/** The SFTP view of one host: toolbar, breadcrumb, and the folder's entries. */
+export function FilesBrowser({ entry, theme, layout, transfers }: FilesBrowserProps) {
+  const compact = layout.compact;
   const remote = useRemoteListing(entry);
-  const remoteListing = remote.listing;
-  const { download, uploadFromDevice } = transfers;
+  const listing = remote.listing;
+  const { download, uploadFromDevice, canTransfer } = transfers;
+  const busy = transfers.starting;
+  const [picked, setPicked] = useState<{ path: string; name: string } | null>(null);
+  const [showNote, setShowNote] = useState(false);
 
+  const selected =
+    listing && picked?.path === listing.path
+      ? (listing.entries.find((item) => item.name === picked.name && item.kind === "file") ?? null)
+      : null;
+
+  const handleSelect = useCallback(
+    (item: FileEntry) => {
+      if (listing) setPicked({ path: listing.path, name: item.name });
+    },
+    [listing],
+  );
   const handleDownload = useCallback(
     (item: FileEntry) => {
-      if (!remoteListing) return;
-      download({ target: entry.target, remotePath: remoteJoin(remoteListing.path, item.name) });
+      if (!listing) return;
+      download({ target: entry.target, remotePath: remoteJoin(listing.path, item.name) });
     },
-    [remoteListing, entry.target, download],
+    [listing, entry.target, download],
   );
+  const handleDownloadSelected = useCallback(() => {
+    if (selected) handleDownload(selected);
+  }, [selected, handleDownload]);
   const handleUpload = useCallback(() => {
-    if (!remoteListing) return;
-    uploadFromDevice({ target: entry.target, remoteDirectory: remoteListing.path });
-  }, [remoteListing, entry.target, uploadFromDevice]);
+    if (!listing) return;
+    uploadFromDevice({ target: entry.target, remoteDirectory: listing.path });
+  }, [listing, entry.target, uploadFromDevice]);
+  const toggleNote = useCallback(() => setShowNote((current) => !current), []);
 
   const styles = useMemo(
     () => ({
-      screen: { gap: 12 },
-      header: { flexDirection: "row" as const, alignItems: "center" as const, gap: 12 },
-      title: { flex: 1, minWidth: 0, color: theme.colors.foreground, fontSize: 18 },
-      note: { color: theme.colors.foregroundMuted },
+      panel: { flex: 1, minHeight: 0 },
+      header: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: SPACE.sm,
+        paddingHorizontal: SPACE.md,
+        paddingTop: SPACE.xs,
+        paddingBottom: SPACE.sm,
+      },
+      headerText: { flex: 1, minWidth: 0 },
+      title: {
+        color: theme.colors.foreground,
+        fontSize: FONT_SIZE.body,
+        fontWeight: "600" as const,
+      },
+      subtitle: { color: theme.colors.foregroundMuted, fontSize: FONT_SIZE.small },
+      toolbar: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: SPACE.xs,
+        paddingHorizontal: SPACE.sm,
+        paddingBottom: SPACE.xs,
+      },
+      spacer: { flex: 1 },
+      list: { flex: 1, minHeight: 0 },
+      listContent: { padding: SPACE.xs, paddingBottom: SPACE.lg },
     }),
     [theme],
   );
 
+  const failure = failureText(remote.query.data, remote.query.error);
+  const hint = remoteHint(canTransfer, listing !== null, remote.query.isFetching);
+  const loading = remote.query.isFetching && !remote.query.data;
   return (
-    <View style={styles.screen}>
+    <View style={styles.panel}>
       <View style={styles.header}>
-        <Text style={styles.title} numberOfLines={1}>
-          Files on {entry.label}
-        </Text>
-        {onClose ? (
-          <ToolbarButton theme={theme} icon="ArrowLeft" label="Hosts" onPress={onClose} />
-        ) : null}
+        <Icon name="FolderTree" size={16} color={theme.colors.foregroundMuted} />
+        <View style={styles.headerText}>
+          <Text style={styles.title} numberOfLines={1}>
+            {entry.label}
+          </Text>
+          <Text style={styles.subtitle} numberOfLines={1}>
+            {entry.detail}
+          </Text>
+        </View>
       </View>
-      <Text style={styles.note}>
-        Download saves a file to this device; Upload from device sends a file from this device to
-        the folder shown. No workspace is involved. Existing remote files are never overwritten.
-        Transfers keep running on the daemon if you close this screen, but progress, cancel, and the
-        save to this device happen only while it is open. Browsing needs a key or ssh-agent; the
-        terminal still works for password logins.
-      </Text>
-      <RemotePane
-        theme={theme}
-        remote={remote}
-        busy={transfers.starting}
-        canTransfer={transfers.canTransfer}
-        onUpload={handleUpload}
-        onDownload={handleDownload}
-      />
+      <View style={styles.toolbar}>
+        <IconButton
+          theme={theme}
+          compact={compact}
+          icon="ArrowUp"
+          label="Up"
+          disabled={!remote.parent}
+          onPress={remote.up}
+        />
+        <IconButton
+          theme={theme}
+          compact={compact}
+          icon="Home"
+          label="Home"
+          onPress={remote.home}
+        />
+        <IconButton
+          theme={theme}
+          compact={compact}
+          icon="RefreshCw"
+          label="Refresh"
+          onPress={remote.refresh}
+        />
+        <View style={styles.spacer} />
+        <IconButton
+          theme={theme}
+          compact={compact}
+          icon="Upload"
+          label="Upload from device…"
+          disabled={!listing || !canTransfer || busy}
+          onPress={handleUpload}
+        />
+        <IconButton
+          theme={theme}
+          compact={compact}
+          icon="Download"
+          label="Download selected"
+          disabled={!selected || !canTransfer || busy}
+          onPress={handleDownloadSelected}
+        />
+        <IconButton
+          theme={theme}
+          compact={compact}
+          icon="Info"
+          label="About file transfers"
+          active={showNote}
+          onPress={toggleNote}
+        />
+      </View>
+      <Breadcrumb theme={theme} path={listing?.path ?? null} onGo={remote.goTo} />
+      <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+        <Notices
+          theme={theme}
+          note={showNote ? TRANSFER_NOTE : null}
+          hint={hint}
+          failure={failure}
+          loading={loading}
+        />
+        {listing?.entries.map((item) => (
+          <FileRow
+            key={item.name}
+            entry={item}
+            theme={theme}
+            compact={compact}
+            selected={selected?.name === item.name}
+            disabled={busy || !canTransfer}
+            onSelect={handleSelect}
+            onOpenDirectory={remote.open}
+            onDownload={handleDownload}
+          />
+        ))}
+        <ListFooter
+          theme={theme}
+          empty={listing?.entries.length === 0}
+          truncated={listing?.truncated === true}
+        />
+      </ScrollView>
     </View>
   );
 }
