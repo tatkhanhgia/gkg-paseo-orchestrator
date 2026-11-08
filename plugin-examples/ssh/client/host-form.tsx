@@ -1,17 +1,21 @@
-import { TextInput } from "@getpaseo/plugin/client/ui";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { SshUserHost } from "../shared/contracts";
 import { parseNewUserHost } from "../shared/hosts";
 import type { Theme } from "./types";
-import { FONT_SIZE, MIN_TOUCH_TARGET, ROW_HEIGHT, SPACE } from "./ui-kit";
+import { FONT_SIZE, MIN_TOUCH_TARGET, ROW_HEIGHT, SPACE, TextField } from "./ui-kit";
 
 type NewHost = Omit<SshUserHost, "id">;
+
+const SELECTED = { selected: true };
+const NOT_SELECTED = { selected: false };
 
 interface HostFormProps {
   theme: Theme;
   compact: boolean;
   disabled: boolean;
+  /** Names of the VPN profiles a host can open. */
+  vpnProfiles: readonly string[];
   /** The host being edited; omitted when adding. */
   initial?: SshUserHost;
   onSubmit(host: NewHost): Promise<boolean>;
@@ -20,10 +24,10 @@ interface HostFormProps {
   onDelete?(): void;
 }
 
-const EMPTY = { label: "", host: "", user: "", port: "", identityFile: "" };
+const EMPTY = { label: "", host: "", user: "", port: "", identityFile: "", vpnProfile: "" };
 type Draft = typeof EMPTY;
 
-const FIELDS: { key: keyof Draft; placeholder: string }[] = [
+const FIELDS: { key: Exclude<keyof Draft, "vpnProfile">; placeholder: string }[] = [
   { key: "label", placeholder: "Label (e.g. build server)" },
   { key: "host", placeholder: "Host or address" },
   { key: "user", placeholder: "User (optional)" },
@@ -39,36 +43,51 @@ function draftOf(initial: SshUserHost | undefined): Draft {
     user: initial.user ?? "",
     port: initial.port === undefined ? "" : String(initial.port),
     identityFile: initial.identityFile ?? "",
+    vpnProfile: initial.vpnProfile ?? "",
   };
 }
 
-function DraftInput({
-  field,
-  placeholder,
-  value,
-  style,
-  placeholderColor,
-  onChange,
-}: {
-  field: keyof Draft;
-  placeholder: string;
+interface VpnChoiceProps {
+  theme: Theme;
+  /** The profile name, or empty for "no VPN". */
   value: string;
-  style: object;
-  placeholderColor: string;
-  onChange(field: keyof Draft, value: string): void;
-}) {
-  const handleChange = useCallback((text: string) => onChange(field, text), [field, onChange]);
+  selected: boolean;
+  label: string;
+  minHeight: number;
+  onSelect(value: string): void;
+}
+
+function VpnChoice({ theme, value, selected, label, minHeight, onSelect }: VpnChoiceProps) {
+  const handlePress = useCallback(() => onSelect(value), [onSelect, value]);
+  const style = useMemo(
+    () => ({
+      minHeight,
+      justifyContent: "center" as const,
+      paddingHorizontal: SPACE.md,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: selected ? theme.colors.accent : theme.colors.border,
+      backgroundColor: selected ? theme.colors.surface2 : theme.colors.surface1,
+    }),
+    [theme, selected, minHeight],
+  );
+  const textStyle = useMemo(
+    () => ({
+      color: selected ? theme.colors.foreground : theme.colors.foregroundMuted,
+      fontSize: FONT_SIZE.body,
+    }),
+    [theme, selected],
+  );
   return (
-    <TextInput
-      accessibilityLabel={placeholder}
-      autoCapitalize="none"
-      autoCorrect={false}
-      placeholder={placeholder}
-      placeholderTextColor={placeholderColor}
-      value={value}
-      onChangeText={handleChange}
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={`VPN: ${label}`}
+      accessibilityState={selected ? SELECTED : NOT_SELECTED}
+      onPress={handlePress}
       style={style}
-    />
+    >
+      <Text style={textStyle}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -77,6 +96,7 @@ export function HostForm({
   theme,
   compact,
   disabled,
+  vpnProfiles,
   initial,
   onSubmit,
   onCancel,
@@ -113,6 +133,8 @@ export function HostForm({
         backgroundColor: theme.colors.surface1,
       },
       row: { flexDirection: "row" as const, alignItems: "center" as const, gap: SPACE.sm },
+      choices: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: SPACE.sm },
+      hint: { color: theme.colors.foregroundMuted, fontSize: FONT_SIZE.small },
       spacer: { flex: 1 },
       primary: {
         minHeight: height,
@@ -138,6 +160,18 @@ export function HostForm({
   const handleChange = useCallback((field: keyof Draft, value: string) => {
     setDraft((current) => ({ ...current, [field]: value }));
   }, []);
+  const handleVpnChoice = useCallback(
+    (value: string) => handleChange("vpnProfile", value),
+    [handleChange],
+  );
+  // A host may still name a profile that was removed; keep it visible so saving does not drop it.
+  const choices = useMemo(
+    () =>
+      draft.vpnProfile && !vpnProfiles.includes(draft.vpnProfile)
+        ? [...vpnProfiles, draft.vpnProfile]
+        : vpnProfiles,
+    [vpnProfiles, draft.vpnProfile],
+  );
   const handleSave = useCallback(async () => {
     const result = parseNewUserHost(draft);
     if (!result.ok) {
@@ -151,7 +185,7 @@ export function HostForm({
     <View style={styles.form}>
       <Text style={styles.title}>{initial ? `Edit ${initial.label}` : "New host"}</Text>
       {FIELDS.map(({ key, placeholder }) => (
-        <DraftInput
+        <TextField
           key={key}
           field={key}
           placeholder={placeholder}
@@ -161,6 +195,28 @@ export function HostForm({
           onChange={handleChange}
         />
       ))}
+      <Text style={styles.hint}>VPN to open for this host (set up under VPN profiles)</Text>
+      <View accessibilityRole="radiogroup" style={styles.choices}>
+        <VpnChoice
+          theme={theme}
+          value=""
+          selected={draft.vpnProfile === ""}
+          label="None"
+          minHeight={height}
+          onSelect={handleVpnChoice}
+        />
+        {choices.map((name) => (
+          <VpnChoice
+            key={name}
+            theme={theme}
+            value={name}
+            selected={draft.vpnProfile === name}
+            label={vpnProfiles.includes(name) ? name : `${name} (missing)`}
+            minHeight={height}
+            onSelect={handleVpnChoice}
+          />
+        ))}
+      </View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <View style={styles.row}>
         <Pressable

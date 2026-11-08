@@ -4,6 +4,7 @@ import { Pressable, Text, View } from "react-native";
 import { filterHostEntries, type SshHostEntry } from "../shared/hosts";
 import { HostForm } from "./host-form";
 import { HostRow, type HostStatus } from "./host-row";
+import { VpnProfiles } from "./vpn-profiles";
 import type { Layout, Theme } from "./types";
 import type { HostEntries } from "./use-host-entries";
 import {
@@ -137,6 +138,10 @@ export function HostsList({
   const editing = form.kind === "edit" ? form.id : null;
   const editedHost = editing ? hosts.userHosts.find((host) => host.id === editing) : undefined;
   const { add, update, remove } = hosts;
+  const vpnProfileNames = useMemo(
+    () => hosts.vpnProfiles.map((profile) => profile.name),
+    [hosts.vpnProfiles],
+  );
   const handleAdd = useCallback(
     async (host: Parameters<typeof add>[0]) => {
       const done = await add(host);
@@ -226,6 +231,7 @@ export function HostsList({
             theme={theme}
             compact={compact}
             disabled={hosts.saving || !hosts.ready}
+            vpnProfiles={vpnProfileNames}
             onSubmit={handleAdd}
             onCancel={closeForm}
           />
@@ -236,6 +242,7 @@ export function HostsList({
             theme={theme}
             compact={compact}
             disabled={hosts.saving || !hosts.ready}
+            vpnProfiles={vpnProfileNames}
             initial={editedHost}
             onSubmit={handleUpdate}
             onCancel={closeForm}
@@ -268,6 +275,16 @@ export function HostsList({
         {searching && filtered.length === 0 && !hosts.empty ? (
           <Text style={styles.message}>No hosts match “{query.trim()}”.</Text>
         ) : null}
+        {searching ? null : (
+          <VpnProfiles
+            theme={theme}
+            compact={compact}
+            disabled={hosts.saving || !hosts.ready}
+            profiles={hosts.vpnProfiles}
+            onSave={hosts.saveVpnProfile}
+            onRemove={hosts.removeVpnProfile}
+          />
+        )}
       </ScrollView>
     </View>
   );
