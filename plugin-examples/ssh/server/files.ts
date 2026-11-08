@@ -41,6 +41,8 @@ export type ResolveDeviceUpload = PluginServerContext["resolveDeviceUpload"];
 // Plugin RPCs time out on the client after 60 s. Every RPC below returns well inside that:
 // listings stop at 25 s, and copies run in the background behind start/status/cancel RPCs.
 const LIST_TIMEOUT_MS = 25_000;
+/** Listing time plus the VPN wait must stay under the RPC's 60 s. */
+const LIST_VPN_TIMEOUT_MS = 30_000;
 const TRANSFER_TIMEOUT_MS = 30 * 60_000;
 export const MAX_TRANSFER_BYTES = 2 * 1024 ** 3;
 const MAX_REMOTE_ENTRIES = 2000;
@@ -172,17 +174,21 @@ async function describeRemoteEntries(
 export function listRemoteFiles(input: Input<typeof listRemoteFilesRpc>) {
   return limitedListing(async () => {
     if (input.path !== undefined) requireValidRemotePath(input.path, "remote path");
-    return withSftp(input.target, { timeoutMs: LIST_TIMEOUT_MS }, async (client) => {
-      // "." is the start directory of an SFTP session, which is the remote home.
-      const resolved = await requireRemoteDirectory(client, input.path ?? ".");
-      const { entries, truncated } = await client.readdir(resolved, MAX_REMOTE_ENTRIES);
-      return {
-        path: resolved,
-        parent: remoteParent(resolved),
-        entries: await describeRemoteEntries(client, resolved, entries),
-        truncated,
-      };
-    });
+    return withSftp(
+      input.target,
+      { timeoutMs: LIST_TIMEOUT_MS, vpnTimeoutMs: LIST_VPN_TIMEOUT_MS },
+      async (client) => {
+        // "." is the start directory of an SFTP session, which is the remote home.
+        const resolved = await requireRemoteDirectory(client, input.path ?? ".");
+        const { entries, truncated } = await client.readdir(resolved, MAX_REMOTE_ENTRIES);
+        return {
+          path: resolved,
+          parent: remoteParent(resolved),
+          entries: await describeRemoteEntries(client, resolved, entries),
+          truncated,
+        };
+      },
+    );
   });
 }
 

@@ -15,11 +15,29 @@ export interface SshConnectionTarget {
   user?: string;
   port?: number;
   identityFile?: string;
+  /**
+   * Name of a VPN profile in the plugin settings. The daemon resolves it; ssh never sees it, and
+   * `buildSshInvocation` ignores it.
+   */
+  vpnProfile?: string;
 }
 
 export interface SshInvocation {
-  command: "ssh";
+  /** `ssh`, or `bash` when a VPN wrapper runs ssh as its command. */
+  command: "ssh" | "bash";
   args: string[];
+}
+
+const MAX_SUMMARY_CHARS = 300;
+
+/** One line of plain text from process output: control characters and runs of space collapse. */
+export function summarizeText(text: string, maxChars = MAX_SUMMARY_CHARS): string {
+  const plain = [...text]
+    .map((char) => (hasControlCharacter(char) ? " " : char))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain.length > maxChars ? `${plain.slice(0, maxChars)}…` : plain;
 }
 
 /**

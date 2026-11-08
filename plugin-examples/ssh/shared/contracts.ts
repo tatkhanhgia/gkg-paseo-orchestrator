@@ -1,6 +1,7 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 import { MAX_REMOTE_PATH_LENGTH } from "./remote-path";
+import { hasControlCharacter } from "./ssh-args";
 
 /** A `Host` entry read from the daemon user's ssh config. Display data only. */
 export const configHostSchema = z.object({
@@ -12,6 +13,36 @@ export const configHostSchema = z.object({
 });
 export type SshConfigHost = z.infer<typeof configHostSchema>;
 
+const vpnPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1024)
+  .refine(
+    (value) => value.startsWith("/") && !hasControlCharacter(value),
+    "must be an absolute path without control characters",
+  );
+
+/** Name of a VPN profile: how a host refers to it. */
+export const vpnProfileNameSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, "use letters, digits, '.', '_' or '-' (up to 64)");
+
+/**
+ * How to open the shared on-demand VPN for hosts that need it. Paths are daemon-host paths to the
+ * shared `vpn_session.sh`, the openvpn binary, its config, and its management socket. They live in
+ * the plugin settings and nowhere else: a client names a profile, never a path.
+ */
+export const vpnProfileSchema = z.object({
+  name: vpnProfileNameSchema,
+  script: vpnPathSchema,
+  openvpnPath: vpnPathSchema,
+  config: vpnPathSchema,
+  managementSocket: vpnPathSchema,
+});
+export type SshVpnProfile = z.infer<typeof vpnProfileSchema>;
+
 /** A host the user added in the plugin. Holds no password, passphrase, or key contents. */
 export const userHostSchema = z.object({
   id: z.string().min(1).max(64),
@@ -20,6 +51,8 @@ export const userHostSchema = z.object({
   user: z.string().trim().max(128).optional(),
   port: z.number().int().min(1).max(65535).optional(),
   identityFile: z.string().trim().max(1024).optional(),
+  /** A `vpnProfiles` name: open that VPN for this host's sessions and file operations. */
+  vpnProfile: vpnProfileNameSchema.optional(),
 });
 export type SshUserHost = z.infer<typeof userHostSchema>;
 
@@ -27,7 +60,12 @@ export const hostsSettings = defineSettings({
   id: "hosts",
   scope: "host",
   version: 1,
-  schema: z.object({ hosts: z.array(userHostSchema).max(200).default([]) }),
+  // `vpnProfiles` and a host's `vpnProfile` were added without a version bump: both are optional or
+  // defaulted, so every document saved before them still parses unchanged.
+  schema: z.object({
+    hosts: z.array(userHostSchema).max(200).default([]),
+    vpnProfiles: z.array(vpnProfileSchema).max(20).default([]),
+  }),
 });
 
 export const listConfigHostsRpc = defineRpc({
@@ -46,6 +84,8 @@ export const connectionTargetSchema = z.object({
   user: z.string().max(128).optional(),
   port: z.number().int().min(1).max(65535).optional(),
   identityFile: z.string().max(1024).optional(),
+  /** A `vpnProfiles` name; the daemon looks it up in the plugin settings. */
+  vpnProfile: z.string().max(64).optional(),
 });
 
 const remotePathSchema = z.string().min(1).max(MAX_REMOTE_PATH_LENGTH);

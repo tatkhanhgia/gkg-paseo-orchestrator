@@ -34,6 +34,7 @@ function userEntry(host: SshUserHost): SshHostEntry {
       ...(host.user ? { user: host.user } : {}),
       ...(host.port ? { port: host.port } : {}),
       ...(host.identityFile ? { identityFile: host.identityFile } : {}),
+      ...(host.vpnProfile ? { vpnProfile: host.vpnProfile } : {}),
     },
   };
 }
@@ -86,12 +87,15 @@ export function parseNewUserHost(input: {
   user: string;
   port: string;
   identityFile: string;
+  /** Name of a VPN profile, or empty for none. */
+  vpnProfile?: string;
 }): NewUserHostResult {
   const label = input.label.trim();
   const host = input.host.trim();
   const user = input.user.trim();
   const portText = input.port.trim();
   const identityFile = input.identityFile.trim();
+  const vpnProfile = (input.vpnProfile ?? "").trim();
   if (!label) return { ok: false, error: "Enter a label" };
   const hostReason = describeUnsafeValue(host);
   if (hostReason) return { ok: false, error: `Host ${hostReason}` };
@@ -118,6 +122,7 @@ export function parseNewUserHost(input: {
       ...(user ? { user } : {}),
       ...(port === undefined ? {} : { port }),
       ...(identityFile ? { identityFile } : {}),
+      ...(vpnProfile ? { vpnProfile } : {}),
     },
   };
 }

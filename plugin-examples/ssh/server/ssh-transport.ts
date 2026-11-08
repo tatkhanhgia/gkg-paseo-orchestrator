@@ -1,11 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { FileErrorCode } from "../shared/contracts";
-import {
-  buildSshInvocation,
-  hasControlCharacter,
-  type SshConnectionTarget,
-} from "../shared/ssh-args";
+import { buildSshInvocation, summarizeText, type SshConnectionTarget } from "../shared/ssh-args";
+import { splitVpnDiagnostics } from "../shared/vpn";
 import { SftpClient } from "./sftp-client";
+import { prepareVpn, VpnError } from "./vpn";
 
 /** A failure that already carries the code and message the panel shows. */
 export class FileOpError extends Error {
@@ -47,7 +45,6 @@ export const SFTP_SSH_OPTIONS = [
 ] as const;
 
 const MAX_STDERR_CHARS = 8192;
-const MAX_MESSAGE_CHARS = 300;
 const KILL_GRACE_MS = 2000;
 const WATCHDOG_INTERVAL_MS = 5000;
 /** A session with no bytes from the server for this long is considered stalled. */
@@ -55,18 +52,9 @@ const IDLE_TIMEOUT_MS = 60_000;
 /** After a cancel, how long the transfer gets to remove its partial file before ssh is killed. */
 const CANCEL_GRACE_MS = 10_000;
 
-function summarize(stderr: string): string {
-  const text = [...stderr]
-    .map((char) => (hasControlCharacter(char) ? " " : char))
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_MESSAGE_CHARS)}…` : text;
-}
-
 /** Maps what `ssh` printed to the code and message the panel shows. */
 export function classifySshFailure(stderr: string): { code: FileErrorCode; message: string } {
-  const text = summarize(stderr);
+  const text = summarizeText(stderr);
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED|host key for .* has changed/i.test(stderr)) {
     return {
       code: "host-key",
@@ -114,11 +102,34 @@ export interface SftpRunOptions {
   timeoutMs: number;
   /** When aborted, `run` should stop and clean up; ssh is killed if it has not after a grace period. */
   signal?: AbortSignal;
+  /** How long opening the target's VPN may take. It runs before `timeoutMs` starts counting. */
+  vpnTimeoutMs?: number;
+}
+
+/**
+ * What a closed ssh process failed with. When ssh ran behind the VPN script, a stderr made only of
+ * the script's `gkg-vpn:` lines means the script failed before it started ssh; anything else is
+ * ssh's own and is classified as usual.
+ */
+function classifyClose(
+  stderr: string,
+  exitCode: number | null,
+  behindVpn: boolean,
+): { code: FileErrorCode; message: string } {
+  const { vpn, rest } = behindVpn ? splitVpnDiagnostics(stderr) : { vpn: "", rest: stderr };
+  if (vpn.trim() && !rest.trim() && exitCode !== 0) {
+    return { code: "connect", message: `Could not open the VPN: ${summarizeText(vpn)}` };
+  }
+  return rest.trim()
+    ? classifySshFailure(rest)
+    : { code: "failed", message: `ssh exited with code ${exitCode ?? "unknown"}` };
 }
 
 /**
  * Starts `ssh -s sftp` for `target`, runs `run` against the session, and always stops the
- * process it started. `ssh` runs from an argv array, never through a shell.
+ * process it started. `ssh` runs from an argv array, never through a shell. A target with a VPN
+ * profile opens its VPN first, and ssh then runs behind the VPN script's `exec`, so stdout stays
+ * the SFTP channel and the script's lease lives as long as ssh does.
  */
 export async function withSftp<T>(
   target: SshConnectionTarget,
@@ -130,6 +141,21 @@ export async function withSftp<T>(
     invocation = buildSshInvocation(target, { options: SFTP_SSH_OPTIONS, subsystem: "sftp" });
   } catch (error) {
     throw new FileOpError("invalid", error instanceof Error ? error.message : String(error));
+  }
+  // The watchdog below starts at spawn, so a cold VPN start is paid before it.
+  let behindVpn = false;
+  try {
+    const vpn = await prepareVpn(target, {
+      timeoutMs: options.vpnTimeoutMs,
+      signal: options.signal,
+    });
+    if (vpn) {
+      invocation = vpn.wrap(invocation);
+      behindVpn = true;
+    }
+  } catch (error) {
+    if (error instanceof VpnError) throw new FileOpError(error.code, error.message);
+    throw error;
   }
 
   const child = spawn(invocation.command, invocation.args, {
@@ -160,13 +186,8 @@ export async function withSftp<T>(
     );
   });
   child.on("close", (exitCode) => {
-    const failure = classifySshFailure(stderr);
-    client.fail(
-      new FileOpError(
-        failure.code,
-        stderr.trim() ? failure.message : `ssh exited with code ${exitCode ?? "unknown"}`,
-      ),
-    );
+    const failure = classifyClose(stderr, exitCode, behindVpn);
+    client.fail(new FileOpError(failure.code, failure.message));
   });
   const watchdog = setInterval(() => {
     const now = Date.now();
