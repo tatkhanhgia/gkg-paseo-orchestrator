@@ -1,4 +1,4 @@
-import { Icon } from "@getpaseo/plugin/client/ui";
+import { Icon, TextInput } from "@getpaseo/plugin/client/ui";
 import { useCallback, useMemo, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import type { Theme } from "./types";
@@ -260,4 +260,67 @@ export function StatusDot({ color, size = 8 }: StatusDotProps) {
     [color, size],
   );
   return <View style={style} />;
+}
+
+interface BadgeProps {
+  theme: Theme;
+  label: string;
+  /** What a screen reader says instead of `label`. */
+  accessibilityLabel?: string;
+}
+
+/** A small outlined tag, e.g. "VPN" on a host that opens a VPN. */
+export function Badge({ theme, label, accessibilityLabel }: BadgeProps) {
+  const styles = useMemo(
+    () => ({
+      badge: {
+        paddingHorizontal: SPACE.xs + 2,
+        paddingVertical: 1,
+        borderRadius: 4,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+      },
+      text: { color: theme.colors.foregroundMuted, fontSize: 10, fontWeight: "600" as const },
+    }),
+    [theme],
+  );
+  return (
+    <View accessible accessibilityLabel={accessibilityLabel ?? label} style={styles.badge}>
+      <Text style={styles.text}>{label}</Text>
+    </View>
+  );
+}
+
+interface TextFieldProps<Field extends string> {
+  /** Passed back to `onChange`, so one handler serves every field of a form. */
+  field: Field;
+  placeholder: string;
+  value: string;
+  style: object;
+  placeholderColor: string;
+  onChange(field: Field, value: string): void;
+}
+
+/** A single-line form input that reports its edits with the name of its field. */
+export function TextField<Field extends string>({
+  field,
+  placeholder,
+  value,
+  style,
+  placeholderColor,
+  onChange,
+}: TextFieldProps<Field>) {
+  const handleChange = useCallback((text: string) => onChange(field, text), [field, onChange]);
+  return (
+    <TextInput
+      accessibilityLabel={placeholder}
+      autoCapitalize="none"
+      autoCorrect={false}
+      placeholder={placeholder}
+      placeholderTextColor={placeholderColor}
+      value={value}
+      onChangeText={handleChange}
+      style={style}
+    />
+  );
 }

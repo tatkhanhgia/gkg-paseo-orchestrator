@@ -62,8 +62,61 @@ with `paseo plugin reload ssh`.
   screen, but its progress, **Cancel**, and the save to this device only happen while the screen is
   open. At most four transfers run at once, and the daemon remembers at most 20 finished ones (for
   up to an hour) in memory.
-- **Add or remove.** User-added hosts store a label, host, optional user, port, and identity file
-  _path_ in the plugin settings (shared by every client of the host). Config hosts are read-only.
+- **Add or remove.** User-added hosts store a label, host, optional user, port, identity file
+  _path_, and optional VPN profile name in the plugin settings (shared by every client of the host).
+  Config hosts are read-only.
+- **VPN.** A saved host can name a VPN profile; the plugin then opens that VPN on demand and does not
+  touch it otherwise. See [On-demand VPN](#on-demand-vpn).
+
+## On-demand VPN
+
+Some hosts are only reachable through a VPN. Rather than starting and stopping the VPN by hand, mark
+the host as needing one: the plugin opens the shared on-demand VPN when a session or file operation
+starts, and releases it when that ends. The VPN itself is owned by a shared script (`vpn_session.sh`,
+from the GoPaperless-Workflow-API database skill) that keeps one OpenVPN tunnel for every user and
+closes it about 2 minutes after the last one. This plugin only calls the script's
+`exec` subcommand and never starts or stops OpenVPN itself.
+
+**Set up.** In the sidebar's **Sessions** view, under **VPN profiles**, press **+** and fill in a
+name and four absolute paths on the daemon host: the script, the `openvpn` binary, the `.ovpn`
+config, and the OpenVPN management socket. Then add or edit a saved host and pick the profile under
+VPN. The host row shows a **VPN** badge. The profiles live in the plugin settings
+(`vpnProfiles`, shared by every client of the host); nothing in the plugin is tied to one machine's
+paths. Renaming a profile renames it on the hosts that use it; removing one leaves those hosts
+naming it, and connecting to them fails with a message that the profile is not defined.
+
+**Lifecycle.**
+
+- **Terminal session.** Connect first runs `bash <script> exec ... -- true` (a _preflight_, up to 45
+  seconds) so a cold VPN start is paid before any terminal exists. If it fails, **Connect** reports
+  the script's `gkg-vpn:` message and no terminal is created. If it succeeds the terminal runs
+  `bash <script> exec <openvpn> <config> <socket> <host> <port> -- ssh ...`: the script takes a lease
+  for its own process, finds the tunnel open, and `exec`s `ssh`, so ssh itself holds the lease. Close
+  the tab, or let ssh exit, and the lease ends with the process. The plugin keeps no up/down record
+  and never uses its own process as the holder.
+- **Files.** Each listing or transfer runs the same preflight (30 seconds for a listing, 45 for a
+  transfer, before the operation's own time limit starts), then runs `ssh -s sftp` behind `exec`.
+  stdout stays the SFTP channel because the script writes nothing to it. A failure before ssh starts
+  shows as "Could not open the VPN: ..." with the script's message.
+- **Closing.** About 2 minutes after the last lease ends, the script closes the VPN. An idle ssh
+  session is **not** disconnected: a session that stays open keeps its lease and the VPN stays up.
+  Reloading or disabling the plugin, or restarting the daemon, ends every session and transfer, so
+  their leases end and the VPN closes after the grace period.
+- **Already reachable.** If the host already answers (another VPN is up), the script just runs the
+  command and holds no tunnel.
+
+**The probe.** The script waits until the host's own address and port answer (port 22 when the host
+has none), so set the port on the host if its ssh server listens elsewhere.
+
+**Limits.**
+
+- Hosts from `~/.ssh/config` cannot use a VPN in this version: they connect by alias, and finding
+  the address `ssh` would really use needs `ProxyJump`, `Include`, and `%h` handling. Add the host
+  as a saved host to use a VPN with it.
+- The plugin needs the script's `exec` subcommand. With an older `vpn_session.sh` the preflight
+  fails with the script's own message.
+- `bash`, the script, and passwordless `sudo` for `openvpn` (as the script already requires) must
+  work for the daemon's user.
 
 ## Security
 
@@ -76,7 +129,11 @@ with `paseo plugin reload ssh`.
   any client signed in to the host can list the plugin's sessions, attach to one, type into it, and
   end it by id. Attach cannot be limited to the plugin, because the Paseo app itself renders the
   plugin's terminal. Treat access to the host as access to every open ssh session.
-- `ssh` runs from an argv array, never through a shell, with `--` before the destination. A host,
+- `ssh` runs from an argv array, never through a shell, with `--` before the destination. Behind a
+  VPN the whole command is `bash <script> exec ... -- ssh ...`, also an argv array. A client sends
+  only a profile _name_; the daemon looks up the script and paths in the plugin settings, so a screen
+  cannot make the daemon run another file. Profile paths must be absolute, with no control
+  characters, and a profile name uses letters, digits, `.`, `_`, and `-`. A host,
   alias, or user that is empty, starts with `-`, or contains whitespace or control characters is
   rejected, as is an identity file path that starts with `-` or contains control characters.
 - Config hosts connect by alias (`ssh -- <alias>`), so `ssh` applies its own config.

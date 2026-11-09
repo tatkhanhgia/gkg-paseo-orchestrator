@@ -4,6 +4,7 @@ import { Pressable, Text, View } from "react-native";
 import type { SshHostEntry } from "../shared/hosts";
 import type { Theme } from "./types";
 import {
+  Badge,
   FONT_SIZE,
   IconButton,
   MIN_TOUCH_TARGET,
@@ -82,6 +83,7 @@ export function HostRow({
         paddingHorizontal: SPACE.sm,
       },
       text: { flex: 1, minWidth: 0 },
+      titleRow: { flexDirection: "row" as const, alignItems: "center" as const, gap: SPACE.sm },
       oneLine: {
         flex: 1,
         minWidth: 0,
@@ -133,6 +135,9 @@ export function HostRow({
   const handleEdit = useCallback(() => onEdit(entry), [entry, onEdit]);
   const handleRemove = useCallback(() => onRemove(entry), [entry, onRemove]);
   const isUser = entry.source === "user";
+  const vpnBadge = entry.target.vpnProfile ? (
+    <Badge theme={theme} label="VPN" accessibilityLabel={`Opens VPN ${entry.target.vpnProfile}`} />
+  ) : null;
 
   const actions = (
     <>
@@ -200,9 +205,12 @@ export function HostRow({
         <Icon name="Server" size={16} color={dotColor ?? theme.colors.foregroundMuted} />
         {compact ? (
           <View style={styles.text}>
-            <Text style={styles.label} numberOfLines={1}>
-              {entry.label}
-            </Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.label} numberOfLines={1}>
+                {entry.label}
+              </Text>
+              {vpnBadge}
+            </View>
             <Text style={styles.detailBelow} numberOfLines={1}>
               {entry.detail}
             </Text>
@@ -213,6 +221,7 @@ export function HostRow({
               {entry.label}
             </Text>
             {dotColor ? <StatusDot color={dotColor} /> : null}
+            {vpnBadge}
             <Text style={styles.detail} numberOfLines={1}>
               {entry.detail}
             </Text>
